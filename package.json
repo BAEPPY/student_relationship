@@ -1,0 +1,20 @@
+{
+  "name": "student-relationship",
+  "version": "1.0.0",
+  "description": "학생 관계 마인드맵 - 학생이 친구 관계를 표시하고 교사가 종합적으로 확인하는 웹 앱",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "qrcode": "^1.5.4"
+  },
+  "license": "MIT"
+}

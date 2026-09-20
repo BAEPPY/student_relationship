@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학생 관계 마인드맵</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+    </div>
+  </header>
+
+  <main class="container narrow">
+    <section class="card">
+      <h1>우리 반 친구 관계, 한눈에 보기</h1>
+      <p class="muted">학생들이 각자 친구 관계를 표시하면, 선생님은 전체 관계도를 종합적으로 확인하고 갈등 가능성을 미리 살펴볼 수 있어요.</p>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><div><b>교실 만들기</b><br><span class="muted">학생 이름을 등록하면 학생마다 개인 QR 링크가 만들어져요.</span></div></div>
+        <div class="step"><span class="n">2</span><div><b>학생이 관계 표시</b><br><span class="muted">각자 자기 QR로 접속해서 좋은 사이(빨간 화살표)와 안 좋은 사이(검은 화살표)를 표시해요. 다른 학생의 답은 볼 수 없어요.</span></div></div>
+        <div class="step"><span class="n">3</span><div><b>선생님이 종합 확인</b><br><span class="muted">관계가 많은 학생은 가운데, 적은 학생은 바깥쪽에 배치된 관계도와 갈등 확률 분석을 확인해요.</span></div></div>
+      </div>
+    </section>
+
+    <section class="card" id="create-card">
+      <h2>교실 만들기</h2>
+      <form id="create-form">
+        <div class="field">
+          <label for="room-name">교실 이름</label>
+          <input type="text" id="room-name" placeholder="예: 3학년 2반" maxlength="60" required>
+        </div>
+        <div class="field">
+          <label for="students">학생 이름 (한 줄에 한 명)</label>
+          <textarea id="students" placeholder="김하늘&#10;이도윤&#10;박서연&#10;..." required></textarea>
+          <div class="help">쉼표로 구분해서 적어도 돼요. 같은 이름이 있으면 구분할 수 있게 적어 주세요 (예: 김민준A, 김민준B). <span id="student-count"></span></div>
+        </div>
+        <div class="field">
+          <label for="min-relations">학생 한 명이 최소로 표시해야 하는 친구 수</label>
+          <input type="number" id="min-relations" value="3" min="1" max="10" style="width:120px">
+        </div>
+        <div id="create-error" class="alert error hidden"></div>
+        <div class="btn-row">
+          <button type="submit" class="btn primary" id="create-btn">교실 만들기</button>
+          <button type="button" class="btn" id="demo-btn">예시 데이터로 체험하기</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card hidden" id="result-card">
+      <h2>교실이 만들어졌어요 🎉</h2>
+      <div class="alert warn">아래 <b>선생님 관리 링크</b>는 교실에 들어가는 유일한 열쇠예요. 즐겨찾기에 저장하거나 안전한 곳에 복사해 두세요. 학생에게는 절대 알려주지 마세요.</div>
+      <div class="link-box">
+        <input type="text" id="admin-url" readonly>
+        <button type="button" class="btn" id="copy-admin">복사</button>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <a class="btn primary" id="go-teacher" href="#">선생님 페이지로 가기</a>
+      </div>
+    </section>
+
+    <section class="card hidden" id="saved-card">
+      <h2>이 브라우저에서 만든 교실</h2>
+      <ul class="room-list" id="saved-list" style="list-style:none;padding:0;margin:0"></ul>
+      <p class="muted" style="margin-top:8px">이 목록은 지금 사용 중인 브라우저에만 저장돼요.</p>
+    </section>
+
+    <section class="card">
+      <h2>개인정보와 안전</h2>
+      <ul class="muted" style="padding-left:18px">
+        <li>학생은 자기 QR 링크로만 접속하며, 자기가 표시한 관계만 볼 수 있어요.</li>
+        <li>학생 링크와 선생님 링크는 추측할 수 없는 긴 임의 문자열이에요. 링크가 유출되면 선생님 페이지에서 새 링크를 발급할 수 있어요.</li>
+        <li>갈등 확률은 학생 응답을 바탕으로 한 <b>참고용 추정치</b>예요. 학생을 판단하는 근거가 아니라 관심을 기울일 곳을 찾는 도구로 사용해 주세요.</li>
+      </ul>
+    </section>
+  </main>
+  <script type="module" src="/js/index.js"></script>
+</body>
+</html>

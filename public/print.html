@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학생 QR 카드</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="toggle-links">링크 목록 보기</button>
+      <button type="button" class="btn primary" id="print-btn">인쇄하기</button>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/print.js"></script>
+</body>
+</html>
