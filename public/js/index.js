@@ -33,6 +33,15 @@ function showResult(room) {
   resultCard.classList.remove('hidden');
   resultCard.scrollIntoView({ behavior: 'smooth' });
   renderSaved();
+
+// 서버 저장소 상태 확인 (DB 미연결 등 경고)
+api('/api/health').then((h) => {
+  if (h?.notice) {
+    const box = document.getElementById('storage-notice');
+    box.textContent = `⚠️ ${h.notice}`;
+    box.classList.remove('hidden');
+  }
+}).catch(() => {});
 }
 
 form.addEventListener('submit', async (e) => {
@@ -89,3 +98,12 @@ function renderSaved() {
   }
 }
 renderSaved();
+
+// 서버 저장소 상태 확인 (DB 미연결 등 경고)
+api('/api/health').then((h) => {
+  if (h?.notice) {
+    const box = document.getElementById('storage-notice');
+    box.textContent = `⚠️ ${h.notice}`;
+    box.classList.remove('hidden');
+  }
+}).catch(() => {});

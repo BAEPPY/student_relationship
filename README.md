@@ -27,38 +27,53 @@
 
 - GitHub 페이지(github.com 주소)나 GitHub Pages 로는 열리지 않습니다. 이 앱은 Node.js 서버가 필요합니다.
 - `http://localhost:3000` 은 서버를 켠 **그 컴퓨터에서만** 열립니다. 학생 스마트폰에서는 열리지 않습니다.
-- 학생들이 각자 스마트폰으로 접속하려면 아래처럼 **인터넷에 배포**해야 합니다. 5~10분이면 됩니다.
+- 학생들이 각자 스마트폰으로 접속하려면 아래처럼 **인터넷에 배포**해야 합니다. 10분이면 됩니다.
 
-## 🚀 무료로 배포하기 (Render + Neon)
+## 🚀 무료로 배포하기
 
-카드 등록 없이 무료로 쓸 수 있는 조합입니다. 두 사이트 모두 GitHub 계정으로 가입할 수 있습니다.
+두 가지 방법이 있습니다. 둘 다 카드 등록 없이 무료로 쓸 수 있고, GitHub 계정으로 가입합니다.
 
-### 1단계. Neon 에서 무료 데이터베이스 만들기 (데이터 보관용)
+| | 방법 A. Vercel (추천) | 방법 B. Render |
+| --- | --- | --- |
+| 사이트가 잠드나요? | 아니요. 학생이 접속하면 바로 열립니다. | 15분 동안 접속이 없으면 잠들고, 깨는 데 30초~1분 걸립니다. |
+| 데이터베이스 | Vercel 안에서 Neon 무료 DB를 클릭 몇 번으로 만듭니다. 별도 가입 없음. | Neon 에 따로 가입해 연결 문자열을 붙여넣습니다. |
+| 관리 화면 | 가볍고 빠릅니다. | 조금 무겁습니다. |
 
-무료 서버는 잠들거나 재시작될 때 파일이 지워지기 때문에, 학생 응답을 안전하게 보관하려면 데이터베이스가 필요합니다.
+### 방법 A. Vercel + Neon (추천)
 
-1. https://neon.tech 에서 가입합니다. (무료, 카드 불필요)
-2. **New project** 를 누르고 이름은 자유롭게, Region 은 **Asia Pacific (Singapore)** 를 고릅니다.
-3. 프로젝트 화면의 **Connect** 버튼을 누르고 `postgresql://` 로 시작하는 **연결 문자열(connection string)** 을 복사해 둡니다.
+1. https://vercel.com 에서 **Continue with GitHub** 로 가입합니다. (Hobby 플랜, 무료)
+2. 대시보드에서 **Add New… → Project** 를 누르고, 저장소 목록에서 `student_relationship` 옆의 **Import** 를 누릅니다. 처음이면 GitHub 에 Vercel 앱 설치를 허용하는 화면이 먼저 나옵니다.
+3. 설정은 그대로 두고 **Deploy** 를 누릅니다. 1~2분 뒤 배포가 끝나면 **Continue to Dashboard** 를 누릅니다.
+4. 프로젝트 화면 위쪽의 **Storage** 탭 → **Create Database** → **Neon** 을 고릅니다. 약관에 동의하고, Region 은 **Singapore** (가장 가까움), Plan 은 **Free** 를 고른 뒤 이름을 정하고 **Create** 를 누릅니다. Neon 계정은 이 과정에서 자동으로 만들어집니다.
+5. **Connect Project** 에서 이 프로젝트를 고르고 환경(Production, Preview, Development)을 모두 체크한 뒤 연결합니다.
+6. **Deployments** 탭에서 가장 위의 배포 오른쪽 **⋯** 메뉴 → **Redeploy** 를 누릅니다. (DB 연결 정보를 반영하기 위해 한 번 다시 배포합니다.)
+7. 프로젝트 화면의 `https://student-relationship-….vercel.app` 주소가 사이트 주소입니다. 첫 화면 위에 빨간 경고가 보이지 않으면 DB 연결까지 끝난 것입니다.
 
-### 2단계. Render 에 배포하기
+버튼 한 번으로 하고 싶다면 아래 버튼을 눌러도 됩니다. 이 버튼은 저장소 **복사본**(`student-relationship-site`)을 내 GitHub 에 만들고 Neon DB 생성까지 한 흐름으로 진행합니다. 다만 이후 원본 저장소를 고쳐도 복사본에는 반영되지 않으니, 코드를 계속 고칠 계획이면 위의 Import 방법을 쓰세요.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BAEPPY/student_relationship)
-
-1. 위 버튼을 누르고 Render 에 가입/로그인합니다. (무료, 카드 불필요)
-2. Blueprint 이름을 아무거나 입력합니다.
-3. `DATABASE_URL` 칸에 1단계에서 복사한 연결 문자열을 붙여넣고 **Apply** 를 누릅니다.
-4. 3~5분 기다리면 배포가 끝납니다. Render 대시보드에서 `student-relationship` 서비스를 열면 위쪽에 `https://student-relationship-xxxx.onrender.com` 같은 주소가 보입니다. 이 주소가 사이트 주소입니다.
-5. 그 주소로 접속해 교실을 만들고, **학생 QR 카드 인쇄**로 카드를 나눠 주면 됩니다.
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FBAEPPY%2Fstudent_relationship&project-name=student-relationship&repository-name=student-relationship-site&products=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%5D)
 
 알아 둘 점
-- 무료 서버는 15분 동안 아무도 접속하지 않으면 잠듭니다. 다음 접속 때 깨어나는 데 30초~1분쯤 걸리니, 수업 전에 선생님 페이지를 한 번 미리 열어 두세요.
-- `DATABASE_URL` 을 비워 두면 임시 파일에 저장되어 서버가 잠들 때 데이터가 지워집니다. 이 경우 선생님 페이지에 경고가 표시됩니다.
-- 코드를 수정해서 GitHub 에 올리면 Render 가 자동으로 다시 배포합니다.
+- 코드를 GitHub 에 올리면 Vercel 이 자동으로 다시 배포합니다.
+- 함수 실행 위치는 `vercel.json` 에서 싱가포르(`sin1`)로 두었습니다. Neon 도 싱가포르를 고르면 가장 빠릅니다.
+- 배포 후 첫 화면이나 선생님 페이지에 "데이터베이스가 연결되지 않아…" 경고가 보이면 4~6단계를 다시 확인하세요.
 
-### 다른 방법
+### 방법 B. Render + Neon
 
-- **Railway, Fly.io 등**: 저장소를 연결하고 시작 명령을 `npm start` 로 두면 됩니다. 볼륨(영구 디스크)을 붙일 수 있으면 `DATA_DIR` 을 그 경로로 지정해 파일 저장을 써도 되고, 아니면 `DATABASE_URL` 을 설정하세요.
+Render 는 서버를 통째로 켜 두는 방식이라 코드 변경 없이 동작하지만, 무료 서버는 15분 동안 접속이 없으면 잠듭니다.
+
+1. https://neon.tech 에서 가입하고 **New project** 를 만듭니다. Region 은 **Asia Pacific (Singapore)** 를 고릅니다.
+2. 프로젝트 화면의 **Connect** 버튼을 눌러 `postgresql://` 로 시작하는 연결 문자열을 복사합니다.
+3. 아래 버튼을 누르고 Render 에 가입합니다. Blueprint 이름을 입력하고, `DATABASE_URL` 칸에 연결 문자열을 붙여넣은 뒤 **Apply** 를 누릅니다.
+
+   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BAEPPY/student_relationship)
+
+4. 3~5분 뒤 Render 대시보드에서 `student-relationship` 서비스를 열면 `https://student-relationship-xxxx.onrender.com` 같은 주소가 보입니다.
+5. 수업 전에 선생님 페이지를 한 번 미리 열어 서버를 깨워 두세요.
+
+### 그 밖의 방법
+
+- **Railway, Fly.io, Koyeb 등 서버형 호스팅**: 저장소를 연결하고 시작 명령을 `npm start` 로 두면 됩니다. 볼륨(영구 디스크)이 있으면 `DATA_DIR` 을 그 경로로 지정해 파일 저장을 써도 되고, 아니면 `DATABASE_URL` 을 설정하세요.
 - **Docker**: 아래 "Docker" 항목을 참고하세요.
 
 ## 내 컴퓨터에서 실행하기
@@ -117,20 +132,24 @@ docker run -p 3000:3000 -e DATABASE_URL=postgresql://... student-relationship
 ## 프로젝트 구조
 
 ```
+app.js          Vercel(서버리스)용 진입점
 server/
-  index.js      서버 시작 (포트, 저장소 선택)
+  index.js      일반 서버 시작 (포트, 저장소 선택)
   app.js        Express 앱과 API
+  pages.js      각 페이지의 HTML 껍데기
+  storage.js    환경에 맞는 저장소 선택
   store.js      JSON 파일 저장소
   pgstore.js    PostgreSQL 저장소 (DATABASE_URL)
   analysis.js   관계 통계와 갈등 가능성 분석
   reasons.js    이유 선택지 목록과 가중치
 public/
-  index.html / js/index.js      교실 만들기
-  teacher.html / js/teacher.js  선생님 대시보드
-  js/graph.js                   관계도 (SVG)
-  print.html / js/print.js      학생 QR 카드 인쇄
-  student.html / js/student.js  학생 페이지
+  js/index.js    교실 만들기
+  js/teacher.js  선생님 대시보드
+  js/graph.js    관계도 (SVG)
+  js/print.js    학생 QR 카드 인쇄
+  js/student.js  학생 페이지
   css/style.css
+vercel.json     Vercel 설정 (함수 리전)
 render.yaml     Render 원클릭 배포 설정
 Dockerfile      컨테이너 배포용
 test/           node:test 기반 테스트

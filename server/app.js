@@ -6,6 +6,7 @@ import { FileStore } from './store.js';
 import { newToken, newId } from './tokens.js';
 import { REASON_CATALOG, isValidTag } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
+import * as pages from './pages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -52,7 +53,7 @@ function makeStudent(name) {
   return { id: newId(), name, token: newToken(16), createdAt: new Date().toISOString() };
 }
 
-export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null } = {}) {
+export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null, storageKind = 'file' } = {}) {
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
@@ -143,11 +144,14 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   }
 
   // ---------- pages ----------
-  app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-  app.get('/t/:adminToken', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'teacher.html')));
-  app.get('/t/:adminToken/print', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'print.html')));
-  app.get('/s/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'student.html')));
+  const page = (html) => (req, res) => res.type('html').send(html);
+  app.get('/', page(pages.index));
+  app.get('/t/:adminToken', page(pages.teacher));
+  app.get('/t/:adminToken/print', page(pages.print));
+  app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
+
+  app.get('/api/health', (req, res) => res.json({ ok: true, storage: storageKind, notice: storageNotice || null }));
 
   // ---------- room creation ----------
   app.post('/api/rooms', async (req, res) => {
@@ -389,7 +393,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
   // ---------- fallbacks ----------
   app.use('/api', (req, res) => res.status(404).json({ error: '없는 주소예요.' }));
-  app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html')));
+  app.use((req, res) => res.status(404).type('html').send(pages.notFound));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {

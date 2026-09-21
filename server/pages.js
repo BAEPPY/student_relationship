@@ -1,4 +1,7 @@
-<!doctype html>
+// 각 페이지의 HTML 껍데기입니다. 실제 내용은 public/js/*.js 가 그립니다.
+// 파일이 아니라 모듈에 두는 이유: 서버리스(Vercel) 번들에 항상 포함되게 하기 위해서입니다.
+
+export const index = `<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -14,6 +17,7 @@
   </header>
 
   <main class="container narrow">
+    <div id="storage-notice" class="alert error hidden"></div>
     <section class="card">
       <h1>우리 반 친구 관계, 한눈에 보기</h1>
       <p class="muted">학생들이 각자 친구 관계를 표시하면, 선생님은 전체 관계도를 종합적으로 확인하고 갈등 가능성을 미리 살펴볼 수 있어요.</p>
@@ -78,3 +82,98 @@
   <script type="module" src="/js/index.js"></script>
 </body>
 </html>
+`;
+
+export const teacher = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>선생님 페이지 · 학생 관계 마인드맵</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="badge blue">선생님 페이지</span>
+      <span class="spacer"></span>
+      <span class="muted" id="last-updated"></span>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/teacher.js"></script>
+</body>
+</html>
+`;
+
+export const student = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내 친구 관계 지도</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand"><span class="logo"></span><span id="room-name">친구 관계 지도</span></span>
+    </div>
+  </header>
+
+  <main class="container narrow" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+
+  <script type="module" src="/js/student.js"></script>
+</body>
+</html>
+`;
+
+export const print = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학생 QR 카드</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="toggle-links">링크 목록 보기</button>
+      <button type="button" class="btn primary" id="print-btn">인쇄하기</button>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/print.js"></script>
+</body>
+</html>
+`;
+
+export const notFound = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>페이지를 찾을 수 없어요</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <main class="container narrow">
+    <section class="card" style="text-align:center;margin-top:40px">
+      <h1>페이지를 찾을 수 없어요</h1>
+      <p class="muted">주소가 정확한지 확인해 주세요.</p>
+      <a class="btn primary" href="/">처음으로</a>
+    </section>
+  </main>
+</body>
+</html>
+`;
