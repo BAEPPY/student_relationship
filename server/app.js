@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
-import { Store } from './store.js';
+import { FileStore } from './store.js';
 import { newToken, newId } from './tokens.js';
 import { REASON_CATALOG, isValidTag } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
@@ -52,7 +52,7 @@ function makeStudent(name) {
   return { id: newId(), name, token: newToken(16), createdAt: new Date().toISOString() };
 }
 
-export function createApp({ store = new Store(null), baseUrl = process.env.BASE_URL || '' } = {}) {
+export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null } = {}) {
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
@@ -70,16 +70,29 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
   const adminUrl = (req, room) => `${publicBase(req)}/t/${room.adminToken}`;
 
   // ---------- helpers ----------
-  function requireRoom(req) {
-    const room = store.findRoomByAdminToken(req.params.adminToken);
+  async function requireRoom(req) {
+    const room = await store.findRoomByAdminToken(req.params.adminToken);
     if (!room) throw new HttpError(404, '교실을 찾을 수 없어요. 관리자 링크를 확인해 주세요.');
     return room;
   }
 
-  function requireStudent(req) {
-    const found = store.findStudentByToken(req.params.token);
+  async function requireStudent(req) {
+    const found = await store.findStudentByToken(req.params.token);
     if (!found) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
     return found;
+  }
+
+  // 교실을 잠그고(저장소에 따라) 읽어서 고친 뒤 저장합니다. mutator 가 던지면 아무것도 바뀌지 않습니다.
+  async function mutateRoom(room, mutator) {
+    const updated = await store.updateRoom(room.id, mutator);
+    if (!updated) throw new HttpError(404, '교실을 찾을 수 없어요. 관리자 링크를 확인해 주세요.');
+    return updated;
+  }
+
+  function findStudent(room, studentId) {
+    const student = room.students.find((s) => s.id === studentId);
+    if (!student) throw new HttpError(404, '학생을 찾을 수 없어요.');
+    return student;
   }
 
   function effectiveMin(room, classmateCount) {
@@ -110,6 +123,7 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
       stats,
       analysis,
       catalog: REASON_CATALOG,
+      notice: storageNotice,
     };
   }
 
@@ -136,7 +150,7 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
   // ---------- room creation ----------
-  app.post('/api/rooms', (req, res) => {
+  app.post('/api/rooms', async (req, res) => {
     const name = cleanName(req.body?.name);
     if (!name) throw bad('교실 이름을 입력해 주세요.');
     if (name.length > LIMITS.roomName) throw bad(`교실 이름은 ${LIMITS.roomName}자 이하로 입력해 주세요.`);
@@ -158,12 +172,12 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
       relations: {},
       submissions: {},
     };
-    store.putRoom(room);
+    await store.createRoom(room);
     res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
   });
 
   // 체험용 예시 교실 (임의의 관계 데이터 포함)
-  app.post('/api/rooms/demo', (req, res) => {
+  app.post('/api/rooms/demo', async (req, res) => {
     const names = ['김하늘', '이도윤', '박서연', '최지우', '정민준', '강예린', '조현우', '윤서아', '임시우', '한지민', '오준서', '서다은'];
     const room = {
       id: newId(6),
@@ -200,115 +214,124 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
       room.relations[from] = rels;
       room.submissions[from] = { submittedAt: now };
     });
-    store.putRoom(room);
+    await store.createRoom(room);
     res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
   });
 
   // ---------- teacher API ----------
-  app.get('/api/teacher/:adminToken', (req, res) => {
-    const room = requireRoom(req);
+  app.get('/api/teacher/:adminToken', async (req, res) => {
+    const room = await requireRoom(req);
     res.json(teacherView(req, room));
   });
 
-  app.patch('/api/teacher/:adminToken', (req, res) => {
-    const room = requireRoom(req);
+  app.patch('/api/teacher/:adminToken', async (req, res) => {
+    const found = await requireRoom(req);
     const body = req.body || {};
-    if (typeof body.locked === 'boolean') room.locked = body.locked;
-    if (body.minRelations !== undefined) {
-      const n = Number.parseInt(body.minRelations, 10);
-      if (!Number.isFinite(n) || n < 1 || n > LIMITS.minRelations) throw bad(`최소 인원은 1~${LIMITS.minRelations} 사이여야 해요.`);
-      room.minRelations = n;
-    }
-    if (body.name !== undefined) {
-      const name = cleanName(body.name);
-      if (!name || name.length > LIMITS.roomName) throw bad('교실 이름이 올바르지 않아요.');
-      room.name = name;
-    }
-    store.putRoom(room);
+    const room = await mutateRoom(found, (room) => {
+      if (typeof body.locked === 'boolean') room.locked = body.locked;
+      if (body.minRelations !== undefined) {
+        const n = Number.parseInt(body.minRelations, 10);
+        if (!Number.isFinite(n) || n < 1 || n > LIMITS.minRelations) throw bad(`최소 인원은 1~${LIMITS.minRelations} 사이여야 해요.`);
+        room.minRelations = n;
+      }
+      if (body.name !== undefined) {
+        const name = cleanName(body.name);
+        if (!name || name.length > LIMITS.roomName) throw bad('교실 이름이 올바르지 않아요.');
+        room.name = name;
+      }
+    });
     res.json(teacherView(req, room));
   });
 
-  app.delete('/api/teacher/:adminToken', (req, res) => {
-    const room = requireRoom(req);
-    store.deleteRoom(room.id);
+  app.delete('/api/teacher/:adminToken', async (req, res) => {
+    const room = await requireRoom(req);
+    await store.deleteRoom(room.id);
     res.json({ ok: true });
   });
 
-  app.post('/api/teacher/:adminToken/students', (req, res) => {
-    const room = requireRoom(req);
+  app.post('/api/teacher/:adminToken/students', async (req, res) => {
+    const found = await requireRoom(req);
     const names = parseStudentNames(req.body?.name ?? req.body?.students);
     if (names.length === 0) throw bad('학생 이름을 입력해 주세요.');
-    if (room.students.length + names.length > LIMITS.students) throw bad(`학생은 최대 ${LIMITS.students}명까지 등록할 수 있어요.`);
-    for (const n of names) {
-      if (room.students.some((s) => s.name === n)) throw bad(`이미 있는 이름이에요: ${n}`);
-    }
-    for (const n of names) room.students.push(makeStudent(n));
-    store.putRoom(room);
+    const room = await mutateRoom(found, (room) => {
+      if (room.students.length + names.length > LIMITS.students) throw bad(`학생은 최대 ${LIMITS.students}명까지 등록할 수 있어요.`);
+      for (const n of names) {
+        if (room.students.some((s) => s.name === n)) throw bad(`이미 있는 이름이에요: ${n}`);
+      }
+      for (const n of names) room.students.push(makeStudent(n));
+    });
     res.status(201).json(teacherView(req, room));
   });
 
-  app.patch('/api/teacher/:adminToken/students/:studentId', (req, res) => {
-    const room = requireRoom(req);
-    const student = room.students.find((s) => s.id === req.params.studentId);
-    if (!student) throw new HttpError(404, '학생을 찾을 수 없어요.');
+  app.patch('/api/teacher/:adminToken/students/:studentId', async (req, res) => {
+    const found = await requireRoom(req);
+    findStudent(found, req.params.studentId);
     const name = cleanName(req.body?.name);
     if (!name || name.length > LIMITS.studentName) throw bad('이름이 올바르지 않아요.');
-    if (room.students.some((s) => s.id !== student.id && s.name === name)) throw bad(`이미 있는 이름이에요: ${name}`);
-    student.name = name;
-    store.putRoom(room);
+    const room = await mutateRoom(found, (room) => {
+      const student = findStudent(room, req.params.studentId);
+      if (room.students.some((s) => s.id !== student.id && s.name === name)) throw bad(`이미 있는 이름이에요: ${name}`);
+      student.name = name;
+    });
     res.json(teacherView(req, room));
   });
 
-  app.delete('/api/teacher/:adminToken/students/:studentId', (req, res) => {
-    const room = requireRoom(req);
-    const idx = room.students.findIndex((s) => s.id === req.params.studentId);
-    if (idx === -1) throw new HttpError(404, '학생을 찾을 수 없어요.');
-    const [student] = room.students.splice(idx, 1);
-    delete room.relations[student.id];
-    delete room.submissions[student.id];
-    for (const targets of Object.values(room.relations)) delete targets[student.id];
-    store.putRoom(room);
+  app.delete('/api/teacher/:adminToken/students/:studentId', async (req, res) => {
+    const found = await requireRoom(req);
+    findStudent(found, req.params.studentId);
+    const room = await mutateRoom(found, (room) => {
+      const idx = room.students.findIndex((s) => s.id === req.params.studentId);
+      if (idx === -1) throw new HttpError(404, '학생을 찾을 수 없어요.');
+      const [student] = room.students.splice(idx, 1);
+      room.relations ||= {};
+      room.submissions ||= {};
+      delete room.relations[student.id];
+      delete room.submissions[student.id];
+      for (const targets of Object.values(room.relations)) delete targets[student.id];
+    });
     res.json(teacherView(req, room));
   });
 
   // 학생 응답 초기화
-  app.post('/api/teacher/:adminToken/students/:studentId/reset', (req, res) => {
-    const room = requireRoom(req);
-    const student = room.students.find((s) => s.id === req.params.studentId);
-    if (!student) throw new HttpError(404, '학생을 찾을 수 없어요.');
-    delete room.relations[student.id];
-    delete room.submissions[student.id];
-    store.putRoom(room);
+  app.post('/api/teacher/:adminToken/students/:studentId/reset', async (req, res) => {
+    const found = await requireRoom(req);
+    findStudent(found, req.params.studentId);
+    const room = await mutateRoom(found, (room) => {
+      const student = findStudent(room, req.params.studentId);
+      room.relations ||= {};
+      room.submissions ||= {};
+      delete room.relations[student.id];
+      delete room.submissions[student.id];
+    });
     res.json(teacherView(req, room));
   });
 
   // 학생 링크(QR) 재발급 - 기존 링크는 더 이상 동작하지 않음
-  app.post('/api/teacher/:adminToken/students/:studentId/rotate', (req, res) => {
-    const room = requireRoom(req);
-    const student = room.students.find((s) => s.id === req.params.studentId);
-    if (!student) throw new HttpError(404, '학생을 찾을 수 없어요.');
-    student.token = newToken(16);
-    store.putRoom(room);
+  app.post('/api/teacher/:adminToken/students/:studentId/rotate', async (req, res) => {
+    const found = await requireRoom(req);
+    findStudent(found, req.params.studentId);
+    const room = await mutateRoom(found, (room) => {
+      findStudent(room, req.params.studentId).token = newToken(16);
+    });
     res.json(teacherView(req, room));
   });
 
   app.get('/api/teacher/:adminToken/qr/:studentId.svg', async (req, res) => {
-    const room = requireRoom(req);
-    const student = room.students.find((s) => s.id === req.params.studentId);
-    if (!student) throw new HttpError(404, '학생을 찾을 수 없어요.');
+    const room = await requireRoom(req);
+    const student = findStudent(room, req.params.studentId);
     const svg = await QRCode.toString(studentUrl(req, student), { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
     res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
   });
 
-  app.get('/api/teacher/:adminToken/export.json', (req, res) => {
-    const room = requireRoom(req);
+  app.get('/api/teacher/:adminToken/export.json', async (req, res) => {
+    const room = await requireRoom(req);
     const view = teacherView(req, room);
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
     res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), relations: view.relations, analysis: view.analysis });
   });
 
-  app.get('/api/teacher/:adminToken/export.csv', (req, res) => {
-    const room = requireRoom(req);
+  app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
+    const room = await requireRoom(req);
     const nameOf = Object.fromEntries(room.students.map((s) => [s.id, s.name]));
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [['보낸 학생', '받은 학생', '관계', '선택한 이유', '직접 쓴 이유', '수정 시각'].map(esc).join(',')];
@@ -320,45 +343,48 @@ export function createApp({ store = new Store(null), baseUrl = process.env.BASE_
   });
 
   // ---------- student API ----------
-  app.get('/api/student/:token', (req, res) => {
-    const { room, student } = requireStudent(req);
+  app.get('/api/student/:token', async (req, res) => {
+    const { room, student } = await requireStudent(req);
     res.json(studentView(req, room, student));
   });
 
-  app.put('/api/student/:token/relations', (req, res) => {
-    const { room, student } = requireStudent(req);
-    if (room.locked) throw new HttpError(403, '선생님이 제출을 마감했어요. 더 이상 수정할 수 없어요.');
-
-    const classmates = new Set(room.students.filter((s) => s.id !== student.id).map((s) => s.id));
+  app.put('/api/student/:token/relations', async (req, res) => {
+    const { room: found, student: me } = await requireStudent(req);
     const input = req.body?.relations;
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('보낸 내용이 올바르지 않아요.');
 
-    const now = new Date().toISOString();
-    const prev = room.relations?.[student.id] || {};
-    const next = {};
-    for (const [toId, r] of Object.entries(input)) {
-      if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
-      if (!r || (r.type !== 'good' && r.type !== 'bad')) throw bad('관계 종류는 좋은 사이 또는 안 좋은 사이여야 해요.');
-      const tags = Array.isArray(r.tags) ? [...new Set(r.tags.map(String))] : [];
-      for (const t of tags) if (!isValidTag(r.type, t)) throw bad('선택한 이유가 올바르지 않아요.');
-      const reason = String(r.reason ?? '').trim();
-      if (reason.length > LIMITS.reason) throw bad(`이유는 ${LIMITS.reason}자 이하로 적어 주세요.`);
-      if (r.type === 'bad' && tags.length === 0 && !reason) {
-        const name = room.students.find((s) => s.id === toId)?.name || '';
-        throw bad(`${name}와(과) 안 좋은 사이인 이유를 꼭 적어 주세요.`);
-      }
-      const unchanged = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && JSON.stringify(prev[toId].tags || []) === JSON.stringify(tags);
-      next[toId] = { type: r.type, tags, reason, updatedAt: unchanged ? prev[toId].updatedAt : now };
-    }
-    const min = effectiveMin(room, classmates.size);
-    if (Object.keys(next).length < min) throw bad(`친구를 ${min}명 이상 표시해 주세요. (지금 ${Object.keys(next).length}명)`);
+    const room = await mutateRoom(found, (room) => {
+      const student = room.students.find((s) => s.id === me.id && s.token === me.token);
+      if (!student) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
+      if (room.locked) throw new HttpError(403, '선생님이 제출을 마감했어요. 더 이상 수정할 수 없어요.');
 
-    room.relations ||= {};
-    room.submissions ||= {};
-    room.relations[student.id] = next;
-    room.submissions[student.id] = { submittedAt: now, firstSubmittedAt: room.submissions[student.id]?.firstSubmittedAt || now };
-    store.putRoom(room);
-    res.json(studentView(req, room, student));
+      const classmates = new Set(room.students.filter((s) => s.id !== student.id).map((s) => s.id));
+      const now = new Date().toISOString();
+      const prev = room.relations?.[student.id] || {};
+      const next = {};
+      for (const [toId, r] of Object.entries(input)) {
+        if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
+        if (!r || (r.type !== 'good' && r.type !== 'bad')) throw bad('관계 종류는 좋은 사이 또는 안 좋은 사이여야 해요.');
+        const tags = Array.isArray(r.tags) ? [...new Set(r.tags.map(String))] : [];
+        for (const t of tags) if (!isValidTag(r.type, t)) throw bad('선택한 이유가 올바르지 않아요.');
+        const reason = String(r.reason ?? '').trim();
+        if (reason.length > LIMITS.reason) throw bad(`이유는 ${LIMITS.reason}자 이하로 적어 주세요.`);
+        if (r.type === 'bad' && tags.length === 0 && !reason) {
+          const name = room.students.find((s) => s.id === toId)?.name || '';
+          throw bad(`${name}와(과) 안 좋은 사이인 이유를 꼭 적어 주세요.`);
+        }
+        const unchanged = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && JSON.stringify(prev[toId].tags || []) === JSON.stringify(tags);
+        next[toId] = { type: r.type, tags, reason, updatedAt: unchanged ? prev[toId].updatedAt : now };
+      }
+      const min = effectiveMin(room, classmates.size);
+      if (Object.keys(next).length < min) throw bad(`친구를 ${min}명 이상 표시해 주세요. (지금 ${Object.keys(next).length}명)`);
+
+      room.relations ||= {};
+      room.submissions ||= {};
+      room.relations[student.id] = next;
+      room.submissions[student.id] = { submittedAt: now, firstSubmittedAt: room.submissions[student.id]?.firstSubmittedAt || now };
+    });
+    res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
 
   // ---------- fallbacks ----------

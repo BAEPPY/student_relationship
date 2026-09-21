@@ -21,7 +21,47 @@
 - 최소 인원(기본 3명) 이상 표시해야 제출할 수 있고, 마감 전까지는 수정할 수 있습니다.
 - 학생은 자기가 표시한 내용만 볼 수 있고, 다른 학생의 답은 볼 수 없습니다.
 
-## 빠른 시작 (내 컴퓨터에서 실행)
+## 연결이 안 되나요? (먼저 읽어 주세요)
+
+이 저장소에는 **코드만** 들어 있습니다. 사이트가 열리려면 이 코드를 실행하는 **서버가 어딘가에서 켜져 있어야** 합니다.
+
+- GitHub 페이지(github.com 주소)나 GitHub Pages 로는 열리지 않습니다. 이 앱은 Node.js 서버가 필요합니다.
+- `http://localhost:3000` 은 서버를 켠 **그 컴퓨터에서만** 열립니다. 학생 스마트폰에서는 열리지 않습니다.
+- 학생들이 각자 스마트폰으로 접속하려면 아래처럼 **인터넷에 배포**해야 합니다. 5~10분이면 됩니다.
+
+## 🚀 무료로 배포하기 (Render + Neon)
+
+카드 등록 없이 무료로 쓸 수 있는 조합입니다. 두 사이트 모두 GitHub 계정으로 가입할 수 있습니다.
+
+### 1단계. Neon 에서 무료 데이터베이스 만들기 (데이터 보관용)
+
+무료 서버는 잠들거나 재시작될 때 파일이 지워지기 때문에, 학생 응답을 안전하게 보관하려면 데이터베이스가 필요합니다.
+
+1. https://neon.tech 에서 가입합니다. (무료, 카드 불필요)
+2. **New project** 를 누르고 이름은 자유롭게, Region 은 **Asia Pacific (Singapore)** 를 고릅니다.
+3. 프로젝트 화면의 **Connect** 버튼을 누르고 `postgresql://` 로 시작하는 **연결 문자열(connection string)** 을 복사해 둡니다.
+
+### 2단계. Render 에 배포하기
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BAEPPY/student_relationship)
+
+1. 위 버튼을 누르고 Render 에 가입/로그인합니다. (무료, 카드 불필요)
+2. Blueprint 이름을 아무거나 입력합니다.
+3. `DATABASE_URL` 칸에 1단계에서 복사한 연결 문자열을 붙여넣고 **Apply** 를 누릅니다.
+4. 3~5분 기다리면 배포가 끝납니다. Render 대시보드에서 `student-relationship` 서비스를 열면 위쪽에 `https://student-relationship-xxxx.onrender.com` 같은 주소가 보입니다. 이 주소가 사이트 주소입니다.
+5. 그 주소로 접속해 교실을 만들고, **학생 QR 카드 인쇄**로 카드를 나눠 주면 됩니다.
+
+알아 둘 점
+- 무료 서버는 15분 동안 아무도 접속하지 않으면 잠듭니다. 다음 접속 때 깨어나는 데 30초~1분쯤 걸리니, 수업 전에 선생님 페이지를 한 번 미리 열어 두세요.
+- `DATABASE_URL` 을 비워 두면 임시 파일에 저장되어 서버가 잠들 때 데이터가 지워집니다. 이 경우 선생님 페이지에 경고가 표시됩니다.
+- 코드를 수정해서 GitHub 에 올리면 Render 가 자동으로 다시 배포합니다.
+
+### 다른 방법
+
+- **Railway, Fly.io 등**: 저장소를 연결하고 시작 명령을 `npm start` 로 두면 됩니다. 볼륨(영구 디스크)을 붙일 수 있으면 `DATA_DIR` 을 그 경로로 지정해 파일 저장을 써도 되고, 아니면 `DATABASE_URL` 을 설정하세요.
+- **Docker**: 아래 "Docker" 항목을 참고하세요.
+
+## 내 컴퓨터에서 실행하기
 
 Node.js 20 이상이 필요합니다.
 
@@ -33,29 +73,27 @@ npm start
 브라우저에서 http://localhost:3000 을 열고 교실을 만드세요.
 "예시 데이터로 체험하기" 버튼을 누르면 임의의 응답이 채워진 예시 교실을 바로 볼 수 있습니다.
 
-학생들이 각자 스마트폰으로 접속하려면 서버가 인터넷(또는 같은 네트워크)에서 접근 가능해야 합니다. 아래 배포 방법을 참고하세요.
+서버를 켜면 터미널에 `같은 Wi-Fi 기기에서: http://192.168.x.x:3000` 같은 주소가 함께 표시됩니다. 같은 Wi-Fi 에 있는 스마트폰·태블릿은 이 주소로 접속할 수 있습니다. (학교 Wi-Fi 는 기기 간 접속을 막아 두는 경우가 많고, 컴퓨터 방화벽이 막을 수도 있습니다. 이때는 위의 무료 배포 방법을 쓰세요.)
 
-## 배포
-
-서버는 Node.js 한 개 프로세스로 동작하며 데이터는 `data/rooms.json` 한 파일에 저장됩니다.
+## 설정 (환경 변수)
 
 | 환경 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `PORT` | 서버 포트 | `3000` |
-| `DATA_DIR` | 데이터 파일을 저장할 폴더 | `./data` |
+| `DATABASE_URL` | PostgreSQL 연결 문자열. 설정하면 데이터를 DB 에 저장합니다. (Neon, Supabase, Render Postgres 등) | 없음 (파일 저장) |
+| `DATA_DIR` | `DATABASE_URL` 이 없을 때 데이터 파일(`rooms.json`)을 저장할 폴더 | `./data` |
 | `BASE_URL` | QR 코드·링크에 사용할 공개 주소 (예: `https://example.com`). 비워 두면 접속한 주소를 그대로 사용합니다. | 없음 |
+| `DATABASE_SSL` | `false` 로 두면 DB 연결에 SSL 을 쓰지 않습니다. 기본은 외부 주소면 SSL 사용, `localhost` 나 내부 호스트명이면 미사용 | 자동 |
+| `DATABASE_SSL_VERIFY` | `false` 로 두면 DB 인증서 검증을 건너뜁니다. (자체 서명 인증서를 쓰는 곳에서만) | `true` |
 
 ### Docker
 
 ```bash
 docker build -t student-relationship .
 docker run -p 3000:3000 -v $(pwd)/data:/data student-relationship
+# 또는 DB 사용
+docker run -p 3000:3000 -e DATABASE_URL=postgresql://... student-relationship
 ```
-
-### Railway / Fly.io / Render 등
-
-- 저장소를 연결하고 시작 명령을 `npm start`로 두면 됩니다. Docker를 지원하는 곳에서는 포함된 `Dockerfile`이 그대로 사용됩니다.
-- **중요:** 무료 요금제의 임시 디스크는 재배포·재시작 시 초기화될 수 있습니다. 볼륨(영구 디스크)을 붙여 `DATA_DIR`을 그 경로로 지정하거나, 활동이 끝나면 선생님 페이지에서 **CSV/JSON 내보내기**로 결과를 보관하세요.
 
 ## 갈등 확률 계산 방식
 
@@ -80,9 +118,10 @@ docker run -p 3000:3000 -v $(pwd)/data:/data student-relationship
 
 ```
 server/
-  index.js      서버 시작 (포트, 데이터 파일)
+  index.js      서버 시작 (포트, 저장소 선택)
   app.js        Express 앱과 API
   store.js      JSON 파일 저장소
+  pgstore.js    PostgreSQL 저장소 (DATABASE_URL)
   analysis.js   관계 통계와 갈등 가능성 분석
   reasons.js    이유 선택지 목록과 가중치
 public/
@@ -92,6 +131,8 @@ public/
   print.html / js/print.js      학생 QR 카드 인쇄
   student.html / js/student.js  학생 페이지
   css/style.css
+render.yaml     Render 원클릭 배포 설정
+Dockerfile      컨테이너 배포용
 test/           node:test 기반 테스트
 ```
 

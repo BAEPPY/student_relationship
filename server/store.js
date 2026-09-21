@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * 아주 단순한 JSON 파일 저장소.
+ * JSON 파일 저장소 (기본값).
  * - 모든 데이터는 메모리에 있고, 변경될 때마다 파일에 원자적으로 기록합니다.
  * - file 이 null 이면 메모리에만 저장합니다(테스트용).
+ *
+ * 모든 저장소는 같은 메서드를 제공하며, 결과는 값 또는 Promise 일 수 있습니다.
+ * (app.js 는 항상 await 로 호출합니다.)
  */
-export class Store {
+export class FileStore {
   constructor(file = null) {
     this.file = file;
     this.data = { version: 1, rooms: {} };
@@ -38,15 +41,29 @@ export class Store {
     fs.renameSync(tmp, this.file);
   }
 
-  // ---- rooms ----
-  get rooms() { return this.data.rooms; }
+  async init() { return this; }
+  async close() {}
 
   getRoom(id) { return this.data.rooms[id] || null; }
 
-  putRoom(room) {
+  createRoom(room) {
     this.data.rooms[room.id] = room;
     this.save();
     return room;
+  }
+
+  /**
+   * 교실을 읽고-고치고-저장하는 작업을 원자적으로 수행합니다.
+   * mutator 가 예외를 던지면 아무것도 바뀌지 않습니다.
+   */
+  updateRoom(id, mutator) {
+    const room = this.data.rooms[id];
+    if (!room) return null;
+    const copy = structuredClone(room);
+    mutator(copy);
+    this.data.rooms[id] = copy;
+    this.save();
+    return copy;
   }
 
   deleteRoom(id) {
@@ -68,3 +85,6 @@ export class Store {
     return null;
   }
 }
+
+// 이전 이름과의 호환
+export { FileStore as Store };

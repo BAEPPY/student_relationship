@@ -146,6 +146,7 @@ function renderHeader() {
       stat('고립 위험', analysis.isolated.length ? analysis.isolated.join(', ') : '없음', '좋은 사이로 지목받지 못한 학생'),
     ]),
     room.locked ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0 }, text: '제출이 마감된 상태예요. 학생 페이지는 읽기 전용이에요.' }) : null,
+    state.notice ? el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 }, text: `⚠️ ${state.notice}` }) : null,
   );
 }
 

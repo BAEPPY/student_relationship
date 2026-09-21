@@ -1,0 +1,18 @@
+# Render Blueprint - "Deploy to Render" 버튼으로 무료 웹 서비스를 만듭니다.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: student-relationship
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # 무료 서버는 재시작할 때 파일이 지워지므로, 데이터를 오래 보관하려면
+      # Neon 등 무료 PostgreSQL 의 연결 문자열을 여기에 넣어 주세요. (비워 두면 임시 파일 저장)
+      - key: DATABASE_URL
+        sync: false

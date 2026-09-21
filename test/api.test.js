@@ -1,13 +1,21 @@
-import { test, before, after } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../server/app.js';
-import { Store } from '../server/store.js';
+import { FileStore } from '../server/store.js';
+import { PgStore } from '../server/pgstore.js';
+import { FakePool } from './fake-pg.js';
 
 let server;
 let url;
 
+const STORES = [
+  ['FileStore', async () => new FileStore(null)],
+  ['PgStore', async () => new PgStore(new FakePool()).init()],
+];
+
+for (const [label, makeStore] of STORES) describe(`API (${label})`, () => {
 before(async () => {
-  const app = createApp({ store: new Store(null), baseUrl: 'https://example.test' });
+  const app = createApp({ store: await makeStore(), baseUrl: 'https://example.test' });
   await new Promise((resolve) => { server = app.listen(0, resolve); });
   url = `http://127.0.0.1:${server.address().port}`;
 });
@@ -161,4 +169,5 @@ test('페이지 라우팅', async () => {
   }
   const nf = await call('/no-such-page');
   assert.equal(nf.status, 404);
+});
 });
