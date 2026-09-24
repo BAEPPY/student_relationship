@@ -38,6 +38,7 @@
 | 사이트가 잠드나요? | 아니요. 학생이 접속하면 바로 열립니다. | 15분 동안 접속이 없으면 잠들고, 깨는 데 30초~1분 걸립니다. |
 | 데이터베이스 | Vercel 안에서 Neon 무료 DB를 클릭 몇 번으로 만듭니다. 별도 가입 없음. | Neon 에 따로 가입해 연결 문자열을 붙여넣습니다. |
 | 관리 화면 | 가볍고 빠릅니다. | 조금 무겁습니다. |
+| 비용 | 무료 (Hobby 플랜, 카드 불필요). 개인·비상업용에 한함 | 무료 (카드 불필요) |
 
 ### 방법 A. Vercel + Neon (추천)
 
@@ -52,6 +53,15 @@
 버튼 한 번으로 하고 싶다면 아래 버튼을 눌러도 됩니다. 이 버튼은 저장소 **복사본**(`student-relationship-site`)을 내 GitHub 에 만들고 Neon DB 생성까지 한 흐름으로 진행합니다. 다만 이후 원본 저장소를 고쳐도 복사본에는 반영되지 않으니, 코드를 계속 고칠 계획이면 위의 Import 방법을 쓰세요.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FBAEPPY%2Fstudent_relationship&project-name=student-relationship&repository-name=student-relationship-site&products=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%5D)
+
+결제 수단을 등록하라는 화면이 나오면 (Neon 을 Vercel 안에서 만들 때 드물게 요구할 수 있음)
+
+등록하지 말고 Neon 에 직접 가입해서 연결하면 됩니다. Neon 무료 플랜은 카드가 필요 없습니다.
+
+1. https://neon.tech 에서 가입하고 **New project** 를 만듭니다. Region 은 **Asia Pacific (Singapore)** 를 고릅니다.
+2. 프로젝트 화면의 **Connect** 버튼을 눌러 `postgresql://` 로 시작하는 연결 문자열을 복사합니다.
+3. Vercel 프로젝트 화면에서 **Settings → Environment Variables** 로 가서 Key 에 `DATABASE_URL`, Value 에 복사한 문자열을 넣고, 환경(Production, Preview, Development)을 모두 체크한 뒤 **Save** 를 누릅니다.
+4. **Deployments** 탭에서 맨 위 배포의 **⋯** 메뉴 → **Redeploy** 를 누릅니다.
 
 알아 둘 점
 - 코드를 GitHub 에 올리면 Vercel 이 자동으로 다시 배포합니다.
