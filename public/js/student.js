@@ -62,8 +62,8 @@ function render() {
     el('div', { class: 'progress' }, [el('div', { class: n >= min ? 'done' : '', style: { width: `${pct}%` } })]),
     el('div', { class: 'student-map', id: 'map', style: { marginTop: '10px' } }),
     el('div', { class: 'legend', style: { marginTop: '6px' } }, [
-      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--orange)' } }), '나']),
-      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--blue)' } }), '친구']),
+      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--me-fill)', border: '1.5px solid var(--me-border)' } }), '나']),
+      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '1.5px solid var(--node-border)' } }), '친구']),
       el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
       el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
     ]),
@@ -149,7 +149,7 @@ function drawMap(container) {
   const svg = svgEl('svg', { viewBox: `${vb.x} ${vb.y} ${vb.w} ${vb.h}`, role: 'img', 'aria-label': '내 친구 관계 지도' });
 
   const defs = svgEl('defs');
-  for (const [id, color] of [['arrow-good', '#e53935'], ['arrow-bad', '#222']]) {
+  for (const [id, color] of [['arrow-good', '#ef5b6b'], ['arrow-bad', '#2d2f3a']]) {
     const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
     defs.append(m);
@@ -166,7 +166,7 @@ function drawMap(container) {
     const end = rectEdge(p, NODE_W, NODE_H, me);
     edges.append(svgEl('path', {
       d: `M${start.x},${start.y} L${end.x},${end.y}`,
-      stroke: r.type === 'good' ? '#e53935' : '#222', 'stroke-width': 3, fill: 'none', 'stroke-linecap': 'round',
+      stroke: r.type === 'good' ? '#ef5b6b' : '#2d2f3a', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round',
       'marker-end': `url(#${r.type === 'good' ? 'arrow-good' : 'arrow-bad'})`,
     }));
   }
@@ -178,8 +178,7 @@ function drawMap(container) {
     const r = draft[c.id];
     const g = svgEl('g', { class: 'node', transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': c.name });
     const rect = svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: 8 });
-    if (r) rect.setAttribute('style', `stroke:${r.type === 'good' ? '#e53935' : '#222'};stroke-width:3`);
-    else rect.setAttribute('style', 'opacity:.75');
+    if (r) rect.setAttribute('style', `stroke:${r.type === 'good' ? '#ef5b6b' : '#2d2f3a'};stroke-width:3`);
     g.append(rect, svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: shorten(c.name, 6), style: 'font-size:18px' }));
     if (!data.room.locked) {
       g.addEventListener('click', () => openEditor(c.id));

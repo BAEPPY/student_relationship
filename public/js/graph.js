@@ -176,7 +176,7 @@ export class RelationGraph {
     const svg = this.svg;
     svg.replaceChildren();
     const defs = svgEl('defs');
-    for (const [id, color] of [['g-arrow-good', '#e53935'], ['g-arrow-bad', '#222']]) {
+    for (const [id, color] of [['g-arrow-good', '#ef5b6b'], ['g-arrow-bad', '#2d2f3a']]) {
       const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse', markerUnits: 'strokeWidth' });
       m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
       defs.append(m);
@@ -230,8 +230,8 @@ export class RelationGraph {
       g.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: shorten(s.name, 7) }));
       const deg = st.degree || 0;
       const badge = svgEl('g', { transform: `translate(${NODE_W / 2 - 2},${-NODE_H / 2 + 2})` });
-      badge.append(svgEl('circle', { r: 11, fill: '#fff', stroke: '#2f5597', 'stroke-width': 1.5 }));
-      badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: String(deg), style: 'fill:#2f5597;font-size:11px;font-weight:700' }));
+      badge.append(svgEl('circle', { r: 11, fill: '#fff', stroke: '#b9b3ff', 'stroke-width': 1.5 }));
+      badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: String(deg), style: 'fill:#5145cd;font-size:11px;font-weight:700' }));
       g.append(badge);
       const title = svgEl('title', { text: `${s.name} · 연결 ${deg}개 · 받은 ❤️ ${st.inGood?.length || 0} · 받은 ⚡ ${st.inBad?.length || 0}${st.submitted ? '' : ' · 미제출'}` });
       g.append(title);

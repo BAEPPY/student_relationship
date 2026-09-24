@@ -66,8 +66,8 @@ function buildSkeleton() {
         el('div', { class: 'legend' }, [
           el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
           el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
-          el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--blue)', border: '2px solid #ffc107' } }), '연결이 가장 많은 학생']),
-          el('span', {}, [el('span', { class: 'sw', style: { background: '#9fb3d9', border: '1px dashed #2f5597' } }), '미제출']),
+          el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
+          el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
         ]),
       ]),
       el('div', { class: 'graph-toolbar', id: 'graph-toolbar' }),
