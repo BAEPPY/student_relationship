@@ -125,6 +125,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       analysis,
       catalog: REASON_CATALOG,
       notice: storageNotice,
+      seating: room.seating || null,
     };
   }
 
@@ -148,6 +149,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/', page(pages.index));
   app.get('/t/:adminToken', page(pages.teacher));
   app.get('/t/:adminToken/print', page(pages.print));
+  app.get('/t/:adminToken/seats', page(pages.seats));
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
@@ -317,6 +319,35 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const room = await mutateRoom(found, (room) => {
       findStudent(room, req.params.studentId).token = newToken(16);
     });
+    res.json(teacherView(req, room));
+  });
+
+  // 자리 배정 저장
+  app.put('/api/teacher/:adminToken/seating', async (req, res) => {
+    const found = await requireRoom(req);
+    const body = req.body || {};
+    const blocks = Array.isArray(body.layout?.blocks) ? body.layout.blocks : null;
+    if (!blocks || blocks.length < 1 || blocks.length > 6) throw bad('교실 배치는 1~6개 블록으로 입력해 주세요.');
+    const layout = { blocks: blocks.map((b) => {
+      const cols = Number.parseInt(b?.cols, 10);
+      const rows = Number.parseInt(b?.rows, 10);
+      if (!(cols >= 1 && cols <= 4) || !(rows >= 1 && rows <= 10)) throw bad('블록은 가로 1~4, 세로 1~10 사이여야 해요.');
+      return { cols, rows };
+    }) };
+    const validSeat = /^b\d+-r\d+-c\d+$/;
+    const seats = {};
+    const used = new Set();
+    for (const [seatId, studentId] of Object.entries(body.seats || {})) {
+      if (!validSeat.test(seatId)) throw bad('좌석 정보가 올바르지 않아요.');
+      if (!studentId) continue;
+      if (!found.students.some((st) => st.id === studentId)) throw bad('없는 학생이 좌석에 포함되어 있어요.');
+      if (used.has(studentId)) throw bad('한 학생이 두 자리에 배정되어 있어요.');
+      used.add(studentId);
+      seats[seatId] = studentId;
+    }
+    const pinned = [...new Set((Array.isArray(body.pinned) ? body.pinned : []).filter((id) => validSeat.test(id)))];
+    const options = { friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any' };
+    const room = await mutateRoom(found, (r) => { r.seating = { layout, seats, pinned, options, updatedAt: new Date().toISOString() }; });
     res.json(teacherView(req, room));
   });
 

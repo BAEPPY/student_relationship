@@ -130,6 +130,7 @@ function renderHeader() {
       ]),
       el('div', { class: 'btn-row' }, [
         el('a', { class: 'btn primary', href: `/t/${encodeURIComponent(adminToken)}/print`, target: '_blank', text: '학생 QR 카드 인쇄' }),
+        el('a', { class: 'btn orange', href: `/t/${encodeURIComponent(adminToken)}/seats`, text: '자리 배정' }),
         el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
         el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }),
         el('button', { type: 'button', class: `btn ${room.locked ? '' : 'danger'}`, text: room.locked ? '마감 해제' : '제출 마감', onClick: () => {

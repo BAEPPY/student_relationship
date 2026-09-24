@@ -182,3 +182,29 @@ export const notFound = `<!doctype html>
 </body>
 </html>
 `;
+
+export const seats = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>자리 배정 · 학생 관계 마인드맵</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="badge blue">자리 배정</span>
+      <span class="spacer"></span>
+      <a class="btn small" id="back-link" href="#">선생님 페이지로</a>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/seats.js"></script>
+</body>
+</html>
+`;

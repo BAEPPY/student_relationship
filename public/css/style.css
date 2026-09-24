@@ -277,3 +277,28 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .link-box { display: flex; gap: 8px; align-items: center; }
 .link-box input { flex: 1; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; background: var(--gray-100); }
 kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100); padding: 2px 6px; border-radius: 6px; }
+
+/* ---------- 자리 배정 ---------- */
+.podium { margin: 0 auto 18px; width: 200px; text-align: center; background: var(--gray-700); color: #fff; border-radius: 10px; padding: 8px; font-weight: 700; letter-spacing: .1em; }
+.seat-blocks { display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; }
+.seat-block { display: grid; gap: 8px; }
+.seat {
+  width: 92px; height: 58px; border-radius: 12px; border: 1.5px solid var(--node-border); background: var(--node-fill);
+  color: var(--node-text); font-weight: 700; font-size: 15px; position: relative; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 2px rgba(30,30,60,.06); transition: transform .1s, box-shadow .15s; cursor: pointer; font-family: inherit;
+}
+.seat:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.seat.empty { background: #fff; border-style: dashed; color: var(--gray-500); font-weight: 500; }
+.seat.selected { outline: 3px solid var(--blue); outline-offset: 2px; }
+.seat.conflict { border-color: var(--red); background: #ffe9ec; color: #b3273a; }
+.seat.pinned { border-color: var(--orange); }
+.seat .pin { position: absolute; top: -8px; right: -6px; font-size: 14px; background: #fff; border-radius: 50%; padding: 2px; box-shadow: 0 1px 3px rgba(0,0,0,.2); line-height: 1; }
+.seat-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 84px; padding: 0 4px; }
+.print-only { display: none; }
+@media (max-width: 700px) { .seat { width: 72px; height: 50px; font-size: 13px; } .seat-blocks { gap: 14px; } }
+@media print {
+  .print-only { display: block; }
+  .seat-chart { box-shadow: none; }
+  .seat { box-shadow: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .grid-2 { display: block; }
+}

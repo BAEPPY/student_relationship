@@ -170,4 +170,24 @@ test('페이지 라우팅', async () => {
   const nf = await call('/no-such-page');
   assert.equal(nf.status, 404);
 });
+
+test('자리 배정 저장과 검증', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '배정반', students: '가\n나\n다' });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  const [a, b] = view.json.students;
+  let r = await call(`/api/teacher/${t}/seating`, 'PUT', { layout: { blocks: [{ cols: 2, rows: 2 }] }, seats: { 'b0-r0-c0': a.id, 'b0-r0-c1': b.id }, pinned: ['b0-r0-c0'], options: { friends: 'near' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.seating.seats['b0-r0-c1'], b.id);
+  assert.deepEqual(r.json.seating.pinned, ['b0-r0-c0']);
+  assert.equal(r.json.seating.options.friends, 'near');
+  r = await call(`/api/teacher/${t}/seating`, 'PUT', { layout: { blocks: [{ cols: 2, rows: 2 }] }, seats: { 'b0-r0-c0': a.id, 'b0-r0-c1': a.id } });
+  assert.equal(r.status, 400);
+  r = await call(`/api/teacher/${t}/seating`, 'PUT', { layout: { blocks: [{ cols: 9, rows: 2 }] }, seats: {} });
+  assert.equal(r.status, 400);
+  r = await call(`/api/teacher/${t}/seating`, 'PUT', { layout: { blocks: [{ cols: 2, rows: 2 }] }, seats: { 'b0-r0-c0': 'nope' } });
+  assert.equal(r.status, 400);
+  const page = await call(`/t/${t}/seats`);
+  assert.equal(page.status, 200);
+});
 });
