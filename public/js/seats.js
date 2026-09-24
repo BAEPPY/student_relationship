@@ -79,6 +79,8 @@ function pairCost(a, b) {
 function totalCost(assign, pairs) {
   let sum = 0;
   for (const [x, y, w] of pairs) sum += w * pairCost(assign[x], assign[y]);
+  // 학생이 자리보다 적으면 앞줄부터 채우도록 뒷줄에 작은 비용
+  for (const [seatId, sid] of Object.entries(assign)) if (sid) sum += 0.8 * Number(seatId.split('-')[1].slice(1));
   return sum;
 }
 
@@ -229,7 +231,7 @@ function render() {
     ]) : null,
   ]);
 
-  setChildren(app, header, el('div', { class: 'grid-2', style: { gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)' } }, [chart, side]));
+  setChildren(app, header, el('div', { class: 'grid-2 seat-layout' }, [chart, side]));
 }
 
 function seatCard(seatId, ev) {

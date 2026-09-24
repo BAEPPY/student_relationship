@@ -280,7 +280,10 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 
 /* ---------- 자리 배정 ---------- */
 .podium { margin: 0 auto 18px; width: 200px; text-align: center; background: var(--gray-700); color: #fff; border-radius: 10px; padding: 8px; font-weight: 700; letter-spacing: .1em; }
-.seat-blocks { display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; }
+.seat-layout { grid-template-columns: minmax(0, 1fr) 320px; }
+@media (max-width: 1000px) { .seat-layout { grid-template-columns: 1fr; } }
+.seat-chart { overflow-x: auto; }
+.seat-blocks { display: flex; justify-content: center; gap: 28px; min-width: max-content; padding: 0 8px; }
 .seat-block { display: grid; gap: 8px; }
 .seat {
   width: 92px; height: 58px; border-radius: 12px; border: 1.5px solid var(--node-border); background: var(--node-fill);
