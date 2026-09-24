@@ -62,7 +62,7 @@ function render() {
     el('div', { class: 'progress' }, [el('div', { class: n >= min ? 'done' : '', style: { width: `${pct}%` } })]),
     el('div', { class: 'student-map', id: 'map', style: { marginTop: '10px' } }),
     el('div', { class: 'legend', style: { marginTop: '6px' } }, [
-      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--me-fill)', border: '1.5px solid var(--me-border)' } }), '나']),
+      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--red)', borderRadius: '50%', width: '14px', height: '14px' } }), '나']),
       el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '1.5px solid var(--node-border)' } }), '친구']),
       el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
       el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
@@ -157,12 +157,13 @@ function drawMap(container) {
   svg.append(defs);
 
   const me = { x: 0, y: 0 };
+  const ME_R = 36; // '나' 동그라미 반지름
   const edges = svgEl('g');
   for (const c of mates) {
     const r = draft[c.id];
     if (!r) continue;
     const p = pos[c.id];
-    const start = rectEdge(me, 110, 46, p);
+    const start = circleEdge(me, ME_R + 4, p);
     const end = rectEdge(p, NODE_W, NODE_H, me);
     edges.append(svgEl('path', {
       d: `M${start.x},${start.y} L${end.x},${end.y}`,
@@ -186,15 +187,24 @@ function drawMap(container) {
     }
     nodes.append(g);
   }
+  // '나'는 빨간 동그라미로 강조
   const meNode = svgEl('g', { class: 'node me', transform: 'translate(0,0)' });
-  meNode.append(svgEl('rect', { x: -55, y: -23, width: 110, height: 46, rx: 10 }));
-  meNode.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: '나', style: 'font-size:22px' }));
+  meNode.append(svgEl('circle', { class: 'me-halo', r: ME_R + 10 }));
+  meNode.append(svgEl('circle', { class: 'me-body', r: ME_R }));
+  meNode.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: '나', style: 'font-size:26px;fill:#fff;font-weight:800' }));
   nodes.append(meNode);
   svg.append(nodes);
   container.replaceChildren(svg);
 }
 
 function shorten(s, n) { return s.length > n ? `${s.slice(0, n - 1)}…` : s; }
+
+// 원(중심 c, 반지름 r)에서 목표점 t 방향으로 나가는 경계점
+function circleEdge(c, r, t) {
+  const dx = t.x - c.x, dy = t.y - c.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: c.x + (dx / len) * r, y: c.y + (dy / len) * r };
+}
 
 // 사각형(중심 c, 폭 w, 높이 h)에서 목표점 t 방향으로 나가는 경계점
 function rectEdge(c, w, h, t) {

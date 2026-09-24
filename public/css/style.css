@@ -164,6 +164,11 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .node:hover rect { filter: drop-shadow(0 6px 12px rgba(30,30,60,.2)); }
 .node.me rect { fill: var(--me-fill); stroke: var(--me-border); }
 .node.me text { fill: var(--me-text); }
+/* 학생 페이지의 '나': 빨간 동그라미 + 은은한 후광 */
+.node.me .me-body { fill: var(--red); stroke: #fff; stroke-width: 4; filter: drop-shadow(0 4px 10px rgba(239,91,107,.45)); }
+.node.me .me-halo { fill: rgba(239,91,107,.14); animation: me-pulse 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+@keyframes me-pulse { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.12); opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .node.me .me-halo { animation: none; } }
 .node.pending rect { fill: #f3f3f8; stroke: #c9c9d8; stroke-dasharray: 5 4; }
 .node.pending text { fill: #8a8ba0; }
 .node text { fill: var(--node-text); font-weight: 700; font-size: 15px; pointer-events: none; }
