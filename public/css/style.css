@@ -305,3 +305,8 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
   .seat { box-shadow: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .grid-2 { display: block; }
 }
+.select { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gray-300); background: #fff; font-family: inherit; font-size: 15px; }
+.seat-marks { position: absolute; left: 4px; bottom: 2px; font-size: 11px; line-height: 1; }
+.rule-item { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
+.rule-item:last-child { border-bottom: 0; }
+#notes-card input[type="text"] { padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; }

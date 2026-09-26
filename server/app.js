@@ -126,6 +126,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       catalog: REASON_CATALOG,
       notice: storageNotice,
       seating: room.seating || null,
+      teacherNotes: room.teacherNotes || { students: {}, rules: [] },
     };
   }
 
@@ -294,7 +295,42 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       delete room.relations[student.id];
       delete room.submissions[student.id];
       for (const targets of Object.values(room.relations)) delete targets[student.id];
+      if (room.teacherNotes) {
+        delete room.teacherNotes.students?.[student.id];
+        room.teacherNotes.rules = (room.teacherNotes.rules || []).filter((r) => r.a !== student.id && r.b !== student.id);
+      }
+      if (room.seating?.seats) {
+        for (const [seatId, sid] of Object.entries(room.seating.seats)) if (sid === student.id) delete room.seating.seats[seatId];
+      }
     });
+    res.json(teacherView(req, room));
+  });
+
+  // 교사 메모와 지정 규칙 (앞자리 필요, 떨어뜨리기/가까이 앉히기)
+  app.put('/api/teacher/:adminToken/notes', async (req, res) => {
+    const found = await requireRoom(req);
+    const body = req.body || {};
+    const ids = new Set(found.students.map((st) => st.id));
+    const students = {};
+    for (const [sid, n] of Object.entries(body.notes || {})) {
+      if (!ids.has(sid)) throw bad('없는 학생이 메모에 포함되어 있어요.');
+      const memo = String(n?.memo ?? '').trim();
+      if (memo.length > LIMITS.reason) throw bad(`메모는 ${LIMITS.reason}자 이하로 적어 주세요.`);
+      const front = Boolean(n?.front);
+      if (memo || front) students[sid] = { memo, front };
+    }
+    const rules = [];
+    const seen = new Set();
+    for (const r of Array.isArray(body.rules) ? body.rules : []) {
+      if (!r || !['apart', 'together'].includes(r.type)) throw bad('규칙 종류는 떨어뜨리기 또는 가까이 앉히기여야 해요.');
+      if (!ids.has(r.a) || !ids.has(r.b) || r.a === r.b) throw bad('규칙의 학생이 올바르지 않아요.');
+      const key = [r.a, r.b].sort().join('|');
+      if (seen.has(key)) throw bad('같은 두 학생에 대한 규칙이 두 개 있어요.');
+      seen.add(key);
+      rules.push({ type: r.type, a: r.a, b: r.b, note: String(r.note ?? '').trim().slice(0, 100) });
+    }
+    if (rules.length > 100) throw bad('규칙은 100개까지 만들 수 있어요.');
+    const room = await mutateRoom(found, (rm) => { rm.teacherNotes = { students, rules, updatedAt: new Date().toISOString() }; });
     res.json(teacherView(req, room));
   });
 
@@ -362,7 +398,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const room = await requireRoom(req);
     const view = teacherView(req, room);
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), relations: view.relations, analysis: view.analysis });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), relations: view.relations, analysis: view.analysis, teacherNotes: view.teacherNotes, seating: view.seating });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {

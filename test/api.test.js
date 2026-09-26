@@ -190,4 +190,26 @@ test('자리 배정 저장과 검증', async () => {
   const page = await call(`/t/${t}/seats`);
   assert.equal(page.status, 200);
 });
+
+test('교사 메모와 지정 규칙 저장', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '메모반', students: '가\n나\n다' });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  const [a, b, c] = view.json.students;
+  let r = await call(`/api/teacher/${t}/notes`, 'PUT', { notes: { [a.id]: { memo: '시력이 나빠요', front: true }, [b.id]: { memo: '', front: false } }, rules: [{ type: 'apart', a: a.id, b: b.id, note: '다툼' }, { type: 'together', a: b.id, b: c.id }] });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.teacherNotes.students[a.id].front, true);
+  assert.equal(r.json.teacherNotes.students[b.id], undefined);
+  assert.equal(r.json.teacherNotes.rules.length, 2);
+  r = await call(`/api/teacher/${t}/notes`, 'PUT', { notes: {}, rules: [{ type: 'apart', a: a.id, b: a.id }] });
+  assert.equal(r.status, 400);
+  r = await call(`/api/teacher/${t}/notes`, 'PUT', { notes: {}, rules: [{ type: 'apart', a: a.id, b: b.id }, { type: 'together', a: b.id, b: a.id }] });
+  assert.equal(r.status, 400);
+  r = await call(`/api/teacher/${t}/notes`, 'PUT', { notes: { zzz: { memo: 'x' } }, rules: [] });
+  assert.equal(r.status, 400);
+  // 학생 삭제 시 관련 메모/규칙 정리
+  const removed = await call(`/api/teacher/${t}/students/${a.id}`, 'DELETE');
+  assert.equal(removed.json.teacherNotes.students[a.id], undefined);
+  assert.equal(removed.json.teacherNotes.rules.length, 1);
+});
 });

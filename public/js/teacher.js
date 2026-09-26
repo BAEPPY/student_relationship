@@ -224,6 +224,7 @@ function renderSidePanel() {
     el('div', { class: 'stat-row', style: { marginBottom: '10px' } }, [
       stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('준 ❤️', st.outGood.length), stat('준 ⚡', st.outBad.length),
     ]),
+    teacherNoteBox(id),
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
     section('나를 안 좋은 사이로 표시한 친구', st.inBad.map((f) => line(f, id))),
     section('내가 좋은 사이로 표시한 친구', st.outGood.map((t) => line(id, t))),
@@ -236,6 +237,18 @@ function renderSidePanel() {
       ]))),
     ]) : null,
   );
+  function teacherNoteBox(sid) {
+    const n = state.teacherNotes?.students?.[sid];
+    const myRules = (state.teacherNotes?.rules || []).filter((r) => r.a === sid || r.b === sid);
+    if (!n && !myRules.length) return null;
+    return el('div', { class: 'alert info', style: { marginBottom: '10px' } }, [
+      el('div', { style: { fontWeight: 600 }, text: '교사 메모' }),
+      n?.front ? el('div', { text: '👓 앞자리 필요' }) : null,
+      n?.memo ? el('div', { text: `📝 ${n.memo}` }) : null,
+      ...myRules.map((r) => el('div', { text: `${r.type === 'apart' ? '↔ 떨어뜨리기' : '⇢ 가까이 앉히기'}: ${nameOf(r.a === sid ? r.b : r.a)}${r.note ? ` · ${r.note}` : ''}` })),
+      el('a', { href: `/t/${encodeURIComponent(adminToken)}/seats`, class: 'muted', style: { fontSize: '12px' }, text: '자리 배정 페이지에서 수정' }),
+    ]);
+  }
   function section(title, items) {
     return el('div', {}, [el('div', { class: 'muted', style: { fontWeight: 600 }, text: `${title} (${items.length})` }), items.length ? el('ul', {}, items) : el('p', { class: 'muted', style: { marginLeft: '4px' }, text: '없음' })]);
   }
