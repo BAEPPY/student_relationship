@@ -310,3 +310,14 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .rule-item { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
 .rule-item:last-child { border-bottom: 0; }
 #notes-card input[type="text"] { padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; }
+
+/* 붙여넣기 자동 분류 */
+.paste-panel { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; }
+.paste-panel textarea { font-family: inherit; resize: vertical; background: #fff; }
+.parse-preview { margin-top: 12px; background: #fff; border: 1px solid var(--gray-200); border-radius: 12px; padding: 12px 14px; }
+.parse-list { list-style: none; padding: 0; margin: 6px 0 0; }
+.parse-list li { padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
+.parse-list li:last-child { border-bottom: 0; }
+.parse-list label { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; cursor: pointer; }
+.parse-list .parse-source { grid-column: 3; font-size: 12.5px; }
+.parse-icon { font-size: 16px; }

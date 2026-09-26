@@ -1,4 +1,5 @@
 import { api, el, toast, setChildren, TYPE_ICON } from './common.js';
+import { parseTeacherNotes } from './notes-parser.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -17,6 +18,8 @@ let selected = null;             // 선택된 seatId
 let dirty = false;
 let layoutText = '2x4, 2x5, 2x4';
 let notesOpen = true;
+let pasteText = '';
+let parsed = null;              // { items: [{...item, checked}], unmatched }
 
 const nameOf = (id) => data.stats[id]?.name || '?';
 const RULE_LABEL = { apart: '떨어뜨리기', together: '가까이 앉히기' };
@@ -339,6 +342,7 @@ function notesSection() {
       el('div', {}, [el('h2', { text: '교사 메모 · 지정 규칙' }), el('div', { class: 'muted', text: '미리 적어 두면 자동 배정에 반영되고, 좌석표에서도 참고할 수 있어요. 학생에게는 보이지 않아요.' })]),
       el('button', { type: 'button', class: 'btn small', text: notesOpen ? '접기' : '펼치기', onClick: () => { notesOpen = !notesOpen; render(); } }),
     ]),
+    notesOpen ? pastePanel() : null,
     notesOpen ? el('div', { class: 'grid-2' }, [
       el('div', {}, [
         el('h3', { text: '학생별 메모 · 앞자리 필요(👓)' }),
@@ -361,6 +365,82 @@ function notesSection() {
           el('button', { type: 'button', class: 'btn small', text: '삭제', onClick: () => { rules = rules.filter((x) => x !== r); dirty = true; render(); } }),
         ]))) : el('p', { class: 'muted', text: '아직 규칙이 없어요.' }),
       ]),
+    ]) : null,
+  ]);
+}
+
+// ---------- 한 번에 붙여넣기 → 자동 분류 ----------
+const ITEM_ICON = { front: '👓', memo: '📝', rule: '↔' };
+function pastePanel() {
+  const ta = el('textarea', {
+    rows: 6,
+    placeholder: '예시)\n김하늘은 시력이 나빠서 앞자리 필요\n이도윤과 박서연은 자주 싸움\n최지우, 정민준 짝으로 앉히면 좋겠음 (최지우가 잘 도와줌)\n한지민 - 발표를 잘하고 친구를 잘 챙김',
+    style: { width: '100%', minHeight: '140px', padding: '10px 12px', border: '1.5px solid var(--gray-300)', borderRadius: '12px', fontSize: '15px' },
+  });
+  ta.value = pasteText;
+  ta.addEventListener('input', () => { pasteText = ta.value; });
+
+  const runParse = () => {
+    if (!pasteText.trim()) return toast('먼저 메모를 붙여넣어 주세요.');
+    const result = parseTeacherNotes(pasteText, data.students);
+    parsed = { items: result.items.map((it) => ({ ...it, checked: true })), unmatched: result.unmatched };
+    render();
+    if (!parsed.items.length) toast('학생 이름을 찾지 못했어요. 반 명단과 같은 이름으로 적어 주세요.', 4000);
+  };
+  const applyParsed = () => {
+    let n = 0;
+    for (const it of parsed.items) {
+      if (!it.checked) continue;
+      n++;
+      if (it.kind === 'front') notes[it.sid] = { ...(notes[it.sid] || { memo: '' }), front: true };
+      else if (it.kind === 'memo') {
+        const cur = notes[it.sid] || { memo: '', front: false };
+        const memo = cur.memo && !cur.memo.includes(it.memo) ? `${cur.memo} / ${it.memo}` : cur.memo || it.memo;
+        notes[it.sid] = { ...cur, memo: memo.slice(0, 300) };
+      } else if (it.kind === 'rule') {
+        rules = rules.filter((r) => !ruleOf(it.a, it.b) || r !== ruleOf(it.a, it.b));
+        rules.push({ type: it.type, a: it.a, b: it.b, note: it.source.slice(0, 100) });
+      }
+    }
+    parsed = null;
+    pasteText = '';
+    dirty = true;
+    render();
+    toast(`${n}개 항목을 반영했어요. 아래에서 확인하고 저장해 주세요.`);
+  };
+
+  const itemLabel = (it) => {
+    if (it.kind === 'front') return el('span', {}, [el('b', { text: nameOf(it.sid) }), ' 앞자리 필요']);
+    if (it.kind === 'memo') return el('span', {}, [el('b', { text: nameOf(it.sid) }), ` 메모: ${it.memo}`]);
+    return el('span', {}, [el('b', { text: `${nameOf(it.a)} · ${nameOf(it.b)}` }), ' ', el('span', { class: `badge ${it.type === 'apart' ? 'high' : 'green'}`, text: RULE_LABEL[it.type] })]);
+  };
+
+  return el('div', { class: 'paste-panel' }, [
+    el('h3', { text: '한 번에 붙여넣기 → 자동 분류' }),
+    el('p', { class: 'muted', text: '메모장이나 수첩에 적어 둔 내용을 통째로 붙여넣으면, 문장마다 학생 이름을 찾아 앞자리 필요 / 떨어뜨리기 / 가까이 앉히기 / 일반 메모로 나눠요. 결과를 확인하고 필요한 것만 체크해서 반영하세요. 이 처리는 이 브라우저 안에서만 이루어져요.' }),
+    ta,
+    el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+      el('button', { type: 'button', class: 'btn primary', text: '자동 분류하기', onClick: runParse }),
+      pasteText ? el('button', { type: 'button', class: 'btn', text: '지우기', onClick: () => { pasteText = ''; parsed = null; render(); } }) : null,
+    ]),
+    parsed ? el('div', { class: 'parse-preview' }, [
+      el('div', { class: 'card-title' }, [
+        el('h3', { text: `분류 결과 ${parsed.items.length}개` }),
+        el('div', { class: 'btn-row' }, [
+          el('button', { type: 'button', class: 'btn small', text: '모두 선택', onClick: () => { parsed.items.forEach((i) => { i.checked = true; }); render(); } }),
+          el('button', { type: 'button', class: 'btn small', text: '모두 해제', onClick: () => { parsed.items.forEach((i) => { i.checked = false; }); render(); } }),
+          el('button', { type: 'button', class: 'btn primary small', text: '체크한 항목 반영', disabled: parsed.items.some((i) => i.checked) ? null : true, onClick: applyParsed }),
+        ]),
+      ]),
+      parsed.items.length ? el('ul', { class: 'parse-list' }, parsed.items.map((it) => {
+        const cb = el('input', { type: 'checkbox', checked: it.checked ? true : null });
+        cb.addEventListener('change', () => { it.checked = cb.checked; });
+        return el('li', {}, [el('label', {}, [cb, el('span', { class: 'parse-icon', text: ITEM_ICON[it.kind] }), itemLabel(it), el('div', { class: 'muted parse-source', text: `“${it.source}”` })])]);
+      })) : el('p', { class: 'muted', text: '분류된 항목이 없어요.' }),
+      parsed.unmatched.length ? el('div', { style: { marginTop: '8px' } }, [
+        el('div', { class: 'muted', style: { fontWeight: 600 }, text: `학생 이름을 찾지 못한 문장 ${parsed.unmatched.length}개 (필요하면 아래에서 직접 추가하세요)` }),
+        el('ul', { class: 'muted', style: { margin: '4px 0 0', paddingLeft: '18px', fontSize: '13px' } }, parsed.unmatched.map((t) => el('li', { text: t }))),
+      ]) : null,
     ]) : null,
   ]);
 }
