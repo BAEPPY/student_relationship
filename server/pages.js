@@ -7,8 +7,7 @@ export const index = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>학생 관계 마인드맵</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&display=swap">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body class="kid">
@@ -53,8 +52,12 @@ export const index = `<!doctype html>
           <div class="help">쉼표로 구분해서 적어도 돼요. 같은 이름이 있으면 구분할 수 있게 적어 주세요 (예: 김민준A, 김민준B). <span id="student-count"></span></div>
         </div>
         <div class="field">
-          <label for="min-relations">학생 한 명이 최소로 표시해야 하는 친구 수</label>
-          <input type="number" id="min-relations" value="3" min="1" max="10" style="width:120px">
+          <label>학생 한 명이 꼭 표시해야 하는 친구 수</label>
+          <div class="btn-row">
+            <label style="font-weight:600">❤️ 좋은 사이 <input type="number" id="min-good" value="3" min="0" max="10" style="width:80px;margin-left:6px"> 명 이상</label>
+            <label style="font-weight:600">⚡ 안 좋은 사이 <input type="number" id="min-bad" value="3" min="0" max="10" style="width:80px;margin-left:6px"> 명 이상</label>
+          </div>
+          <div class="help">둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.</div>
         </div>
         <div id="create-error" class="alert error hidden"></div>
         <div class="btn-row">
@@ -102,7 +105,7 @@ export const teacher = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>선생님 페이지 · 학생 관계 마인드맵</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -129,8 +132,7 @@ export const student = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#a9ddf6">
   <title>내 친구 관계 지도</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&display=swap">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body class="kid">
@@ -162,7 +164,7 @@ export const print = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>학생 QR 카드</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -188,7 +190,7 @@ export const notFound = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>페이지를 찾을 수 없어요</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -209,7 +211,7 @@ export const seats = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>자리 배정 · 학생 관계 마인드맵</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>

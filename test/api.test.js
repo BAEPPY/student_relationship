@@ -32,7 +32,7 @@ async function call(path, method = 'GET', body) {
 }
 
 test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async () => {
-  const created = await call('/api/rooms', 'POST', { name: '3학년 2반', students: '김하늘\n이도윤, 박서연\n최지우\n', minRelations: 2 });
+  const created = await call('/api/rooms', 'POST', { name: '3학년 2반', students: '김하늘\n이도윤, 박서연\n최지우\n', minGood: 1, minBad: 1 });
   assert.equal(created.status, 201);
   assert.equal(created.json.studentCount, 4);
   assert.equal(created.json.adminUrl, `https://example.test/t/${created.json.adminToken}`);
@@ -41,7 +41,8 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   const teacher = await call(`/api/teacher/${t}`);
   assert.equal(teacher.status, 200);
   assert.equal(teacher.json.students.length, 4);
-  assert.equal(teacher.json.room.minRelations, 2);
+  assert.equal(teacher.json.room.minGood, 1);
+  assert.equal(teacher.json.room.minBad, 1);
   const [s1, s2, s3] = teacher.json.students;
   assert.match(s1.url, /^https:\/\/example\.test\/s\//);
 
@@ -51,13 +52,14 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   assert.equal(me.json.me.name, '김하늘');
   assert.equal(me.json.classmates.length, 3);
   assert.ok(me.json.classmates.every((c) => c.token === undefined));
-  assert.equal(me.json.room.minRelations, 2);
+  assert.equal(me.json.room.minGood, 1);
+  assert.equal(me.json.room.minBad, 1);
   assert.ok(Array.isArray(me.json.catalog.good) && Array.isArray(me.json.catalog.bad));
 
-  // 최소 인원 미달
+  // 최소 인원 미달 (안 좋은 사이가 없음)
   let r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' } } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /2명 이상/);
+  assert.match(r.json.error, /안 좋은 사이를 1명 이상/);
 
   // 안 좋은 사이인데 이유 없음
   r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: [], reason: '  ' } } });
@@ -216,7 +218,7 @@ test('교사 메모와 지정 규칙 저장', async () => {
 });
 
 test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제출 거부, 회차별 조회', async () => {
-  const created = await call('/api/rooms', 'POST', { name: '회차반', students: '가\n나\n다', minRelations: 1 });
+  const created = await call('/api/rooms', 'POST', { name: '회차반', students: '가\n나\n다', minGood: 0, minBad: 0 });
   const t = created.json.adminToken;
   let view = await call(`/api/teacher/${t}`);
   assert.equal(view.json.rounds.length, 1);
@@ -297,5 +299,40 @@ test('예전 구조(relations/submissions/locked)의 교실도 회차로 자동 
   assert.equal(view.json.round.open, false);
   assert.equal(view.json.relations.length, 1);
   assert.equal(view.json.room.locked, true);
+});
+
+test('최소 인원: 좋은 사이 3명과 안 좋은 사이 3명을 각각 채워야 제출된다', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '규칙반', students: '가\n나\n다\n라\n마\n바\n사\n아' });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  assert.equal(view.json.room.minGood, 3);
+  assert.equal(view.json.room.minBad, 3);
+  const [me, ...others] = view.json.students;
+  const good = (id) => [id, { type: 'good', tags: [], reason: '' }];
+  const badr = (id) => [id, { type: 'bad', tags: ['tease'], reason: '' }];
+  // 좋은 사이만 6명
+  let rel = Object.fromEntries(others.slice(0, 6).map((s) => good(s.id)));
+  let r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /안 좋은 사이를 3명 이상/);
+  // 좋은 2 + 안 좋은 3
+  rel = Object.fromEntries([...others.slice(0, 2).map((s) => good(s.id)), ...others.slice(2, 5).map((s) => badr(s.id))]);
+  r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /좋은 사이를 3명 이상/);
+  // 좋은 3 + 안 좋은 3
+  rel = Object.fromEntries([...others.slice(0, 3).map((s) => good(s.id)), ...others.slice(3, 6).map((s) => badr(s.id))]);
+  r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
+  assert.equal(r.status, 200);
+  // 선생님이 숫자 조정
+  r = await call(`/api/teacher/${t}`, 'PATCH', { minGood: 2, minBad: 1 });
+  assert.equal(r.json.room.minGood, 2);
+  assert.equal(r.json.room.minBad, 1);
+  assert.equal((await call(`/api/teacher/${t}`, 'PATCH', { minGood: 0, minBad: 0 })).status, 200);
+  assert.equal((await call(`/api/teacher/${t}`, 'PATCH', { minGood: 11, minBad: 0 })).status, 400);
+  // 반 인원이 적으면 자동으로 줄어듦 (친구 2명 → 합쳐서 2명)
+  const small = await call('/api/rooms', 'POST', { name: '작은반', students: '가\n나\n다' });
+  const sv = await call(`/api/student/${(await call(`/api/teacher/${small.json.adminToken}`)).json.students[0].token}`);
+  assert.equal(sv.json.room.minGood + sv.json.room.minBad <= 2, true);
 });
 });

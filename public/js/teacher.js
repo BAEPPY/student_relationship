@@ -145,7 +145,7 @@ function renderHeader() {
     el('div', { class: 'card-title' }, [
       el('div', {}, [
         el('h1', { text: room.name }),
-        el('div', { class: 'muted', text: `만든 날짜 ${fmtDate(room.createdAt)} · 최소 표시 인원 ${room.minRelations}명 · 회차 ${rounds.length}개` }),
+        el('div', { class: 'muted', text: `만든 날짜 ${fmtDate(room.createdAt)} · 꼭 표시: 좋은 사이 ${room.minGood}명, 안 좋은 사이 ${room.minBad}명 · 회차 ${rounds.length}개` }),
       ]),
       el('div', { class: 'btn-row' }, [
         el('a', { class: 'btn primary', href: `/t/${encodeURIComponent(adminToken)}/print`, target: '_blank', text: '학생 QR 카드 인쇄' }),
@@ -466,7 +466,8 @@ function renderStudents() {
     ]);
   });
   const addInput = el('input', { type: 'text', placeholder: '추가할 학생 이름 (쉼표로 여러 명)', maxlength: 200 });
-  const minInput = el('input', { type: 'number', min: 1, max: 10, value: room.minRelations, style: { width: '80px' } });
+  const minGoodInput = el('input', { type: 'number', min: 0, max: 10, value: room.minGood, style: { width: '70px' } });
+  const minBadInput = el('input', { type: 'number', min: 0, max: 10, value: room.minBad, style: { width: '70px' } });
   setChildren(card,
     el('div', { class: 'card-title' }, [el('h2', { text: '학생 관리' }), el('span', { class: 'muted', text: `${students.length}명` })]),
     el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
@@ -483,11 +484,12 @@ function renderStudents() {
         } }, [addInput, el('button', { type: 'submit', class: 'btn primary', text: '추가' })]),
       ]),
       el('div', {}, [
-        el('h3', { text: '최소 표시 인원' }),
-        el('form', { class: 'inline-form', onSubmit: (e) => {
+        el('h3', { text: '꼭 표시해야 하는 인원' }),
+        el('form', { class: 'inline-form', style: { alignItems: 'center' }, onSubmit: (e) => {
           e.preventDefault();
-          action(api(base, { method: 'PATCH', body: { minRelations: Number(minInput.value) } }), '저장했어요.');
-        } }, [minInput, el('button', { type: 'submit', class: 'btn', text: '저장' }), el('span', { class: 'muted', text: '학생 한 명이 최소로 표시해야 하는 친구 수' })]),
+          action(api(base, { method: 'PATCH', body: { minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value) } }), '저장했어요.');
+        } }, ['❤️ 좋은 사이', minGoodInput, '명 · ⚡ 안 좋은 사이', minBadInput, '명 이상', el('button', { type: 'submit', class: 'btn', text: '저장' })]),
+        el('p', { class: 'muted', style: { marginTop: '6px' }, text: '학생은 둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.' }),
       ]),
     ]),
   );

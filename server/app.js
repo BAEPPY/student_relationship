@@ -20,6 +20,7 @@ const LIMITS = {
   students: 80,
   reason: 300,
   minRelations: 10,
+  minEach: 10,
   rounds: 36,
 };
 
@@ -57,7 +58,20 @@ function makeStudent(name) {
   return { id: newId(), name, token: newToken(16), createdAt: new Date().toISOString() };
 }
 
-function newRoom(name, names, minRelations) {
+function parseMin(v, fallback) {
+  const n = Number.parseInt(v ?? fallback, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(LIMITS.minEach, n));
+}
+
+/** 교실의 최소 표시 인원: 좋은 사이 / 안 좋은 사이 각각 */
+function minimums(room) {
+  const minGood = room.minGood ?? room.minRelations ?? 3;
+  const minBad = room.minBad ?? 3;
+  return { minGood, minBad };
+}
+
+function newRoom(name, names, minGood, minBad) {
   const now = new Date().toISOString();
   const round = makeRound(monthName(now), now);
   return {
@@ -65,7 +79,8 @@ function newRoom(name, names, minRelations) {
     name,
     adminToken: newToken(24),
     createdAt: now,
-    minRelations,
+    minGood,
+    minBad,
     students: names.map(makeStudent),
     rounds: [round],
     currentRoundId: round.id,
@@ -122,8 +137,15 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     return round;
   }
 
-  function effectiveMin(room, classmateCount) {
-    return Math.max(0, Math.min(room.minRelations ?? 3, classmateCount));
+  // 반 인원이 적으면 최소 인원도 그만큼 줄어듭니다 (둘을 합쳐 반 친구 수를 넘지 않게)
+  function effectiveMins(room, classmateCount) {
+    let { minGood, minBad } = minimums(room);
+    if (minGood + minBad > classmateCount) {
+      const scale = classmateCount / (minGood + minBad || 1);
+      minGood = Math.floor(minGood * scale);
+      minBad = Math.floor(minBad * scale);
+    }
+    return { minGood: Math.max(0, minGood), minBad: Math.max(0, minBad) };
   }
 
   function roundSummary(room, round) {
@@ -150,7 +172,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         name: room.name,
         createdAt: room.createdAt,
         locked: Boolean(round.closedAt),
-        minRelations: room.minRelations ?? 3,
+        minGood: minimums(room).minGood,
+        minBad: minimums(room).minBad,
+        minRelations: minimums(room).minGood + minimums(room).minBad,
         adminUrl: adminUrl(req, room),
       },
       round: roundView(round),
@@ -181,8 +205,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const mine = round.relations?.[student.id] || {};
     const relations = {};
     for (const c of classmates) if (mine[c.id]) relations[c.id] = mine[c.id];
+    const mins = effectiveMins(room, classmates.length);
     return {
-      room: { name: room.name, locked: Boolean(round.closedAt), minRelations: effectiveMin(room, classmates.length) },
+      room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad },
       round: roundView(round),
       me: { id: student.id, name: student.name },
       classmates,
@@ -211,11 +236,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const names = parseStudentNames(req.body?.students);
     if (names.length < 2) throw bad('학생을 2명 이상 입력해 주세요.');
     if (names.length > LIMITS.students) throw bad(`학생은 최대 ${LIMITS.students}명까지 등록할 수 있어요.`);
-    let minRelations = Number.parseInt(req.body?.minRelations ?? 3, 10);
-    if (!Number.isFinite(minRelations)) minRelations = 3;
-    minRelations = Math.max(1, Math.min(LIMITS.minRelations, minRelations));
+    const minGood = parseMin(req.body?.minGood, 3);
+    const minBad = parseMin(req.body?.minBad, 3);
 
-    const room = newRoom(name, names, minRelations);
+    const room = newRoom(name, names, minGood, minBad);
     await store.createRoom(room);
     res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
   });
@@ -223,7 +247,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   // 체험용 예시 교실 (세 회차의 임의 관계 데이터 포함)
   app.post('/api/rooms/demo', async (req, res) => {
     const names = ['김하늘', '이도윤', '박서연', '최지우', '정민준', '강예린', '조현우', '윤서아', '임시우', '한지민', '오준서', '서다은'];
-    const room = newRoom('예시 교실 (체험용)', names, 3);
+    const room = newRoom('예시 교실 (체험용)', names, 3, 3);
     const ids = room.students.map((s) => s.id);
     const goodTags = REASON_CATALOG.good.map((r) => r.id);
     const badTags = REASON_CATALOG.bad.map((r) => r.id);
@@ -243,11 +267,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         const others = ids.filter((x) => x !== from);
         // 지난 회차 관계를 70% 유지하고 일부는 바뀜
         for (const [to, rel] of Object.entries(prev?.[from] || {})) if (rand() < 0.7) rels[to] = { ...rel, updatedAt: at };
-        const count = 3 + Math.floor(rand() * 3);
-        while (Object.keys(rels).length < count) {
+        const need = (type) => Object.values(rels).filter((x) => x.type === type).length < 3;
+        while (need('good') || need('bad') || Object.keys(rels).length < 6) {
           const to = pick(others);
           if (rels[to]) continue;
-          const isBad = rand() < 0.3;
+          const isBad = need('bad') ? true : need('good') ? false : rand() < 0.4;
           rels[to] = isBad
             ? { type: 'bad', tags: [pick(badTags)], reason: rand() < 0.5 ? '지난주에 말다툼을 했어요.' : '', updatedAt: at }
             : { type: 'good', tags: rand() < 0.7 ? [pick(goodTags)] : [], reason: rand() < 0.3 ? '쉬는 시간에 항상 같이 놀아요.' : '', updatedAt: at };
@@ -285,10 +309,14 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         const round = currentRound(room);
         round.closedAt = body.locked ? (round.closedAt || new Date().toISOString()) : null;
       }
-      if (body.minRelations !== undefined) {
-        const n = Number.parseInt(body.minRelations, 10);
-        if (!Number.isFinite(n) || n < 1 || n > LIMITS.minRelations) throw bad(`최소 인원은 1~${LIMITS.minRelations} 사이여야 해요.`);
-        room.minRelations = n;
+      if (body.minGood !== undefined || body.minBad !== undefined) {
+        const cur = minimums(room);
+        const g = body.minGood !== undefined ? Number.parseInt(body.minGood, 10) : cur.minGood;
+        const b = body.minBad !== undefined ? Number.parseInt(body.minBad, 10) : cur.minBad;
+        if (!Number.isFinite(g) || g < 0 || g > LIMITS.minEach || !Number.isFinite(b) || b < 0 || b > LIMITS.minEach) throw bad(`최소 인원은 각각 0~${LIMITS.minEach} 사이여야 해요.`);
+        room.minGood = g;
+        room.minBad = b;
+        delete room.minRelations;
       }
       if (body.name !== undefined) {
         const name = cleanName(body.name);
@@ -559,8 +587,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         const unchanged = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && JSON.stringify(prev[toId].tags || []) === JSON.stringify(tags);
         next[toId] = { type: r.type, tags, reason, updatedAt: unchanged ? prev[toId].updatedAt : now };
       }
-      const min = effectiveMin(room, classmates.size);
-      if (Object.keys(next).length < min) throw bad(`친구를 ${min}명 이상 표시해 주세요. (지금 ${Object.keys(next).length}명)`);
+      const mins = effectiveMins(room, classmates.size);
+      const goodCount = Object.values(next).filter((r) => r.type === 'good').length;
+      const badCount = Object.values(next).filter((r) => r.type === 'bad').length;
+      if (goodCount < mins.minGood) throw bad(`좋은 사이를 ${mins.minGood}명 이상 표시해 주세요. (지금 ${goodCount}명)`);
+      if (badCount < mins.minBad) throw bad(`안 좋은 사이를 ${mins.minBad}명 이상 표시해 주세요. (지금 ${badCount}명)`);
 
       round.relations[student.id] = next;
       round.submissions[student.id] = { submittedAt: now, firstSubmittedAt: round.submissions[student.id]?.firstSubmittedAt || now };

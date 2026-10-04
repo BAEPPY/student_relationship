@@ -22,11 +22,14 @@ function relationValid(r) {
   return true;
 }
 function selectedCount() { return Object.keys(draft).length; }
+function countOf(type) { return Object.values(draft).filter((r) => r.type === type).length; }
+function mins() { return { good: data.room.minGood ?? 0, bad: data.room.minBad ?? 0 }; }
+function minsMet() { const m = mins(); return countOf('good') >= m.good && countOf('bad') >= m.bad; }
 function invalidNames() {
   return Object.entries(draft).filter(([, r]) => !relationValid(r)).map(([id]) => nameOf(id));
 }
 function nameOf(id) { return data.classmates.find((c) => c.id === id)?.name || '?'; }
-function canSubmit() { return selectedCount() >= data.room.minRelations && invalidNames().length === 0 && !data.room.locked; }
+function canSubmit() { return minsMet() && invalidNames().length === 0 && !data.room.locked; }
 
 // ---------- 화면 ----------
 function render() {
@@ -35,13 +38,18 @@ function render() {
   document.getElementById('room-name').textContent = room.name;
   document.title = `${me.name}의 친구 관계 지도 · ${data.round?.name || ''}`;
 
-  const n0 = selectedCount();
-  const min0 = room.minRelations;
-  const pct0 = Math.min(1, n0 / Math.max(1, min0));
-  const bubble = room.locked ? '조사가 끝났어요!' : n0 === 0 ? '친구를 골라 볼까요?' : n0 < min0 ? `${min0 - n0}명만 더!` : data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
+  const m0 = mins();
+  const g0 = Math.min(countOf('good'), m0.good);
+  const b0 = Math.min(countOf('bad'), m0.bad);
+  const need0 = m0.good + m0.bad;
+  const pct0 = need0 ? (g0 + b0) / need0 : 1;
+  const leftGood = Math.max(0, m0.good - countOf('good'));
+  const leftBad = Math.max(0, m0.bad - countOf('bad'));
+  const leftText = [leftGood ? `❤️ ${leftGood}명` : '', leftBad ? `⚡ ${leftBad}명` : ''].filter(Boolean).join(', ');
+  const bubble = room.locked ? '조사가 끝났어요!' : selectedCount() === 0 ? '친구를 골라 볼까요?' : !minsMet() ? `${leftText} 더 골라 줘!` : data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
   const ring = el('div', { class: 'ring' }, [
     svgEl('svg', { viewBox: '0 0 112 112' }),
-    el('div', { class: 'ring-text' }, [el('b', { text: `${n0}` }), el('span', { text: `/ ${min0}명` })]),
+    el('div', { class: 'ring-text' }, [el('b', { text: `${g0 + b0}` }), el('span', { text: `/ ${need0}명` })]),
   ]);
   const rsvg = ring.querySelector('svg');
   rsvg.append(svgEl('circle', { cx: 56, cy: 56, r: 48, fill: 'none', stroke: '#f1ebe3', 'stroke-width': 12 }));
@@ -51,7 +59,7 @@ function render() {
     el('div', {}, [
       el('div', { class: 'badge blue', style: { marginBottom: '6px' }, text: `${data.round?.name || ''} 조사` }),
       el('h1', { text: `${me.name}, 안녕! 👋` }),
-      el('p', { style: { marginBottom: '4px' } }, ['친구들과 나의 관계를 표시해 줘. ', el('b', { text: '좋은 사이' }), '는 빨간 화살표, ', el('b', { text: '안 좋은 사이' }), '는 검은 화살표!']),
+      el('p', { style: { marginBottom: '4px' } }, ['친구들과 나의 관계를 표시해 줘. ', el('b', { text: `❤️ 좋은 사이 ${m0.good}명` }), '과 ', el('b', { text: `⚡ 안 좋은 사이 ${m0.bad}명` }), ' 이상 꼭 골라야 해!']),
       el('div', { class: `speech ${pct0 >= 1 ? 'done' : ''}`, text: bubble }),
     ]),
   ]);
@@ -63,15 +71,19 @@ function render() {
   ]));
 
   // 진행 상황
-  const n = selectedCount();
-  const min = room.minRelations;
-  const pct = Math.min(100, Math.round((n / Math.max(1, min)) * 100));
+  const m = mins();
+  const gc = countOf('good');
+  const bc = countOf('bad');
+  const done = minsMet();
   const progress = el('section', { class: 'card' }, [
     el('div', { class: 'card-title' }, [
       el('h2', { text: '🗺️ 내 관계 지도' }),
-      el('span', { class: `badge ${n >= min ? 'green' : 'warn'}`, text: `${n}명 표시 · 최소 ${min}명` }),
+      el('div', { class: 'btn-row', style: { gap: '6px' } }, [
+        el('span', { class: `badge ${gc >= m.good ? 'green' : 'warn'}`, text: `❤️ ${gc} / ${m.good}명` }),
+        el('span', { class: `badge ${bc >= m.bad ? 'green' : 'warn'}`, text: `⚡ ${bc} / ${m.bad}명` }),
+      ]),
     ]),
-    el('div', { class: 'progress' }, [el('div', { class: n >= min ? 'done' : '', style: { width: `${pct}%` } })]),
+    el('div', { class: 'progress' }, [el('div', { class: done ? 'done' : '', style: { width: `${Math.round(pct0 * 100)}%` } })]),
     el('div', { class: 'student-map', id: 'map', style: { marginTop: '10px' } }),
     el('div', { class: 'legend', style: { marginTop: '6px' } }, [
       el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--kid-coral)', borderRadius: '50%', width: '16px', height: '16px', border: '2px solid #fff' } }), '나']),
@@ -119,12 +131,13 @@ function tagLabel(type, id) {
 }
 
 function stickyBar() {
-  const n = selectedCount();
-  const min = data.room.minRelations;
+  const m = mins();
+  const leftGood = Math.max(0, m.good - countOf('good'));
+  const leftBad = Math.max(0, m.bad - countOf('bad'));
   const invalid = invalidNames();
   let status;
   if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 안 좋은 사이인 이유를 적어 줘.`;
-  else if (n < min) status = `친구를 ${min - n}명 더 표시해 줘! (최소 ${min}명)`;
+  else if (leftGood || leftBad) status = `${[leftGood ? `❤️ 좋은 사이 ${leftGood}명` : '', leftBad ? `⚡ 안 좋은 사이 ${leftBad}명` : ''].filter(Boolean).join(', ')} 더 골라 줘!`;
   else if (dirty) status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
   else if (data.submittedAt) status = '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
   else status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';

@@ -1,3 +1,12 @@
+/* 강원교육모두체 (강원특별자치도교육청 무료 배포, Bold) - 한글 전체·라틴 부분집합 woff2 */
+@font-face {
+  font-family: 'GangwonEduAll';
+  src: url('/fonts/GangwonEduAll-Bold.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Whimsical 풍: 라벤더 계열 강조색, 파스텔 노드, 부드러운 그림자, 점 격자 캔버스 */
   --blue: #6c5ce7;
@@ -25,7 +34,7 @@
   --radius: 16px;
   --shadow: 0 1px 2px rgba(30, 30, 60, 0.05), 0 8px 24px rgba(30, 30, 60, 0.06);
   --shadow-float: 0 2px 6px rgba(30, 30, 60, 0.08), 0 12px 32px rgba(30, 30, 60, 0.12);
-  --font: "Pretendard Variable", "Pretendard", "Inter", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Segoe UI", Roboto, sans-serif;
+  --font: "GangwonEduAll", "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Segoe UI", Roboto, sans-serif;
   --dots: radial-gradient(circle, #d9d9e6 1.2px, transparent 1.3px);
 }
 
@@ -34,6 +43,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   font-family: var(--font);
+  font-weight: 400;
   color: var(--text);
   background: var(--bg);
   line-height: 1.5;
@@ -339,7 +349,7 @@ body.kid {
   --kid-slate: #4a5568;
   --kid-yellow: #ffd54f;
   --kid-orange: #ff9f43;
-  --font-kid: "Jua", "Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-kid: "GangwonEduAll", "Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --blue: var(--kid-grass);
   --blue-dark: var(--kid-grass-deep);
   --blue-light: #eaf6dc;

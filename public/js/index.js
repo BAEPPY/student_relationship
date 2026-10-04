@@ -3,7 +3,8 @@ import { api, el, toast, copyText, savedRooms, fmtDate, mascotSvg } from './comm
 const form = document.getElementById('create-form');
 const nameInput = document.getElementById('room-name');
 const studentsInput = document.getElementById('students');
-const minInput = document.getElementById('min-relations');
+const minGoodInput = document.getElementById('min-good');
+const minBadInput = document.getElementById('min-bad');
 const errorBox = document.getElementById('create-error');
 const createBtn = document.getElementById('create-btn');
 const demoBtn = document.getElementById('demo-btn');
@@ -54,7 +55,7 @@ form.addEventListener('submit', async (e) => {
   try {
     const room = await api('/api/rooms', {
       method: 'POST',
-      body: { name: nameInput.value, students: names, minRelations: Number(minInput.value) || 3 },
+      body: { name: nameInput.value, students: names, minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value) },
     });
     showResult(room);
     toast('교실을 만들었어요.');
