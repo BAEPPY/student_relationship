@@ -3,6 +3,8 @@ import { parseTeacherNotes } from './notes-parser.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
+const roundParam = new URLSearchParams(location.search).get('round');
+const dataUrl = roundParam ? `${base}?round=${encodeURIComponent(roundParam)}` : base;
 const app = document.getElementById('app');
 document.getElementById('back-link').href = `/t/${encodeURIComponent(adminToken)}`;
 
@@ -20,6 +22,7 @@ let layoutText = '2x4, 2x5, 2x4';
 let notesOpen = true;
 let pasteText = '';
 let parsed = null;              // { items: [{...item, checked}], unmatched }
+let staleNotice = false;        // 저장 뒤에 학생 응답이 바뀌었는지
 
 const nameOf = (id) => data.stats[id]?.name || '?';
 const RULE_LABEL = { apart: '떨어뜨리기', together: '가까이 앉히기' };
@@ -105,7 +108,7 @@ function totalCost(assign, pairs) {
 }
 
 // ---------- 자동 배정 (담금질 기법) ----------
-function autoAssign() {
+function autoAssign(message = '자동으로 배정했어요. 마음에 안 들면 "다른 배치"를 눌러 보세요.') {
   const all = seatList().map((s) => s.id);
   const free = all.filter((id) => !pinned.has(id));
   const pinnedStudents = new Set([...pinned].map((id) => seats[id]).filter(Boolean));
@@ -139,8 +142,9 @@ function autoAssign() {
   for (const [id, sid] of Object.entries(best)) if (sid) seats[id] = sid;
   dirty = true;
   selected = null;
+  staleNotice = false;
   render();
-  toast('자동으로 배정했어요. 마음에 안 들면 "다른 배치"를 눌러 보세요.');
+  toast(message);
 }
 
 // ---------- 평가 ----------
@@ -214,10 +218,10 @@ function render() {
 
   const header = el('section', { class: 'card no-print' }, [
     el('div', { class: 'card-title' }, [
-      el('div', {}, [el('h1', { text: `${data.room.name} 자리 배정` }), el('div', { class: 'muted', text: `학생 ${data.students.length}명 · 자리 ${seatCount}개 · 응답 ${data.analysis.submittedCount}명 기준 · 교사 지정 규칙 ${rules.length}개` })]),
+      el('div', {}, [el('h1', { text: `${data.room.name} 자리 배정` }), el('div', { class: 'muted', text: `${data.round.name} 응답 기준 (제출 ${data.analysis.submittedCount}/${data.students.length}명) · 자리 ${seatCount}개 · 교사 지정 규칙 ${rules.length}개` })]),
       el('div', { class: 'btn-row' }, [
-        el('button', { type: 'button', class: 'btn primary', text: '자동 배정', onClick: autoAssign }),
-        el('button', { type: 'button', class: 'btn', text: '다른 배치', onClick: autoAssign }),
+        el('button', { type: 'button', class: 'btn primary', text: '자동 배정', onClick: () => autoAssign() }),
+        el('button', { type: 'button', class: 'btn', text: '다른 배치', onClick: () => autoAssign() }),
         el('button', { type: 'button', class: 'btn', text: '모두 비우기', onClick: () => { if (!confirm('고정한 자리를 포함해 모두 비울까요?')) return; seats = {}; pinned = new Set(); dirty = true; render(); } }),
         el('button', { type: 'button', class: `btn ${dirty ? 'orange' : ''}`, text: dirty ? '저장하기 *' : '저장됨', onClick: save }),
         el('button', { type: 'button', class: 'btn', text: '인쇄', onClick: () => window.print() }),
@@ -235,6 +239,11 @@ function render() {
       friendsSelect,
     ]),
     el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요, 📝 메모 있음.' }),
+    staleNotice ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, [
+      el('span', { style: { flex: 1 }, text: '자리를 저장한 뒤에 학생 응답이 새로 들어왔어요. 아래 경고 목록은 최신 응답 기준이에요. 고정한 자리는 그대로 두고 다시 배정할 수 있어요.' }),
+      el('button', { type: 'button', class: 'btn small primary', text: '최신 응답으로 다시 배정', onClick: () => autoAssign('최신 응답을 반영해 다시 배정했어요. 확인 후 저장해 주세요.') }),
+      el('button', { type: 'button', class: 'btn small', text: '그대로 두기', onClick: () => { staleNotice = false; render(); } }),
+    ]) : null,
   ]);
 
   // 좌석표
@@ -470,8 +479,11 @@ async function save() {
     const cleanNotes = {};
     for (const [sid, n] of Object.entries(notes)) if (n.front || (n.memo || '').trim()) cleanNotes[sid] = { memo: (n.memo || '').trim(), front: Boolean(n.front) };
     await api(`${base}/notes`, { method: 'PUT', body: { notes: cleanNotes, rules } });
-    data = await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options } });
+    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options } });
+    data = await api(dataUrl);
+    buildRelations();
     dirty = false;
+    staleNotice = false;
     render();
     toast('자리 배정과 메모를 저장했어요.');
   } catch (err) { toast(err.message, 4000); }
@@ -479,9 +491,16 @@ async function save() {
 
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+function latestResponseAt() {
+  let latest = null;
+  for (const r of data.relations) if (r.updatedAt && (!latest || r.updatedAt > latest)) latest = r.updatedAt;
+  for (const s of data.students) if (s.submittedAt && (!latest || s.submittedAt > latest)) latest = s.submittedAt;
+  return latest;
+}
+
 (async () => {
   try {
-    data = await api(base);
+    data = await api(dataUrl);
     buildRelations();
     if (data.seating) {
       layout = data.seating.layout;
@@ -494,6 +513,14 @@ window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault()
     rules = [...(data.teacherNotes?.rules || [])];
     document.title = `${data.room.name} 자리 배정`;
     render();
+    const hasSaved = Object.keys(seats).length > 0;
+    if (!hasSaved && data.students.length) {
+      // 저장된 자리가 없으면 지금 응답으로 바로 배정
+      autoAssign(`${data.round.name} 응답을 바탕으로 바로 배정했어요. 확인 후 저장해 주세요.`);
+    } else if (hasSaved && data.seating?.updatedAt) {
+      const latest = latestResponseAt();
+      if (latest && latest > data.seating.updatedAt) { staleNotice = true; render(); }
+    }
   } catch (err) {
     setChildren(app, el('section', { class: 'card' }, [el('h1', { text: '교실을 열 수 없어요' }), el('p', { text: err.message })]));
   }

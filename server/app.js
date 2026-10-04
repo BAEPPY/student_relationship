@@ -67,7 +67,7 @@ function parseMin(v, fallback) {
 /** 교실의 최소 표시 인원: 좋은 사이 / 안 좋은 사이 각각 */
 function minimums(room) {
   const minGood = room.minGood ?? room.minRelations ?? 3;
-  const minBad = room.minBad ?? 3;
+  const minBad = room.minBad ?? 1;
   return { minGood, minBad };
 }
 
@@ -237,7 +237,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (names.length < 2) throw bad('학생을 2명 이상 입력해 주세요.');
     if (names.length > LIMITS.students) throw bad(`학생은 최대 ${LIMITS.students}명까지 등록할 수 있어요.`);
     const minGood = parseMin(req.body?.minGood, 3);
-    const minBad = parseMin(req.body?.minBad, 3);
+    const minBad = parseMin(req.body?.minBad, 1);
 
     const room = newRoom(name, names, minGood, minBad);
     await store.createRoom(room);
@@ -247,7 +247,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   // 체험용 예시 교실 (세 회차의 임의 관계 데이터 포함)
   app.post('/api/rooms/demo', async (req, res) => {
     const names = ['김하늘', '이도윤', '박서연', '최지우', '정민준', '강예린', '조현우', '윤서아', '임시우', '한지민', '오준서', '서다은'];
-    const room = newRoom('예시 교실 (체험용)', names, 3, 3);
+    const room = newRoom('예시 교실 (체험용)', names, 3, 1);
     const ids = room.students.map((s) => s.id);
     const goodTags = REASON_CATALOG.good.map((r) => r.id);
     const badTags = REASON_CATALOG.bad.map((r) => r.id);
@@ -273,7 +273,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
           if (rels[to]) continue;
           const isBad = need('bad') ? true : need('good') ? false : rand() < 0.4;
           rels[to] = isBad
-            ? { type: 'bad', tags: [pick(badTags)], reason: rand() < 0.5 ? '지난주에 말다툼을 했어요.' : '', updatedAt: at }
+            ? { type: 'bad', tags: rand() < 0.7 ? [pick(badTags)] : [], reason: pick(['지난주에 말다툼을 했어요.', '자꾸 놀려서 속상해요.', '내 물건을 허락 없이 가져갔어요.', '같이 놀 때 자기 마음대로만 해요.']), updatedAt: at }
             : { type: 'good', tags: rand() < 0.7 ? [pick(goodTags)] : [], reason: rand() < 0.3 ? '쉬는 시간에 항상 같이 놀아요.' : '', updatedAt: at };
         }
         relations[from] = rels;
@@ -580,9 +580,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         for (const t of tags) if (!isValidTag(r.type, t)) throw bad('선택한 이유가 올바르지 않아요.');
         const reason = String(r.reason ?? '').trim();
         if (reason.length > LIMITS.reason) throw bad(`이유는 ${LIMITS.reason}자 이하로 적어 주세요.`);
-        if (r.type === 'bad' && tags.length === 0 && !reason) {
+        if (r.type === 'bad' && reason.length < 2) {
           const name = room.students.find((s) => s.id === toId)?.name || '';
-          throw bad(`${name}와(과) 안 좋은 사이인 이유를 꼭 적어 주세요.`);
+          throw bad(`${name}와(과) 안 좋은 사이인 이유를 직접 적어 주세요. (2자 이상)`);
         }
         const unchanged = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && JSON.stringify(prev[toId].tags || []) === JSON.stringify(tags);
         next[toId] = { type: r.type, tags, reason, updatedAt: unchanged ? prev[toId].updatedAt : now };

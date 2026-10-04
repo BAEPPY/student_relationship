@@ -18,7 +18,7 @@ function josa(word, [a, b]) {
 // ---------- 유효성 ----------
 function relationValid(r) {
   if (!r) return true;
-  if (r.type === 'bad') return (r.tags && r.tags.length > 0) || (r.reason && r.reason.trim().length > 0);
+  if (r.type === 'bad') return Boolean(r.reason && r.reason.trim().length >= 2); // 안 좋은 사이는 직접 쓴 이유가 꼭 필요
   return true;
 }
 function selectedCount() { return Object.keys(draft).length; }
@@ -111,7 +111,7 @@ function mateButton(c, i = 0) {
   const invalid = r && !relationValid(r);
   const sub = r
     ? invalid
-      ? '⚠️ 이유를 적어 줘'
+      ? '⚠️ 이유를 꼭 적어 줘'
       : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
     : '눌러서 표시하기';
   return el('button', {
@@ -299,7 +299,7 @@ function openEditor(id) {
         el('span', { class: 'big', text: '❤️' }), '좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 골라도 되고 안 골라도 돼' }),
       ]),
       el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'bad' ? null : 'bad'; state.tags.clear(); draw(); } }, [
-        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유를 꼭 알려 줘' }),
+        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유를 꼭 적어야 해' }),
       ]),
     ]);
     modal.append(choice);
@@ -307,7 +307,7 @@ function openEditor(id) {
     if (state.type) {
       const isBad = state.type === 'bad';
       modal.append(el('div', { class: 'field' }, [
-        el('label', {}, [isBad ? '왜 안 좋은 사이야? ' : '왜 좋은 사이야? ', isBad ? el('span', { class: 'req', text: '(꼭 골라 줘)' }) : el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
+        el('label', {}, [isBad ? '어떤 점이 안 좋아? ' : '왜 좋은 사이야? ', el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
         el('div', { class: 'chips' }, data.catalog[state.type].map((t) => el('button', {
           type: 'button',
           class: `chip ${state.tags.has(t.id) ? `selected ${isBad ? 'bad-theme' : 'good-theme'}` : ''}`,
@@ -315,16 +315,16 @@ function openEditor(id) {
           onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); draw(); },
         }))),
       ]));
-      const ta = el('textarea', { placeholder: isBad ? '예: 지난주에 내 물건을 허락 없이 가져갔어요.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: { minHeight: '90px' } });
+      const ta = el('textarea', { placeholder: isBad ? '예: 지난주에 내 물건을 허락 없이 가져갔어요. 무슨 일이 있었는지 적어 줘.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
       ta.value = state.reason;
       ta.addEventListener('input', () => { state.reason = ta.value; updateHint(); });
       modal.append(el('div', { class: 'field' }, [
-        el('label', {}, ['✏️ 직접 적기 ', isBad ? el('span', { class: 'muted', text: '(위에서 하나도 안 골랐다면 여기에 꼭 적어 줘)' }) : el('span', { class: 'muted', text: '(선택)' })]),
+        el('label', {}, ['✏️ 이유 적기 ', isBad ? el('span', { class: 'req', text: '(꼭 적어 줘)' }) : el('span', { class: 'muted', text: '(선택)' })]),
         ta,
       ]));
-      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: '안 좋은 사이일 때는 이유를 꼭 알려 줘. 위에서 고르거나 직접 적어 줘.' });
+      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: '안 좋은 사이일 때는 무슨 일이 있었는지 이유를 꼭 적어 줘. 선생님만 볼 수 있어.' });
       modal.append(hint);
-      var updateHint = () => hint.classList.toggle('hidden', !(isBad && state.tags.size === 0 && !state.reason.trim()));
+      var updateHint = () => hint.classList.toggle('hidden', !(isBad && state.reason.trim().length < 2));
       updateHint();
     } else {
       modal.append(el('p', { class: 'muted', text: '위에서 관계를 골라 줘. 아직 잘 모르겠으면 표시하지 않아도 괜찮아.' }));
@@ -340,7 +340,7 @@ function openEditor(id) {
   function save() {
     if (!state.type) { delete draft[id]; dirty = true; close(); render(); return; }
     const r = { type: state.type, tags: [...state.tags], reason: state.reason.trim() };
-    if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 줘!'); return; }
+    if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 줘! (2자 이상)'); return; }
     draft[id] = r;
     dirty = true;
     close();

@@ -55,7 +55,7 @@ export const index = `<!doctype html>
           <label>학생 한 명이 꼭 표시해야 하는 친구 수</label>
           <div class="btn-row">
             <label style="font-weight:600">❤️ 좋은 사이 <input type="number" id="min-good" value="3" min="0" max="10" style="width:80px;margin-left:6px"> 명 이상</label>
-            <label style="font-weight:600">⚡ 안 좋은 사이 <input type="number" id="min-bad" value="3" min="0" max="10" style="width:80px;margin-left:6px"> 명 이상</label>
+            <label style="font-weight:600">⚡ 안 좋은 사이 <input type="number" id="min-bad" value="1" min="0" max="10" style="width:80px;margin-left:6px"> 명 이상</label>
           </div>
           <div class="help">둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.</div>
         </div>

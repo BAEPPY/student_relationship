@@ -61,17 +61,19 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   assert.equal(r.status, 400);
   assert.match(r.json.error, /안 좋은 사이를 1명 이상/);
 
-  // 안 좋은 사이인데 이유 없음
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: [], reason: '  ' } } });
+  // 안 좋은 사이인데 직접 쓴 이유가 없음 (선택지만 고른 경우도 안 됨)
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '  ' } } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /이유를 꼭/);
+  assert.match(r.json.error, /이유를 직접 적어/);
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: [], reason: 'ㅇ' } } });
+  assert.equal(r.status, 400);
 
   // 잘못된 태그
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['hurt'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '' } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['hurt'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
   assert.equal(r.status, 400);
 
   // 자기 자신 / 남의 반 학생
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s1.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'] } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s1.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
   assert.equal(r.status, 400);
 
   // 정상 제출
@@ -95,7 +97,7 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   // 마감 후에는 수정 불가
   const locked = await call(`/api/teacher/${t}`, 'PATCH', { locked: true });
   assert.equal(locked.json.room.locked, true);
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'] } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
   assert.equal(r.status, 403);
   await call(`/api/teacher/${t}`, 'PATCH', { locked: false });
 
@@ -246,10 +248,10 @@ test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제�
   assert.equal(me.json.submittedAt, null);
 
   // 옛 회차 번호로 제출하면 거부 (데이터 섞임 방지)
-  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '' } } });
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
   assert.equal(r.status, 409);
   // 2회차로 제출
-  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '' } } });
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
   assert.equal(r.status, 200);
 
   // 1회차 데이터는 그대로
@@ -306,22 +308,22 @@ test('최소 인원: 좋은 사이 3명과 안 좋은 사이 3명을 각각 채�
   const t = created.json.adminToken;
   const view = await call(`/api/teacher/${t}`);
   assert.equal(view.json.room.minGood, 3);
-  assert.equal(view.json.room.minBad, 3);
+  assert.equal(view.json.room.minBad, 1);
   const [me, ...others] = view.json.students;
   const good = (id) => [id, { type: 'good', tags: [], reason: '' }];
-  const badr = (id) => [id, { type: 'bad', tags: ['tease'], reason: '' }];
+  const badr = (id) => [id, { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' }];
   // 좋은 사이만 6명
   let rel = Object.fromEntries(others.slice(0, 6).map((s) => good(s.id)));
   let r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /안 좋은 사이를 3명 이상/);
+  assert.match(r.json.error, /안 좋은 사이를 1명 이상/);
   // 좋은 2 + 안 좋은 3
   rel = Object.fromEntries([...others.slice(0, 2).map((s) => good(s.id)), ...others.slice(2, 5).map((s) => badr(s.id))]);
   r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
   assert.equal(r.status, 400);
   assert.match(r.json.error, /좋은 사이를 3명 이상/);
-  // 좋은 3 + 안 좋은 3
-  rel = Object.fromEntries([...others.slice(0, 3).map((s) => good(s.id)), ...others.slice(3, 6).map((s) => badr(s.id))]);
+  // 좋은 3 + 안 좋은 1
+  rel = Object.fromEntries([...others.slice(0, 3).map((s) => good(s.id)), ...others.slice(3, 4).map((s) => badr(s.id))]);
   r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
   assert.equal(r.status, 200);
   // 선생님이 숫자 조정
