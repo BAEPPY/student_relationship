@@ -51,7 +51,9 @@
 4. 프로젝트 화면 위쪽의 **Storage** 탭 → **Create Database** → **Neon** 을 고릅니다. 약관에 동의하고, Region 은 **Singapore** (가장 가까움), Plan 은 **Free** 를 고른 뒤 이름을 정하고 **Create** 를 누릅니다. Neon 계정은 이 과정에서 자동으로 만들어집니다.
 5. **Connect Project** 에서 이 프로젝트를 고르고 환경(Production, Preview, Development)을 모두 체크한 뒤 연결합니다.
 6. **Deployments** 탭에서 가장 위의 배포 오른쪽 **⋯** 메뉴 → **Redeploy** 를 누릅니다. (DB 연결 정보를 반영하기 위해 한 번 다시 배포합니다.)
-7. 프로젝트 화면의 `https://student-relationship-….vercel.app` 주소가 사이트 주소입니다. 첫 화면 위에 빨간 경고가 보이지 않으면 DB 연결까지 끝난 것입니다.
+7. 왼쪽 메뉴 **Domains** 에서 **Production** 표시가 붙은 `https://student-relationship-….vercel.app` 주소가 사이트 주소입니다. 첫 화면 위에 빨간 경고가 보이지 않으면 DB 연결까지 끝난 것입니다.
+
+주의: 배포 목록이나 주소창에 보이는 `student-relationship-abc123xyz-….vercel.app` 처럼 가운데 무작위 코드가 든 주소는 배포 한 건에만 붙는 임시 주소이고 Vercel 로그인 보호가 걸려 있어 학생이 열 수 없습니다. 항상 Domains 의 Production 주소를 쓰세요. QR 카드는 인쇄할 때 열려 있는 주소를 그대로 담으므로, 인쇄도 반드시 그 주소로 접속한 상태에서 하세요. 더 확실하게 하려면 **Settings → Environment Variables** 에 `BASE_URL` 을 그 주소로 넣고 Redeploy 하면 어떤 주소로 접속하든 QR 과 링크에는 항상 Production 주소가 들어갑니다.
 
 버튼 한 번으로 하고 싶다면 아래 버튼을 눌러도 됩니다. 이 버튼은 저장소 **복사본**(`student-relationship-site`)을 내 GitHub 에 만들고 Neon DB 생성까지 한 흐름으로 진행합니다. 다만 이후 원본 저장소를 고쳐도 복사본에는 반영되지 않으니, 코드를 계속 고칠 계획이면 위의 Import 방법을 쓰세요.
 
