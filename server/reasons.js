@@ -2,24 +2,24 @@
 // weight 는 갈등 분석에서 사용하는 심각도 가중치입니다.
 
 export const GOOD_REASONS = [
-  { id: 'fun', label: '같이 놀면 재미있어요' },
-  { id: 'kind', label: '친절하고 배려해 줘요' },
-  { id: 'help', label: '어려울 때 도와줘요' },
-  { id: 'talk', label: '이야기가 잘 통해요' },
-  { id: 'hobby', label: '좋아하는 것이 비슷해요' },
-  { id: 'trust', label: '믿을 수 있어요' },
-  { id: 'teamwork', label: '같이 활동하면 잘 돼요' },
+  { id: 'fun', label: '같이 놀면 재미있어요', emoji: '🎮' },
+  { id: 'kind', label: '친절하고 배려해 줘요', emoji: '🤗' },
+  { id: 'help', label: '어려울 때 도와줘요', emoji: '🤝' },
+  { id: 'talk', label: '이야기가 잘 통해요', emoji: '💬' },
+  { id: 'hobby', label: '좋아하는 것이 비슷해요', emoji: '🎨' },
+  { id: 'trust', label: '믿을 수 있어요', emoji: '🌟' },
+  { id: 'teamwork', label: '같이 활동하면 잘 돼요', emoji: '🏆' },
 ];
 
 export const BAD_REASONS = [
-  { id: 'tease', label: '놀리거나 험담해요', weight: 10 },
-  { id: 'hurt', label: '때리거나 괴롭혀요', weight: 15 },
-  { id: 'exclude', label: '무시하거나 따돌려요', weight: 12 },
-  { id: 'rude', label: '말을 함부로 해요', weight: 6 },
-  { id: 'fight', label: '싸운 적이 있어요', weight: 10 },
-  { id: 'promise', label: '약속을 안 지켜요', weight: 4 },
-  { id: 'stuff', label: '내 물건을 함부로 해요', weight: 4 },
-  { id: 'mismatch', label: '성격이 잘 안 맞아요', weight: 3 },
+  { id: 'tease', label: '놀리거나 험담해요', emoji: '😢', weight: 10 },
+  { id: 'hurt', label: '때리거나 괴롭혀요', emoji: '😖', weight: 15 },
+  { id: 'exclude', label: '무시하거나 따돌려요', emoji: '🙁', weight: 12 },
+  { id: 'rude', label: '말을 함부로 해요', emoji: '🗯️', weight: 6 },
+  { id: 'fight', label: '싸운 적이 있어요', emoji: '⚡', weight: 10 },
+  { id: 'promise', label: '약속을 안 지켜요', emoji: '⏰', weight: 4 },
+  { id: 'stuff', label: '내 물건을 함부로 해요', emoji: '🎒', weight: 4 },
+  { id: 'mismatch', label: '성격이 잘 안 맞아요', emoji: '🤷', weight: 3 },
 ];
 
 export const REASON_CATALOG = { good: GOOD_REASONS, bad: BAD_REASONS };

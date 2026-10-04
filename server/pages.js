@@ -8,20 +8,31 @@ export const index = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>학생 관계 마인드맵</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&display=swap">
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
-    </div>
+<body class="kid">
+  <header class="kid-header">
+    <svg class="kid-sky" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
+      <g fill="#fff" opacity=".95">
+        <circle cx="60" cy="50" r="18"/><circle cx="82" cy="42" r="24"/><circle cx="108" cy="52" r="17"/><rect x="42" y="50" width="84" height="18" rx="9"/>
+        <circle cx="300" cy="34" r="14"/><circle cx="318" cy="28" r="19"/><circle cx="338" cy="36" r="13"/><rect x="286" y="34" width="66" height="14" rx="7"/>
+      </g>
+      <circle cx="356" cy="86" r="22" fill="#ffd54f"/>
+    </svg>
+    <div class="kid-title"><a class="kid-room" href="/">학생 관계 마인드맵</a></div>
   </header>
 
   <main class="container narrow">
     <div id="storage-notice" class="alert error hidden"></div>
     <section class="card">
-      <h1>우리 반 친구 관계, 한눈에 보기</h1>
-      <p class="muted">학생들이 각자 친구 관계를 표시하면, 선생님은 전체 관계도를 종합적으로 확인하고 갈등 가능성을 미리 살펴볼 수 있어요.</p>
+      <div class="hero-card">
+        <div class="hero-mascot" id="hero-mascot"></div>
+        <div>
+          <h1>우리 반 친구 관계,<br>한눈에 보기</h1>
+          <p class="muted">학생들이 각자 친구 관계를 표시하면, 선생님은 전체 관계도를 종합적으로 확인하고 갈등 가능성을 미리 살펴볼 수 있어요.</p>
+        </div>
+      </div>
       <div class="steps">
         <div class="step"><span class="n">1</span><div><b>교실 만들기</b><br><span class="muted">학생 이름을 등록하면 학생마다 개인 QR 링크가 만들어져요.</span></div></div>
         <div class="step"><span class="n">2</span><div><b>학생이 관계 표시</b><br><span class="muted">각자 자기 QR로 접속해서 좋은 사이(빨간 화살표)와 안 좋은 사이(검은 화살표)를 표시해요. 다른 학생의 답은 볼 수 없어요.</span></div></div>
@@ -116,14 +127,23 @@ export const student = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#a9ddf6">
   <title>내 친구 관계 지도</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&display=swap">
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <span class="brand"><span class="logo"></span><span id="room-name">친구 관계 지도</span></span>
+<body class="kid">
+  <header class="kid-header">
+    <svg class="kid-sky" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
+      <g fill="#fff" opacity=".95">
+        <circle cx="60" cy="50" r="18"/><circle cx="82" cy="42" r="24"/><circle cx="108" cy="52" r="17"/><rect x="42" y="50" width="84" height="18" rx="9"/>
+        <circle cx="300" cy="34" r="14"/><circle cx="318" cy="28" r="19"/><circle cx="338" cy="36" r="13"/><rect x="286" y="34" width="66" height="14" rx="7"/>
+      </g>
+      <circle cx="356" cy="86" r="22" fill="#ffd54f"/>
+    </svg>
+    <div class="kid-title">
+      <span class="kid-room" id="room-name">친구 관계 지도</span>
     </div>
   </header>
 

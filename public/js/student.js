@@ -1,4 +1,4 @@
-import { api, el, svgEl, toast, TYPE_LABEL, TYPE_ICON } from './common.js';
+import { api, el, svgEl, toast, TYPE_LABEL, TYPE_ICON, avatarColor } from './common.js';
 
 const token = decodeURIComponent(location.pathname.split('/')[2] || '');
 const app = document.getElementById('app');
@@ -35,21 +35,32 @@ function render() {
   document.getElementById('room-name').textContent = room.name;
   document.title = `${me.name}의 친구 관계 지도 · ${data.round?.name || ''}`;
 
-  const intro = el('section', { class: 'card' }, [
-    el('div', { class: 'badge blue', style: { marginBottom: '8px' }, text: `${data.round?.name || ''} 조사` }),
-    el('h1', { text: `${me.name}님, 안녕하세요 👋` }),
-    el('p', {}, [
-      '우리 반 친구들과 나의 관계를 표시해 주세요. ',
-      el('b', { text: '좋은 사이' }), '는 빨간 화살표, ',
-      el('b', { text: '안 좋은 사이' }), '는 검은 화살표로 이어져요.',
+  const n0 = selectedCount();
+  const min0 = room.minRelations;
+  const pct0 = Math.min(1, n0 / Math.max(1, min0));
+  const bubble = room.locked ? '조사가 끝났어요!' : n0 === 0 ? '친구를 골라 볼까요?' : n0 < min0 ? `${min0 - n0}명만 더!` : data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
+  const ring = el('div', { class: 'ring' }, [
+    svgEl('svg', { viewBox: '0 0 112 112' }),
+    el('div', { class: 'ring-text' }, [el('b', { text: `${n0}` }), el('span', { text: `/ ${min0}명` })]),
+  ]);
+  const rsvg = ring.querySelector('svg');
+  rsvg.append(svgEl('circle', { cx: 56, cy: 56, r: 48, fill: 'none', stroke: '#f1ebe3', 'stroke-width': 12 }));
+  rsvg.append(svgEl('circle', { cx: 56, cy: 56, r: 48, fill: 'none', stroke: pct0 >= 1 ? '#8bc34a' : '#ffd54f', 'stroke-width': 12, 'stroke-linecap': 'round', 'stroke-dasharray': `${(2 * Math.PI * 48 * pct0).toFixed(1)} ${(2 * Math.PI * 48).toFixed(1)}` }));
+  const intro = el('section', { class: 'card hello-card' }, [
+    ring,
+    el('div', {}, [
+      el('div', { class: 'badge blue', style: { marginBottom: '6px' }, text: `${data.round?.name || ''} 조사` }),
+      el('h1', { text: `${me.name}, 안녕! 👋` }),
+      el('p', { style: { marginBottom: '4px' } }, ['친구들과 나의 관계를 표시해 줘. ', el('b', { text: '좋은 사이' }), '는 빨간 화살표, ', el('b', { text: '안 좋은 사이' }), '는 검은 화살표!']),
+      el('div', { class: `speech ${pct0 >= 1 ? 'done' : ''}`, text: bubble }),
     ]),
-    el('div', { class: 'alert info' }, [
-      '🔒 이 페이지는 나만 볼 수 있어요. 친구들은 내가 표시한 내용을 볼 수 없고, 선생님만 확인해요. 솔직하게 표시해 주세요.',
-    ]),
-    room.locked ? el('div', { class: 'alert warn', text: `${data.round?.name || '이번'} 조사가 마감되었어요. 내가 표시한 내용을 확인만 할 수 있고, 선생님이 다음 조사를 시작하면 다시 표시할 수 있어요.` }) : null,
-    data.submittedAt && !room.locked ? el('div', { class: 'alert success', text: '제출을 완료했어요. 마감 전까지는 언제든 수정하고 다시 제출할 수 있어요.' }) : null,
   ]);
   app.append(intro);
+  app.append(el('section', { class: 'card', style: { padding: '14px 18px' } }, [
+    el('div', { class: 'alert info', style: { margin: 0 } }, ['🔒 이 페이지는 나만 볼 수 있어. 친구들은 내가 표시한 걸 볼 수 없고, 선생님만 확인해. 솔직하게 표시해 줘!']),
+    room.locked ? el('div', { class: 'alert warn', style: { margin: '10px 0 0' }, text: `${data.round?.name || '이번'} 조사가 끝났어. 내가 표시한 내용을 확인만 할 수 있고, 선생님이 다음 조사를 시작하면 다시 표시할 수 있어.` }) : null,
+    data.submittedAt && !room.locked ? el('div', { class: 'alert success', style: { margin: '10px 0 0' }, text: '제출 완료! 끝나기 전까지는 언제든 바꾸고 다시 제출할 수 있어.' }) : null,
+  ]));
 
   // 진행 상황
   const n = selectedCount();
@@ -57,38 +68,38 @@ function render() {
   const pct = Math.min(100, Math.round((n / Math.max(1, min)) * 100));
   const progress = el('section', { class: 'card' }, [
     el('div', { class: 'card-title' }, [
-      el('h2', { text: '내 관계 지도' }),
-      el('span', { class: `badge ${n >= min ? 'green' : 'warn'}`, text: `${n}명 표시 (최소 ${min}명)` }),
+      el('h2', { text: '🗺️ 내 관계 지도' }),
+      el('span', { class: `badge ${n >= min ? 'green' : 'warn'}`, text: `${n}명 표시 · 최소 ${min}명` }),
     ]),
     el('div', { class: 'progress' }, [el('div', { class: n >= min ? 'done' : '', style: { width: `${pct}%` } })]),
     el('div', { class: 'student-map', id: 'map', style: { marginTop: '10px' } }),
     el('div', { class: 'legend', style: { marginTop: '6px' } }, [
-      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--red)', borderRadius: '50%', width: '14px', height: '14px' } }), '나']),
-      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '1.5px solid var(--node-border)' } }), '친구']),
-      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
-      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
+      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--kid-coral)', borderRadius: '50%', width: '16px', height: '16px', border: '2px solid #fff' } }), '나']),
+      el('span', {}, [el('span', { class: 'sw', style: { background: '#fff', border: '2px solid #e8dfd3', borderRadius: '8px' } }), '친구']),
+      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--kid-coral)' } }), '❤️ 좋은 사이']),
+      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--kid-slate)' } }), '⚡ 안 좋은 사이']),
     ]),
-    el('p', { class: 'muted', style: { marginTop: '8px' }, text: '지도의 친구 이름을 누르거나, 아래 목록에서 친구를 골라 관계를 표시하세요.' }),
+    el('p', { class: 'muted', style: { marginTop: '8px' }, text: '지도에서 친구 이름을 누르거나, 아래 목록에서 친구를 골라 봐.' }),
   ]);
   app.append(progress);
   drawMap(progress.querySelector('#map'));
 
   // 친구 목록
   const list = el('section', { class: 'card' }, [
-    el('div', { class: 'card-title' }, [el('h2', { text: '우리 반 친구들' }), el('span', { class: 'muted', text: `${classmates.length}명` })]),
-    el('div', { class: 'mate-list' }, classmates.map((c) => mateButton(c))),
+    el('div', { class: 'card-title' }, [el('h2', { text: '🧒 우리 반 친구들' }), el('span', { class: 'muted', text: `${classmates.length}명` })]),
+    el('div', { class: 'mate-list' }, classmates.map((c, i) => mateButton(c, i))),
     !room.locked ? stickyBar() : null,
   ]);
   app.append(list);
 }
 
-function mateButton(c) {
+function mateButton(c, i = 0) {
   const r = draft[c.id];
   const type = r?.type;
   const invalid = r && !relationValid(r);
   const sub = r
     ? invalid
-      ? '⚠️ 이유를 적어 주세요'
+      ? '⚠️ 이유를 적어 줘'
       : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
     : '눌러서 표시하기';
   return el('button', {
@@ -97,6 +108,7 @@ function mateButton(c) {
     onClick: () => openEditor(c.id),
     disabled: data.room.locked ? true : null,
   }, [
+    el('span', { class: 'avatar', style: { background: avatarColor(i) }, text: (c.name.length === 3 ? c.name.slice(1, 2) : c.name.slice(0, 1)) }),
     el('span', { class: 'name' }, [c.name, el('span', { class: 'sub', text: sub })]),
     type ? el('span', { class: `badge ${type}`, text: `${TYPE_ICON[type]} ${TYPE_LABEL[type]}` }) : el('span', { class: 'badge gray', text: '선택 안 함' }),
   ]);
@@ -111,14 +123,14 @@ function stickyBar() {
   const min = data.room.minRelations;
   const invalid = invalidNames();
   let status;
-  if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 안 좋은 사이인 이유를 적어 주세요.`;
-  else if (n < min) status = `친구를 ${min - n}명 더 표시해 주세요. (최소 ${min}명)`;
-  else if (dirty) status = '✅ 준비 완료! 제출 버튼을 눌러 주세요.';
-  else if (data.submittedAt) status = '제출 완료. 바꾼 내용이 있으면 다시 제출해 주세요.';
-  else status = '✅ 준비 완료! 제출 버튼을 눌러 주세요.';
+  if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 안 좋은 사이인 이유를 적어 줘.`;
+  else if (n < min) status = `친구를 ${min - n}명 더 표시해 줘! (최소 ${min}명)`;
+  else if (dirty) status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
+  else if (data.submittedAt) status = '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
+  else status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
   return el('div', { class: 'sticky-bar' }, [
     el('div', { class: 'status', text: status }),
-    el('button', { type: 'button', class: 'btn primary', text: data.submittedAt ? '다시 제출하기' : '제출하기', disabled: canSubmit() ? null : true, onClick: submit }),
+    el('button', { type: 'button', class: 'btn primary', text: data.submittedAt ? '다시 제출하기 ▶' : '제출하기 ▶', disabled: canSubmit() ? null : true, onClick: submit }),
   ]);
 }
 
@@ -150,12 +162,29 @@ function drawMap(container) {
   const svg = svgEl('svg', { viewBox: `${vb.x} ${vb.y} ${vb.w} ${vb.h}`, role: 'img', 'aria-label': '내 친구 관계 지도' });
 
   const defs = svgEl('defs');
-  for (const [id, color] of [['arrow-good', '#ef5b6b'], ['arrow-bad', '#2d2f3a']]) {
+  const sky = svgEl('linearGradient', { id: 'sky', x1: 0, y1: 0, x2: 0, y2: 1 });
+  sky.append(svgEl('stop', { offset: '0', 'stop-color': '#9ad6f5' }), svgEl('stop', { offset: '1', 'stop-color': '#e3f4ff' }));
+  defs.append(sky);
+  for (const [id, color] of [['arrow-good', '#ff6b6b'], ['arrow-bad', '#4a5568']]) {
     const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
     defs.append(m);
   }
   svg.append(defs);
+
+  // 배경: 하늘, 해, 구름, 언덕
+  const deco = svgEl('g', { 'pointer-events': 'none' });
+  deco.append(svgEl('rect', { x: vb.x, y: vb.y, width: vb.w, height: vb.h, fill: 'url(#sky)' }));
+  deco.append(svgEl('circle', { cx: vb.x + vb.w - 70, cy: vb.y + 60, r: 30, fill: '#ffd54f' }));
+  const cloud = (cx, cy, k) => {
+    const g = svgEl('g', { fill: '#fff', opacity: '.95' });
+    g.append(svgEl('circle', { cx: cx - 22 * k, cy, r: 16 * k }), svgEl('circle', { cx, cy: cy - 10 * k, r: 22 * k }), svgEl('circle', { cx: cx + 24 * k, cy, r: 15 * k }), svgEl('rect', { x: cx - 36 * k, y: cy - 2 * k, width: 74 * k, height: 18 * k, rx: 9 * k }));
+    return g;
+  };
+  deco.append(cloud(vb.x + 90, vb.y + 70, 1), cloud(vb.x + vb.w * 0.55, vb.y + 40, 0.8), cloud(vb.x + vb.w - 160, vb.y + vb.h * 0.35, 0.7));
+  deco.append(svgEl('ellipse', { cx: vb.x + vb.w * 0.3, cy: vb.y + vb.h + 40, rx: vb.w * 0.55, ry: 120, fill: '#9ad04a' }));
+  deco.append(svgEl('ellipse', { cx: vb.x + vb.w * 0.8, cy: vb.y + vb.h + 60, rx: vb.w * 0.5, ry: 130, fill: '#7cb342' }));
+  svg.append(deco);
 
   const me = { x: 0, y: 0 };
   const ME_R = 36; // '나' 동그라미 반지름
@@ -168,7 +197,7 @@ function drawMap(container) {
     const end = rectEdge(p, NODE_W, NODE_H, me);
     edges.append(svgEl('path', {
       d: `M${start.x},${start.y} L${end.x},${end.y}`,
-      stroke: r.type === 'good' ? '#ef5b6b' : '#2d2f3a', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round',
+      stroke: r.type === 'good' ? '#ff6b6b' : '#4a5568', 'stroke-width': 3.5, fill: 'none', 'stroke-linecap': 'round',
       'marker-end': `url(#${r.type === 'good' ? 'arrow-good' : 'arrow-bad'})`,
     }));
   }
@@ -178,10 +207,15 @@ function drawMap(container) {
   for (const c of mates) {
     const p = pos[c.id];
     const r = draft[c.id];
-    const g = svgEl('g', { class: 'node', transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': c.name });
-    const rect = svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: 8 });
-    if (r) rect.setAttribute('style', `stroke:${r.type === 'good' ? '#ef5b6b' : '#2d2f3a'};stroke-width:3`);
+    const g = svgEl('g', { class: `node ${r ? r.type : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': c.name });
+    const rect = svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: NODE_H / 2 });
     g.append(rect, svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: shorten(c.name, 6), style: 'font-size:18px' }));
+    if (r) {
+      const badge = svgEl('g', { class: 'node-badge', transform: `translate(${NODE_W / 2 - 6},${-NODE_H / 2 + 2})` });
+      badge.append(svgEl('circle', { r: 13, fill: '#fff', stroke: r.type === 'good' ? '#ff6b6b' : '#4a5568', 'stroke-width': 2.5 }));
+      badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: r.type === 'good' ? '❤️' : '⚡', style: 'font-size:14px' }));
+      g.append(badge);
+    }
     if (!data.room.locked) {
       g.addEventListener('click', () => openEditor(c.id));
       g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditor(c.id); } });
@@ -192,7 +226,18 @@ function drawMap(container) {
   const meNode = svgEl('g', { class: 'node me', transform: 'translate(0,0)' });
   meNode.append(svgEl('circle', { class: 'me-halo', r: ME_R + 10 }));
   meNode.append(svgEl('circle', { class: 'me-body', r: ME_R }));
-  meNode.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: '나', style: 'font-size:26px;fill:#fff;font-weight:800' }));
+  // 눈, 볼, 입
+  for (const sx of [-12, 12]) {
+    meNode.append(svgEl('circle', { cx: sx, cy: -6, r: 9, fill: '#fff' }));
+    meNode.append(svgEl('circle', { cx: sx + 1.5, cy: -5, r: 4.5, fill: '#2d2f3a' }));
+    meNode.append(svgEl('circle', { cx: sx + 3, cy: -7, r: 1.5, fill: '#fff' }));
+  }
+  meNode.append(svgEl('circle', { cx: -22, cy: 8, r: 5, fill: '#ffb3b3', opacity: '.9' }), svgEl('circle', { cx: 22, cy: 8, r: 5, fill: '#ffb3b3', opacity: '.9' }));
+  meNode.append(svgEl('path', { d: 'M-10 10 Q0 20 10 10', fill: 'none', stroke: '#2d2f3a', 'stroke-width': 3.5, 'stroke-linecap': 'round' }));
+  const meLabel = svgEl('g', { transform: `translate(0,${ME_R + 16})` });
+  meLabel.append(svgEl('rect', { x: -22, y: -12, width: 44, height: 24, rx: 12, fill: '#fff', stroke: '#ff6b6b', 'stroke-width': 2 }));
+  meLabel.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: '나', style: 'font-size:16px;fill:#4a3b2f' }));
+  meNode.append(meLabel);
   nodes.append(meNode);
   svg.append(nodes);
   container.replaceChildren(svg);
@@ -238,10 +283,10 @@ function openEditor(id) {
     modal.append(el('h2', { text: `${mate.name}${josa(mate.name, ['와', '과'])} 나는…` }));
     const choice = el('div', { class: 'type-choice' }, [
       el('button', { type: 'button', class: `type-btn good ${state.type === 'good' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'good' ? null : 'good'; state.tags.clear(); draw(); } }, [
-        '❤️ 좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 선택' }),
+        el('span', { class: 'big', text: '❤️' }), '좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 골라도 되고 안 골라도 돼' }),
       ]),
       el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'bad' ? null : 'bad'; state.tags.clear(); draw(); } }, [
-        '⚡ 안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유는 꼭 적기' }),
+        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유를 꼭 알려 줘' }),
       ]),
     ]);
     modal.append(choice);
@@ -249,11 +294,11 @@ function openEditor(id) {
     if (state.type) {
       const isBad = state.type === 'bad';
       modal.append(el('div', { class: 'field' }, [
-        el('label', {}, [isBad ? '왜 안 좋은 사이인가요? ' : '왜 좋은 사이인가요? ', isBad ? el('span', { class: 'req', text: '(꼭 골라 주세요)' }) : el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼요)' })]),
+        el('label', {}, [isBad ? '왜 안 좋은 사이야? ' : '왜 좋은 사이야? ', isBad ? el('span', { class: 'req', text: '(꼭 골라 줘)' }) : el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
         el('div', { class: 'chips' }, data.catalog[state.type].map((t) => el('button', {
           type: 'button',
           class: `chip ${state.tags.has(t.id) ? `selected ${isBad ? 'bad-theme' : 'good-theme'}` : ''}`,
-          text: t.label,
+          text: `${t.emoji ? `${t.emoji} ` : ''}${t.label}`,
           onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); draw(); },
         }))),
       ]));
@@ -261,19 +306,19 @@ function openEditor(id) {
       ta.value = state.reason;
       ta.addEventListener('input', () => { state.reason = ta.value; updateHint(); });
       modal.append(el('div', { class: 'field' }, [
-        el('label', {}, ['직접 적기 ', isBad ? el('span', { class: 'muted', text: '(위에서 하나도 고르지 않았다면 여기에 꼭 적어 주세요)' }) : el('span', { class: 'muted', text: '(선택)' })]),
+        el('label', {}, ['✏️ 직접 적기 ', isBad ? el('span', { class: 'muted', text: '(위에서 하나도 안 골랐다면 여기에 꼭 적어 줘)' }) : el('span', { class: 'muted', text: '(선택)' })]),
         ta,
       ]));
-      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: '안 좋은 사이일 때는 이유를 꼭 알려주세요. 위에서 고르거나 직접 적어 주세요.' });
+      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: '안 좋은 사이일 때는 이유를 꼭 알려 줘. 위에서 고르거나 직접 적어 줘.' });
       modal.append(hint);
       var updateHint = () => hint.classList.toggle('hidden', !(isBad && state.tags.size === 0 && !state.reason.trim()));
       updateHint();
     } else {
-      modal.append(el('p', { class: 'muted', text: '위에서 관계를 골라 주세요. 아직 잘 모르겠으면 표시하지 않아도 괜찮아요.' }));
+      modal.append(el('p', { class: 'muted', text: '위에서 관계를 골라 줘. 아직 잘 모르겠으면 표시하지 않아도 괜찮아.' }));
     }
 
     modal.append(el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
-      el('button', { type: 'button', class: 'btn primary', text: '저장', onClick: save }),
+      el('button', { type: 'button', class: 'btn primary', text: '저장 ✓', onClick: save }),
       current ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; dirty = true; close(); render(); } }) : null,
       el('button', { type: 'button', class: 'btn', text: '닫기', onClick: close }),
     ]));
@@ -282,7 +327,7 @@ function openEditor(id) {
   function save() {
     if (!state.type) { delete draft[id]; dirty = true; close(); render(); return; }
     const r = { type: state.type, tags: [...state.tags], reason: state.reason.trim() };
-    if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 주세요.'); return; }
+    if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 줘!'); return; }
     draft[id] = r;
     dirty = true;
     close();
@@ -301,7 +346,7 @@ async function submit() {
     draft = JSON.parse(JSON.stringify(data.relations));
     dirty = false;
     render();
-    toast('제출 완료! 고마워요 🎉');
+    toast('제출 완료! 정말 고마워 🎉');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (err) {
     toast(err.message, 5000);

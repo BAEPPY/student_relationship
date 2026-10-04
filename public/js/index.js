@@ -1,4 +1,4 @@
-import { api, el, toast, copyText, savedRooms, fmtDate } from './common.js';
+import { api, el, toast, copyText, savedRooms, fmtDate, mascotSvg } from './common.js';
 
 const form = document.getElementById('create-form');
 const nameInput = document.getElementById('room-name');
@@ -33,6 +33,7 @@ function showResult(room) {
   resultCard.classList.remove('hidden');
   resultCard.scrollIntoView({ behavior: 'smooth' });
   renderSaved();
+document.getElementById('hero-mascot').innerHTML = mascotSvg({ size: 96 });
 
 // 서버 저장소 상태 확인 (DB 미연결 등 경고)
 api('/api/health').then((h) => {
@@ -98,6 +99,7 @@ function renderSaved() {
   }
 }
 renderSaved();
+document.getElementById('hero-mascot').innerHTML = mascotSvg({ size: 96 });
 
 // 서버 저장소 상태 확인 (DB 미연결 등 경고)
 api('/api/health').then((h) => {
