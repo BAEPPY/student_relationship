@@ -12,13 +12,8 @@ export const index = `<!doctype html>
 </head>
 <body class="kid">
   <header class="kid-header">
-    <svg class="kid-sky" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
-      <g fill="#fff" opacity=".95">
-        <circle cx="60" cy="50" r="18"/><circle cx="82" cy="42" r="24"/><circle cx="108" cy="52" r="17"/><rect x="42" y="50" width="84" height="18" rx="9"/>
-        <circle cx="300" cy="34" r="14"/><circle cx="318" cy="28" r="19"/><circle cx="338" cy="36" r="13"/><rect x="286" y="34" width="66" height="14" rx="7"/>
-      </g>
-      <circle cx="356" cy="86" r="22" fill="#ffd54f"/>
-    </svg>
+    <div class="kid-sky" aria-hidden="true"></div>
+    <svg class="kid-wave" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true"><path d="M0 30 C 240 70 480 0 720 30 C 960 60 1200 10 1440 30 L1440 60 L0 60 Z" fill="#fff8ee"/></svg>
     <div class="kid-title"><a class="kid-room" href="/">학생 관계 마인드맵</a></div>
   </header>
 
@@ -138,13 +133,8 @@ export const student = `<!doctype html>
 </head>
 <body class="kid">
   <header class="kid-header">
-    <svg class="kid-sky" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
-      <g fill="#fff" opacity=".95">
-        <circle cx="60" cy="50" r="18"/><circle cx="82" cy="42" r="24"/><circle cx="108" cy="52" r="17"/><rect x="42" y="50" width="84" height="18" rx="9"/>
-        <circle cx="300" cy="34" r="14"/><circle cx="318" cy="28" r="19"/><circle cx="338" cy="36" r="13"/><rect x="286" y="34" width="66" height="14" rx="7"/>
-      </g>
-      <circle cx="356" cy="86" r="22" fill="#ffd54f"/>
-    </svg>
+    <div class="kid-sky" aria-hidden="true"></div>
+    <svg class="kid-wave" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true"><path d="M0 30 C 240 70 480 0 720 30 C 960 60 1200 10 1440 30 L1440 60 L0 60 Z" fill="#fff8ee"/></svg>
     <div class="kid-title">
       <span class="kid-room" id="room-name">친구 관계 지도</span>
     </div>

@@ -176,8 +176,14 @@ function drawMap(container) {
 
   const defs = svgEl('defs');
   const sky = svgEl('linearGradient', { id: 'sky', x1: 0, y1: 0, x2: 0, y2: 1 });
-  sky.append(svgEl('stop', { offset: '0', 'stop-color': '#9ad6f5' }), svgEl('stop', { offset: '1', 'stop-color': '#e3f4ff' }));
+  sky.append(svgEl('stop', { offset: '0', 'stop-color': '#8fcdf2' }), svgEl('stop', { offset: '1', 'stop-color': '#e6f5ff' }));
   defs.append(sky);
+  const meGrad = svgEl('radialGradient', { id: 'me-grad', cx: '38%', cy: '32%', r: '72%' });
+  meGrad.append(svgEl('stop', { offset: '0', 'stop-color': '#ff8585' }), svgEl('stop', { offset: '1', 'stop-color': '#ea5563' }));
+  defs.append(meGrad);
+  const sunGrad = svgEl('radialGradient', { id: 'sun-grad', cx: '50%', cy: '50%', r: '50%' });
+  sunGrad.append(svgEl('stop', { offset: '0', 'stop-color': '#ffe08a' }), svgEl('stop', { offset: '0.55', 'stop-color': '#ffd454', 'stop-opacity': '.9' }), svgEl('stop', { offset: '1', 'stop-color': '#ffd454', 'stop-opacity': '0' }));
+  defs.append(sunGrad);
   for (const [id, color] of [['arrow-good', '#ff6b6b'], ['arrow-bad', '#4a5568']]) {
     const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
@@ -188,10 +194,10 @@ function drawMap(container) {
   // 배경: 하늘, 해, 구름, 언덕
   const deco = svgEl('g', { 'pointer-events': 'none' });
   deco.append(svgEl('rect', { x: vb.x, y: vb.y, width: vb.w, height: vb.h, fill: 'url(#sky)' }));
-  deco.append(svgEl('circle', { cx: vb.x + vb.w - 70, cy: vb.y + 60, r: 30, fill: '#ffd54f' }));
+  deco.append(svgEl('circle', { cx: vb.x + vb.w - 80, cy: vb.y + 70, r: 60, fill: 'url(#sun-grad)' }));
   const cloud = (cx, cy, k) => {
-    const g = svgEl('g', { fill: '#fff', opacity: '.95' });
-    g.append(svgEl('circle', { cx: cx - 22 * k, cy, r: 16 * k }), svgEl('circle', { cx, cy: cy - 10 * k, r: 22 * k }), svgEl('circle', { cx: cx + 24 * k, cy, r: 15 * k }), svgEl('rect', { x: cx - 36 * k, y: cy - 2 * k, width: 74 * k, height: 18 * k, rx: 9 * k }));
+    const g = svgEl('g', { fill: '#fff', opacity: '.85' });
+    g.append(svgEl('circle', { cx: cx - 24 * k, cy: cy + 2 * k, r: 14 * k }), svgEl('circle', { cx: cx - 6 * k, cy: cy - 10 * k, r: 20 * k }), svgEl('circle', { cx: cx + 16 * k, cy: cy - 4 * k, r: 16 * k }), svgEl('circle', { cx: cx + 30 * k, cy: cy + 4 * k, r: 11 * k }), svgEl('rect', { x: cx - 36 * k, y: cy - 2 * k, width: 76 * k, height: 16 * k, rx: 8 * k }));
     return g;
   };
   deco.append(cloud(vb.x + 90, vb.y + 70, 1), cloud(vb.x + vb.w * 0.55, vb.y + 40, 0.8), cloud(vb.x + vb.w - 160, vb.y + vb.h * 0.35, 0.7));
@@ -238,15 +244,16 @@ function drawMap(container) {
   // '나'는 빨간 동그라미로 강조
   const meNode = svgEl('g', { class: 'node me', transform: 'translate(0,0)' });
   meNode.append(svgEl('circle', { class: 'me-halo', r: ME_R + 10 }));
-  meNode.append(svgEl('circle', { class: 'me-body', r: ME_R }));
+  meNode.append(svgEl('ellipse', { cx: 0, cy: ME_R + 4, rx: ME_R * 0.7, ry: 4, fill: '#4a3b2f', opacity: '.10' }));
+  meNode.append(svgEl('circle', { class: 'me-body', r: ME_R, fill: 'url(#me-grad)' }));
+  meNode.append(svgEl('ellipse', { cx: -ME_R * 0.3, cy: -ME_R * 0.42, rx: ME_R * 0.32, ry: ME_R * 0.2, fill: '#fff', opacity: '.28', transform: `rotate(-20 ${-ME_R * 0.3} ${-ME_R * 0.42})` }));
   // 눈, 볼, 입
-  for (const sx of [-12, 12]) {
-    meNode.append(svgEl('circle', { cx: sx, cy: -6, r: 9, fill: '#fff' }));
-    meNode.append(svgEl('circle', { cx: sx + 1.5, cy: -5, r: 4.5, fill: '#2d2f3a' }));
-    meNode.append(svgEl('circle', { cx: sx + 3, cy: -7, r: 1.5, fill: '#fff' }));
+  for (const sx of [-10, 10]) {
+    meNode.append(svgEl('ellipse', { cx: sx, cy: -2, rx: 4, ry: 5.4, fill: '#2d2f3a' }));
+    meNode.append(svgEl('circle', { cx: sx + 1.5, cy: -4, r: 1.4, fill: '#fff' }));
   }
-  meNode.append(svgEl('circle', { cx: -22, cy: 8, r: 5, fill: '#ffb3b3', opacity: '.9' }), svgEl('circle', { cx: 22, cy: 8, r: 5, fill: '#ffb3b3', opacity: '.9' }));
-  meNode.append(svgEl('path', { d: 'M-10 10 Q0 20 10 10', fill: 'none', stroke: '#2d2f3a', 'stroke-width': 3.5, 'stroke-linecap': 'round' }));
+  meNode.append(svgEl('circle', { cx: -20, cy: 8, r: 5, fill: '#ffd2d2', opacity: '.6' }), svgEl('circle', { cx: 20, cy: 8, r: 5, fill: '#ffd2d2', opacity: '.6' }));
+  meNode.append(svgEl('path', { d: 'M-7 11 Q0 17 7 11', fill: 'none', stroke: '#2d2f3a', 'stroke-width': 3, 'stroke-linecap': 'round' }));
   const meLabel = svgEl('g', { transform: `translate(0,${ME_R + 16})` });
   meLabel.append(svgEl('rect', { x: -22, y: -12, width: 44, height: 24, rx: 12, fill: '#fff', stroke: '#ff6b6b', 'stroke-width': 2 }));
   meLabel.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: '나', style: 'font-size:16px;fill:#4a3b2f' }));

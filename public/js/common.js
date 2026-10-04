@@ -104,16 +104,20 @@ export function setChildren(node, ...children) {
 export const AVATAR_COLORS = ['#ffb3b3', '#ffd59e', '#fff3a3', '#c6f0b2', '#b5e8f7', '#c9c4ff', '#f7c6ec', '#ffcfa8'];
 export function avatarColor(i) { return AVATAR_COLORS[Math.abs(i) % AVATAR_COLORS.length]; }
 
-/** 눈이 큰 둥근 마스코트 (정적 SVG 문자열) */
-export function mascotSvg({ size = 96, color = '#ff6b6b', label = '' } = {}) {
+/** 둥근 마스코트 (정적 SVG 문자열). 음영·하이라이트로 입체감을 줍니다. */
+export function mascotSvg({ size = 96, color = '#ff7b7b', shade = '#ef5b6b', label = '' } = {}) {
+  const uid = `m${Math.random().toString(36).slice(2, 8)}`;
   return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true">
-    <circle cx="50" cy="52" r="42" fill="${color}" stroke="#fff" stroke-width="5"/>
-    <circle cx="36" cy="46" r="11" fill="#fff"/><circle cx="64" cy="46" r="11" fill="#fff"/>
-    <circle cx="38" cy="48" r="5.5" fill="#2d2f3a"/><circle cx="66" cy="48" r="5.5" fill="#2d2f3a"/>
-    <circle cx="40" cy="46" r="1.8" fill="#fff"/><circle cx="68" cy="46" r="1.8" fill="#fff"/>
-    <circle cx="27" cy="62" r="6" fill="#ffb3b3" opacity=".9"/><circle cx="73" cy="62" r="6" fill="#ffb3b3" opacity=".9"/>
-    <path d="M38 66 Q50 78 62 66" fill="none" stroke="#2d2f3a" stroke-width="4" stroke-linecap="round"/>
-    <path d="M44 14 L50 4 L56 14" fill="#ffd54f" stroke="#ffd54f" stroke-width="3" stroke-linejoin="round"/>
-    ${label ? `<text x="50" y="97" text-anchor="middle" font-size="13" font-weight="800" fill="#4a3b2f">${label}</text>` : ''}
+    <defs>
+      <radialGradient id="${uid}" cx="38%" cy="32%" r="72%"><stop offset="0" stop-color="${color}"/><stop offset="1" stop-color="${shade}"/></radialGradient>
+    </defs>
+    <ellipse cx="50" cy="91" rx="24" ry="4.5" fill="#4a3b2f" opacity=".10"/>
+    <circle cx="50" cy="50" r="40" fill="url(#${uid})"/>
+    <ellipse cx="37" cy="33" rx="13" ry="8" fill="#fff" opacity=".28" transform="rotate(-20 37 33)"/>
+    <ellipse cx="40" cy="50" rx="4.2" ry="5.6" fill="#2d2f3a"/><ellipse cx="60" cy="50" rx="4.2" ry="5.6" fill="#2d2f3a"/>
+    <circle cx="41.6" cy="47.8" r="1.5" fill="#fff"/><circle cx="61.6" cy="47.8" r="1.5" fill="#fff"/>
+    <circle cx="30" cy="60" r="5.5" fill="#ffd2d2" opacity=".6"/><circle cx="70" cy="60" r="5.5" fill="#ffd2d2" opacity=".6"/>
+    <path d="M43 63 Q50 70 57 63" fill="none" stroke="#2d2f3a" stroke-width="3" stroke-linecap="round"/>
+    ${label ? `<text x="50" y="98" text-anchor="middle" font-size="13" font-weight="800" fill="#4a3b2f">${label}</text>` : ''}
   </svg>`;
 }

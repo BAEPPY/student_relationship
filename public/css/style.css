@@ -175,7 +175,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .node.me rect { fill: var(--me-fill); stroke: var(--me-border); }
 .node.me text { fill: var(--me-text); }
 /* 학생 페이지의 '나': 빨간 동그라미 + 은은한 후광 */
-.node.me .me-body { fill: var(--red); stroke: #fff; stroke-width: 4; filter: drop-shadow(0 4px 10px rgba(239,91,107,.45)); }
+.node.me .me-body { stroke: #fff; stroke-width: 4; filter: drop-shadow(0 4px 10px rgba(239,91,107,.45)); }
 .node.me .me-halo { fill: rgba(239,91,107,.14); animation: me-pulse 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
 @keyframes me-pulse { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.12); opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .node.me .me-halo { animation: none; } }
@@ -381,16 +381,29 @@ body.kid .field input:focus, body.kid .field textarea:focus { border-color: var(
 body.kid .muted { color: #8a7a6c; }
 body.kid .toast { background: var(--kid-brown); font-family: var(--font-kid); font-size: 16px; }
 
-/* 하늘 머리띠 */
-.kid-header { position: relative; height: 120px; background: linear-gradient(180deg, var(--kid-sky-deep), var(--kid-sky)); overflow: hidden; }
-.kid-sky { position: absolute; inset: 0; width: 100%; height: 100%; }
-.kid-title { position: absolute; left: 16px; bottom: 16px; }
-.kid-room { display: inline-block; background: #fff; color: var(--kid-brown); border-radius: 999px; padding: 8px 18px; font-size: 18px; text-decoration: none; box-shadow: 0 4px 10px rgba(0,0,0,.08); }
-body.kid .container { margin-top: -14px; position: relative; }
+/* 하늘 머리띠: 늘어나지 않는 그라데이션 하늘 + 흐릿한 구름 + 은은한 햇빛 + 곡선 마감 */
+.kid-header { position: relative; height: 150px; overflow: hidden; background: linear-gradient(180deg, #74c3ef 0%, #a8dcf7 55%, #d9effc 100%); }
+.kid-sky {
+  position: absolute; inset: 0;
+  background-image:
+    radial-gradient(circle at 86% 28%, rgba(255, 236, 170, .95) 0 22px, rgba(255, 228, 140, .35) 34px, rgba(255, 228, 140, 0) 70px),
+    radial-gradient(90px 30px at 14% 62%, rgba(255,255,255,.9), rgba(255,255,255,0) 72%),
+    radial-gradient(60px 26px at 21% 48%, rgba(255,255,255,.95), rgba(255,255,255,0) 72%),
+    radial-gradient(70px 24px at 9% 52%, rgba(255,255,255,.85), rgba(255,255,255,0) 72%),
+    radial-gradient(110px 32px at 62% 36%, rgba(255,255,255,.75), rgba(255,255,255,0) 72%),
+    radial-gradient(70px 26px at 68% 24%, rgba(255,255,255,.85), rgba(255,255,255,0) 72%),
+    radial-gradient(80px 26px at 55% 42%, rgba(255,255,255,.7), rgba(255,255,255,0) 72%),
+    radial-gradient(120px 40px at 100% 70%, rgba(255,255,255,.5), rgba(255,255,255,0) 72%);
+}
+.kid-wave { position: absolute; left: 0; right: 0; bottom: -1px; width: 100%; height: 34px; display: block; }
+.kid-title { position: absolute; left: 16px; bottom: 30px; z-index: 1; }
+.kid-room { display: inline-block; background: rgba(255,255,255,.92); backdrop-filter: blur(6px); color: var(--kid-brown); border-radius: 999px; padding: 8px 18px; font-size: 17px; text-decoration: none; box-shadow: 0 6px 16px rgba(32, 80, 120, .14); }
+body.kid .container { margin-top: -8px; position: relative; }
+@media (max-width: 600px) { .kid-header { height: 124px; } .kid-title { bottom: 26px; } }
 
 /* 인사 카드 */
 .hero-card { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
-.hero-card .hero-mascot { flex: none; width: 96px; height: 96px; }
+.hero-card .hero-mascot { flex: none; width: 104px; height: 104px; }
 .hello-card { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; }
 .hello-card .ring { position: relative; width: 112px; height: 112px; }
 .hello-card .ring svg { width: 112px; height: 112px; transform: rotate(-90deg); }
@@ -405,8 +418,8 @@ body.kid .container { margin-top: -14px; position: relative; }
 /* 지도 */
 body.kid .student-map { background: #d8efff; border: 3px solid #fff; border-radius: 24px; padding: 0; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.03); }
 body.kid .student-map svg { max-height: 560px; }
-body.kid .node.me .me-body { fill: var(--kid-coral); stroke: #fff; stroke-width: 5; filter: drop-shadow(0 6px 10px rgba(255, 107, 107, .45)); }
-body.kid .node.me .me-halo { fill: rgba(255, 107, 107, .18); }
+body.kid .node.me .me-body { stroke: #fff; stroke-width: 4; filter: drop-shadow(0 6px 10px rgba(234, 85, 99, .35)); }
+body.kid .node.me .me-halo { fill: rgba(255, 107, 107, .14); }
 body.kid .node rect { fill: #fff; stroke: #fff; stroke-width: 3; filter: drop-shadow(0 4px 6px rgba(74,59,47,.14)); }
 body.kid .node text { fill: var(--kid-brown); font-family: var(--font-kid); font-weight: 400; }
 body.kid .node.good rect { stroke: var(--kid-coral); }
