@@ -457,3 +457,9 @@ body.kid .step { background: #fff6e8; border: 2px solid #fff; border-radius: 20p
 body.kid .step .n { background: var(--kid-orange); font-family: var(--font-kid); }
 body.kid .link-box input { border-radius: 16px; }
 @media (max-width: 480px) { .hero-card { flex-direction: column; text-align: center; } body.kid h1 { font-size: 26px; } }
+
+/* 최소 인원 설정: 한 줄에 하나씩 */
+.min-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.min-row { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.min-row .min-label { display: inline-block; min-width: 110px; font-weight: 600; }
+.min-row input[type="number"] { width: 72px; padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 15px; }

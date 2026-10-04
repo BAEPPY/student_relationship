@@ -485,10 +485,14 @@ function renderStudents() {
       ]),
       el('div', {}, [
         el('h3', { text: '꼭 표시해야 하는 인원' }),
-        el('form', { class: 'inline-form', style: { alignItems: 'center' }, onSubmit: (e) => {
+        el('form', { class: 'min-form', onSubmit: (e) => {
           e.preventDefault();
           action(api(base, { method: 'PATCH', body: { minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value) } }), '저장했어요.');
-        } }, ['❤️ 좋은 사이', minGoodInput, '명 · ⚡ 안 좋은 사이', minBadInput, '명 이상', el('button', { type: 'submit', class: 'btn', text: '저장' })]),
+        } }, [
+          el('label', { class: 'min-row' }, [el('span', { class: 'min-label', text: '❤️ 좋은 사이' }), minGoodInput, el('span', { text: '명 이상' })]),
+          el('label', { class: 'min-row' }, [el('span', { class: 'min-label', text: '⚡ 안 좋은 사이' }), minBadInput, el('span', { text: '명 이상' })]),
+          el('div', {}, [el('button', { type: 'submit', class: 'btn', text: '저장' })]),
+        ]),
         el('p', { class: 'muted', style: { marginTop: '6px' }, text: '학생은 둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.' }),
       ]),
     ]),
