@@ -33,9 +33,10 @@ function render() {
   const { me, room, classmates } = data;
   app.replaceChildren();
   document.getElementById('room-name').textContent = room.name;
-  document.title = `${me.name}의 친구 관계 지도`;
+  document.title = `${me.name}의 친구 관계 지도 · ${data.round?.name || ''}`;
 
   const intro = el('section', { class: 'card' }, [
+    el('div', { class: 'badge blue', style: { marginBottom: '8px' }, text: `${data.round?.name || ''} 조사` }),
     el('h1', { text: `${me.name}님, 안녕하세요 👋` }),
     el('p', {}, [
       '우리 반 친구들과 나의 관계를 표시해 주세요. ',
@@ -45,7 +46,7 @@ function render() {
     el('div', { class: 'alert info' }, [
       '🔒 이 페이지는 나만 볼 수 있어요. 친구들은 내가 표시한 내용을 볼 수 없고, 선생님만 확인해요. 솔직하게 표시해 주세요.',
     ]),
-    room.locked ? el('div', { class: 'alert warn', text: '선생님이 제출을 마감했어요. 내가 표시한 내용을 확인만 할 수 있어요.' }) : null,
+    room.locked ? el('div', { class: 'alert warn', text: `${data.round?.name || '이번'} 조사가 마감되었어요. 내가 표시한 내용을 확인만 할 수 있고, 선생님이 다음 조사를 시작하면 다시 표시할 수 있어요.` }) : null,
     data.submittedAt && !room.locked ? el('div', { class: 'alert success', text: '제출을 완료했어요. 마감 전까지는 언제든 수정하고 다시 제출할 수 있어요.' }) : null,
   ]);
   app.append(intro);
@@ -296,15 +297,18 @@ function openEditor(id) {
 async function submit() {
   if (!canSubmit()) return;
   try {
-    data = await api(`/api/student/${encodeURIComponent(token)}/relations`, { method: 'PUT', body: { relations: draft } });
+    data = await api(`/api/student/${encodeURIComponent(token)}/relations`, { method: 'PUT', body: { relations: draft, roundId: data.round?.id } });
     draft = JSON.parse(JSON.stringify(data.relations));
     dirty = false;
     render();
     toast('제출 완료! 고마워요 🎉');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (err) {
-    toast(err.message, 4000);
-    if (err.status === 403) { try { data = await api(`/api/student/${encodeURIComponent(token)}`); render(); } catch { /* ignore */ } }
+    toast(err.message, 5000);
+    if (err.status === 403 || err.status === 409) {
+      // 마감되었거나 새 회차가 시작됨 → 최신 상태로 다시 불러오기
+      try { data = await api(`/api/student/${encodeURIComponent(token)}`); draft = JSON.parse(JSON.stringify(data.relations || {})); dirty = false; render(); } catch { /* ignore */ }
+    }
   }
 }
 

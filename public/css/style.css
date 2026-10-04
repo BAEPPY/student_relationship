@@ -321,3 +321,6 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .parse-list label { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; cursor: pointer; }
 .parse-list .parse-source { grid-column: 3; font-size: 12.5px; }
 .parse-icon { font-size: 16px; }
+
+/* 회차 선택 줄 */
+.round-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 12px; }

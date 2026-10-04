@@ -7,7 +7,7 @@ const app = document.getElementById('app');
 
 let state = null;
 let graph = null;
-let ui = { filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null };
+let ui = { filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null, roundId: null, showAllHistory: false };
 let popoverEl = null;
 let pollTimer = null;
 
@@ -17,7 +17,8 @@ const nameOf = (id) => state?.stats[id]?.name || '?';
 // ---------- 데이터 ----------
 async function load({ silent = false } = {}) {
   try {
-    state = await api(base);
+    state = await api(ui.roundId ? `${base}?round=${encodeURIComponent(ui.roundId)}` : base);
+    ui.roundId = state.round.id;
     savedRooms.add({ name: state.room.name, adminToken, createdAt: state.room.createdAt });
     document.getElementById('last-updated').textContent = `업데이트 ${fmtDate(new Date().toISOString())}`;
     renderAll();
@@ -30,6 +31,7 @@ async function load({ silent = false } = {}) {
 
 function applyUpdate(next) {
   state = next;
+  ui.roundId = state.round.id;
   renderAll();
 }
 
@@ -53,8 +55,9 @@ function renderAll() {
   graph.setSelectedEdge(ui.selectedEdge);
   renderSidePanel();
   renderAnalysis();
+  renderHistory();
   renderStudents();
-  document.title = `${state.room.name} · 선생님 페이지`;
+  document.title = `${state.room.name} · ${state.round.name} · 선생님 페이지`;
 }
 
 function buildSkeleton() {
@@ -78,6 +81,7 @@ function buildSkeleton() {
       el('p', { class: 'muted', style: { marginTop: '8px' }, text: '화살표를 누르면 이유를 볼 수 있어요. 학생을 누르면 그 학생의 관계만 강조돼요. 빈 곳을 끌면 이동, 마우스 휠로 확대/축소, 학생 상자는 끌어서 옮길 수 있어요. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
     ]),
     el('section', { class: 'card', id: 'analysis-card' }),
+    el('section', { class: 'card', id: 'history-card' }),
     el('section', { class: 'card', id: 'students-card' }),
     el('section', { class: 'card', id: 'danger-card' }),
   );
@@ -118,27 +122,64 @@ function renderToolbar() {
 }
 
 // ---------- 헤더 ----------
+function suggestRoundName() {
+  const d = new Date();
+  const base0 = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
+  if (!state.rounds.some((r) => r.name === base0)) return base0;
+  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  const base1 = `${next.getFullYear()}년 ${next.getMonth() + 1}월`;
+  return state.rounds.some((r) => r.name === base1) ? `${base0} (2)` : base1;
+}
+
 function renderHeader() {
-  const { room, analysis, students } = state;
+  const { room, analysis, students, round, rounds } = state;
   const card = document.getElementById('header-card');
   const pct = students.length ? Math.round((analysis.submittedCount / students.length) * 100) : 0;
+  const isCurrent = round.id === state.currentRoundId;
+  const roundSelect = el('select', { class: 'select' }, rounds.map((r) => el('option', {
+    value: r.id, selected: r.id === round.id ? true : null,
+    text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}`,
+  })));
+  roundSelect.addEventListener('change', () => { ui.roundId = roundSelect.value; closePopover(); ui.selectedEdge = null; ui.highlight = null; ui.panelStudent = null; load(); });
   setChildren(card,
     el('div', { class: 'card-title' }, [
       el('div', {}, [
         el('h1', { text: room.name }),
-        el('div', { class: 'muted', text: `만든 날짜 ${fmtDate(room.createdAt)} · 최소 표시 인원 ${room.minRelations}명` }),
+        el('div', { class: 'muted', text: `만든 날짜 ${fmtDate(room.createdAt)} · 최소 표시 인원 ${room.minRelations}명 · 회차 ${rounds.length}개` }),
       ]),
       el('div', { class: 'btn-row' }, [
         el('a', { class: 'btn primary', href: `/t/${encodeURIComponent(adminToken)}/print`, target: '_blank', text: '학생 QR 카드 인쇄' }),
         el('a', { class: 'btn orange', href: `/t/${encodeURIComponent(adminToken)}/seats`, text: '자리 배정' }),
         el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
         el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }),
-        el('button', { type: 'button', class: `btn ${room.locked ? '' : 'danger'}`, text: room.locked ? '마감 해제' : '제출 마감', onClick: () => {
-          if (!room.locked && !confirm('제출을 마감하면 학생들이 더 이상 수정할 수 없어요. 마감할까요?')) return;
-          action(api(base, { method: 'PATCH', body: { locked: !room.locked } }), room.locked ? '마감을 해제했어요.' : '제출을 마감했어요.');
-        } }),
         el('button', { type: 'button', class: 'btn', text: '새로고침', onClick: () => load() }),
       ]),
+    ]),
+    el('div', { class: 'round-bar' }, [
+      el('span', { style: { fontWeight: 700 }, text: '보고 있는 회차' }),
+      roundSelect,
+      isCurrent
+        ? el('span', { class: `badge ${round.open ? 'green' : 'gray'}`, text: round.open ? '학생이 지금 답하는 회차' : '마감됨' })
+        : el('span', { class: 'badge warn', text: '지난 회차 (읽기 전용)' }),
+      el('span', { style: { flex: 1 } }),
+      isCurrent ? el('button', { type: 'button', class: `btn small ${round.open ? 'danger' : ''}`, text: round.open ? '이 회차 마감' : '마감 해제', onClick: () => {
+        if (round.open && !confirm(`${round.name} 조사를 마감하면 학생들이 더 이상 수정할 수 없어요. 마감할까요?`)) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { closed: round.open } }), round.open ? '마감했어요.' : '마감을 해제했어요.');
+      } }) : null,
+      el('button', { type: 'button', class: 'btn small primary', text: '새 회차 시작', onClick: () => {
+        const name = prompt('새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요.', suggestRoundName());
+        if (name === null || !name.trim()) return;
+        action(api(`${base}/rounds`, { method: 'POST', body: { name: name.trim() } }), `${name.trim()} 조사를 시작했어요.`);
+      } }),
+      el('button', { type: 'button', class: 'btn small', text: '이름 바꾸기', onClick: () => {
+        const name = prompt('회차 이름', round.name);
+        if (name === null || !name.trim() || name.trim() === round.name) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { name: name.trim() } }), '이름을 바꿨어요.');
+      } }),
+      rounds.length > 1 ? el('button', { type: 'button', class: 'btn small danger', text: '회차 삭제', onClick: () => {
+        if (!confirm(`${round.name} 회차와 그 응답을 모두 지울까요? 되돌릴 수 없어요.`)) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'DELETE' }), '회차를 지웠어요.');
+      } }) : null,
     ]),
     el('div', { class: 'stat-row' }, [
       stat('제출', `${analysis.submittedCount} / ${students.length}명`, `${pct}%`),
@@ -146,7 +187,7 @@ function renderHeader() {
       stat('안 좋은 사이 화살표', `${analysis.badCount}개`, `서로 안 좋은 사이 ${analysis.mutualBad}쌍`),
       stat('고립 위험', analysis.isolated.length ? analysis.isolated.join(', ') : '없음', '좋은 사이로 지목받지 못한 학생'),
     ]),
-    room.locked ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0 }, text: '제출이 마감된 상태예요. 학생 페이지는 읽기 전용이에요.' }) : null,
+    isCurrent && !round.open ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0 }, text: `${round.name} 조사가 마감된 상태예요. 학생 페이지는 읽기 전용이에요. 다음 조사를 하려면 "새 회차 시작"을 누르세요.` }) : null,
     state.notice ? el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 }, text: `⚠️ ${state.notice}` }) : null,
   );
 }
@@ -225,6 +266,7 @@ function renderSidePanel() {
       stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('준 ❤️', st.outGood.length), stat('준 ⚡', st.outBad.length),
     ]),
     teacherNoteBox(id),
+    state.history.trend.length > 1 ? el('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '10px' }, text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
     section('나를 안 좋은 사이로 표시한 친구', st.inBad.map((f) => line(f, id))),
     section('내가 좋은 사이로 표시한 친구', st.outGood.map((t) => line(id, t))),
@@ -309,6 +351,85 @@ function renderAnalysis() {
   );
 }
 
+// ---------- 회차별 변화 분석 ----------
+function renderHistory() {
+  const card = document.getElementById('history-card');
+  const h = state.history;
+  const short = (name) => name.replace(/^\d{4}년 /, '');
+  if (!h || h.trend.length < 2) {
+    setChildren(card,
+      el('div', { class: 'card-title' }, [el('h2', { text: '회차별 변화 분석' })]),
+      el('p', { class: 'muted', text: '회차가 2개 이상 되면 달마다 관계가 어떻게 변했는지 여기에서 비교할 수 있어요. 다음 달 조사는 위의 "새 회차 시작"으로 시작하세요.' }),
+    );
+    return;
+  }
+  const c = h.changes;
+  const arrow = (d) => (d > 0 ? `▲${d}` : d < 0 ? `▼${-d}` : '－');
+  const trendTable = el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
+    el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '갈등 높음 쌍', '고립 위험'].map((t) => el('th', { text: t })))]),
+    el('tbody', {}, h.trend.map((t, i) => {
+      const prev = h.trend[i - 1];
+      const cell = (v, key) => el('td', { class: 'num' }, [String(v), prev ? el('span', { class: 'muted', style: { fontSize: '12px', marginLeft: '4px' }, text: arrow(v - prev[key]) }) : null]);
+      return el('tr', { style: t.id === state.round.id ? { background: 'var(--blue-light)' } : null }, [
+        el('td', {}, [el('a', { href: '#', text: t.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); ui.roundId = t.id; load(); } }), t.open ? el('span', { class: 'badge green', style: { marginLeft: '6px' }, text: '진행 중' }) : null]),
+        el('td', { class: 'num', text: `${t.submitted}/${t.total}` }),
+        cell(t.good, 'good'), cell(t.bad, 'bad'), cell(t.mutualBad, 'mutualBad'), cell(t.highRisk, 'highRisk'), cell(t.isolated, 'isolated'),
+      ]);
+    })),
+  ])]);
+
+  const pairList = (items, empty) => items.length
+    ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, items.map((p) => el('li', {}, [
+      el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); document.getElementById('graph-container').scrollIntoView({ behavior: 'smooth', block: 'center' }); } }),
+      p.probability !== null ? el('span', { class: `badge ${p.probability >= 70 ? 'high' : p.probability >= 40 ? 'medium' : 'low'}`, style: { marginLeft: '6px' }, text: `${p.probability}%` }) : null,
+    ])))
+    : el('p', { class: 'muted', style: { margin: '4px 0 10px' }, text: empty });
+
+  const studentRows = h.students.map((s) => el('tr', {}, [
+    el('td', {}, [el('a', { href: '#', text: s.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } })]),
+    ...s.rounds.map((r) => el('td', { class: 'num' }, [
+      r.submitted ? `${r.inGood} / ${r.inBad}` : el('span', { class: 'muted', text: `${r.inGood} / ${r.inBad} (미제출)` }),
+      r.flags.includes('isolated') ? el('span', { class: 'badge high', style: { marginLeft: '4px' }, text: '고립' }) : null,
+    ])),
+  ]));
+  const shownRows = ui.showAllHistory ? studentRows : studentRows.slice(0, 12);
+
+  setChildren(card,
+    el('div', { class: 'card-title' }, [el('h2', { text: '회차별 변화 분석' }), el('span', { class: 'muted', text: `${c.prevName} → ${c.lastName} 비교` })]),
+    el('h3', { text: '학급 추세' }),
+    trendTable,
+    el('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
+      el('div', {}, [
+        el('h3', { text: `새로 생긴 갈등 (${c.newConflicts.length})` }),
+        pairList(c.newConflicts, '없어요.'),
+        el('h3', { text: `계속되는 갈등 (${c.persistent.length})` }),
+        pairList(c.persistent, '없어요.'),
+        el('h3', { text: `해소된 갈등 (${c.resolved.length})` }),
+        pairList(c.resolved, '없어요.'),
+      ]),
+      el('div', {}, [
+        el('h3', { text: '관심이 필요한 학생' }),
+        c.worsened.length ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, c.worsened.slice(0, 8).map((s) => el('li', {}, [
+          el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
+          el('span', { class: 'muted', text: ` · 받은 ⚡ ${arrow(s.inBadDelta)} · 받은 ❤️ ${arrow(s.inGoodDelta)}${s.newlyIsolated ? ' · 새로 고립 위험' : ''}` }),
+        ]))) : el('p', { class: 'muted', text: '나빠진 학생이 없어요.' }),
+        el('h3', { text: '좋아진 학생' }),
+        c.improved.length ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, c.improved.slice(0, 8).map((s) => el('li', {}, [
+          el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
+          el('span', { class: 'muted', text: ` · 받은 ❤️ ${arrow(s.inGoodDelta)} · 받은 ⚡ ${arrow(s.inBadDelta)}${s.recovered ? ' · 고립 위험 벗어남' : ''}` }),
+        ]))) : el('p', { class: 'muted', text: '아직 없어요.' }),
+      ]),
+    ]),
+    el('h3', { style: { marginTop: '10px' }, text: '학생별 받은 ❤️ / ⚡' }),
+    el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
+      el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), ...h.trend.map((t) => el('th', { text: short(t.name) }))])]),
+      el('tbody', {}, shownRows),
+    ])]),
+    studentRows.length > 12 ? el('button', { type: 'button', class: 'btn small', style: { marginTop: '8px' }, text: ui.showAllHistory ? '접기' : `${studentRows.length - 12}명 더 보기`, onClick: () => { ui.showAllHistory = !ui.showAllHistory; renderHistory(); } }) : null,
+    el('p', { class: 'muted', style: { marginTop: '10px', marginBottom: 0 }, text: '"새로 생긴 갈등"은 지난 회차에 없던 안 좋은 사이가 이번 회차에 생긴 쌍, "해소된 갈등"은 지난 회차에 있던 안 좋은 사이가 이번 회차에 사라진 쌍이에요. 응답이 없는 학생의 관계는 변화로 세지 않아요.' }),
+  );
+}
+
 // ---------- 학생 관리 ----------
 function renderStudents() {
   const card = document.getElementById('students-card');
@@ -330,8 +451,8 @@ function renderStudents() {
           action(api(`${base}/students/${encodeURIComponent(s.id)}`, { method: 'PATCH', body: { name } }), '이름을 바꿨어요.');
         } }),
         el('button', { type: 'button', class: 'btn small', text: '응답 초기화', onClick: () => {
-          if (!confirm(`${s.name} 학생이 표시한 관계를 모두 지울까요? 학생은 다시 표시할 수 있어요.`)) return;
-          action(api(`${base}/students/${encodeURIComponent(s.id)}/reset`, { method: 'POST' }), '응답을 초기화했어요.');
+          if (!confirm(`${state.round.name} 회차에서 ${s.name} 학생이 표시한 관계를 모두 지울까요?`)) return;
+          action(api(`${base}/students/${encodeURIComponent(s.id)}/reset`, { method: 'POST', body: { roundId: state.round.id } }), '응답을 초기화했어요.');
         } }),
         el('button', { type: 'button', class: 'btn small', text: '링크 재발급', onClick: () => {
           if (!confirm(`${s.name} 학생의 링크(QR)를 새로 만들까요? 기존 QR은 더 이상 열리지 않아요.`)) return;

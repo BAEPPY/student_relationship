@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeStats, analyzeConflicts, listRelations } from '../server/analysis.js';
+import { analyzeHistory } from '../server/history.js';
+import { ensureRounds } from '../server/rounds.js';
 
 function room(overrides = {}) {
   return {
@@ -98,4 +100,37 @@ test('analyzeConflicts: 공통 친구가 많을수록 갈등 가능성이 오른
   const p1 = analyzeConflicts(noShared).pairs.find((p) => p.a === 'a' && p.b === 'b');
   const p2 = analyzeConflicts(shared).pairs.find((p) => p.a === 'a' && p.b === 'b');
   assert.equal(p2.probability - p1.probability, 8);
+});
+
+test('analyzeHistory: 새로 생긴/해소된/계속되는 갈등과 학생 변화', () => {
+  const r = room();
+  r.rounds = [
+    { id: 'r1', name: '9월', startedAt: 'x', closedAt: 'y', relations: { a: { b: { type: 'bad', tags: ['tease'] }, c: { type: 'bad', tags: ['tease'] } }, b: { a: { type: 'good' } } }, submissions: { a: { submittedAt: 'x' }, b: { submittedAt: 'x' } } },
+    { id: 'r2', name: '10월', startedAt: 'y', closedAt: null, relations: { a: { c: { type: 'bad', tags: ['tease'] }, d: { type: 'bad', tags: ['hurt'] } }, b: { a: { type: 'good' } } }, submissions: { a: { submittedAt: 'y' }, b: { submittedAt: 'y' } } },
+  ];
+  r.currentRoundId = 'r2';
+  const h = analyzeHistory(r);
+  assert.equal(h.trend.length, 2);
+  assert.deepEqual(h.trend.map((t) => t.bad), [2, 2]);
+  assert.deepEqual(h.changes.newConflicts.map((p) => [p.a, p.b].sort().join('')), ['ad']);
+  assert.deepEqual(h.changes.resolved.map((p) => [p.a, p.b].sort().join('')), ['ab']);
+  assert.deepEqual(h.changes.persistent.map((p) => [p.a, p.b].sort().join('')), ['ac']);
+  const d = h.changes.worsened.find((s) => s.id === 'd');
+  assert.equal(d.inBadDelta, 1);
+  const b = h.changes.improved.find((s) => s.id === 'b');
+  assert.equal(b.inBadDelta, -1);
+  assert.equal(h.pairHistory.length, 3);
+});
+
+test('ensureRounds: 예전 구조를 회차로 바꾸고, 여러 번 불러도 같다', () => {
+  const r = room({ relations: { a: { b: { type: 'good' } } }, submissions: { a: { submittedAt: 'x' } }, locked: true, createdAt: '2026-09-10T00:00:00.000Z' });
+  ensureRounds(r);
+  assert.equal(r.rounds.length, 1);
+  assert.equal(r.rounds[0].name, '2026년 9월');
+  assert.ok(r.rounds[0].closedAt);
+  assert.equal(r.relations, undefined);
+  assert.equal(r.locked, undefined);
+  const snapshot = JSON.stringify(r);
+  ensureRounds(r);
+  assert.equal(JSON.stringify(r), snapshot);
 });

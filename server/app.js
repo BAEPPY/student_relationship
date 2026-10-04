@@ -6,6 +6,8 @@ import { FileStore } from './store.js';
 import { newToken, newId } from './tokens.js';
 import { REASON_CATALOG, isValidTag } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
+import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
+import { analyzeHistory } from './history.js';
 import * as pages from './pages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,10 +15,12 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 const LIMITS = {
   roomName: 60,
+  roundName: 40,
   studentName: 30,
   students: 80,
   reason: 300,
   minRelations: 10,
+  rounds: 36,
 };
 
 class HttpError extends Error {
@@ -53,6 +57,21 @@ function makeStudent(name) {
   return { id: newId(), name, token: newToken(16), createdAt: new Date().toISOString() };
 }
 
+function newRoom(name, names, minRelations) {
+  const now = new Date().toISOString();
+  const round = makeRound(monthName(now), now);
+  return {
+    id: newId(6),
+    name,
+    adminToken: newToken(24),
+    createdAt: now,
+    minRelations,
+    students: names.map(makeStudent),
+    rounds: [round],
+    currentRoundId: round.id,
+  };
+}
+
 export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null, storageKind = 'file' } = {}) {
   const app = express();
   app.set('trust proxy', true);
@@ -74,18 +93,19 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   async function requireRoom(req) {
     const room = await store.findRoomByAdminToken(req.params.adminToken);
     if (!room) throw new HttpError(404, '교실을 찾을 수 없어요. 관리자 링크를 확인해 주세요.');
-    return room;
+    return ensureRounds(room);
   }
 
   async function requireStudent(req) {
     const found = await store.findStudentByToken(req.params.token);
     if (!found) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
+    ensureRounds(found.room);
     return found;
   }
 
   // 교실을 잠그고(저장소에 따라) 읽어서 고친 뒤 저장합니다. mutator 가 던지면 아무것도 바뀌지 않습니다.
   async function mutateRoom(room, mutator) {
-    const updated = await store.updateRoom(room.id, mutator);
+    const updated = await store.updateRoom(room.id, (fresh) => { ensureRounds(fresh); mutator(fresh); });
     if (!updated) throw new HttpError(404, '교실을 찾을 수 없어요. 관리자 링크를 확인해 주세요.');
     return updated;
   }
@@ -96,22 +116,46 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     return student;
   }
 
+  function requireRound(room, roundId) {
+    const round = findRound(room, roundId);
+    if (!round) throw new HttpError(404, '회차를 찾을 수 없어요.');
+    return round;
+  }
+
   function effectiveMin(room, classmateCount) {
     return Math.max(0, Math.min(room.minRelations ?? 3, classmateCount));
   }
 
-  function teacherView(req, room) {
-    const stats = computeStats(room);
-    const analysis = analyzeConflicts(room, stats);
+  function roundSummary(room, round) {
+    const rr = roundRoom(room, round);
+    const stats = computeStats(rr);
+    const submitted = Object.values(stats).filter((s) => s.submitted).length;
+    return {
+      ...roundView(round),
+      submitted,
+      total: room.students.length,
+      good: Object.values(stats).reduce((n, s) => n + s.outGood.length, 0),
+      bad: Object.values(stats).reduce((n, s) => n + s.outBad.length, 0),
+    };
+  }
+
+  function teacherView(req, room, roundId = null) {
+    const round = roundId ? requireRound(room, roundId) : currentRound(room);
+    const rr = roundRoom(room, round);
+    const stats = computeStats(rr);
+    const analysis = analyzeConflicts(rr, stats);
     return {
       room: {
         id: room.id,
         name: room.name,
         createdAt: room.createdAt,
-        locked: Boolean(room.locked),
+        locked: Boolean(round.closedAt),
         minRelations: room.minRelations ?? 3,
         adminUrl: adminUrl(req, room),
       },
+      round: roundView(round),
+      currentRoundId: currentRound(room).id,
+      rounds: room.rounds.map((r) => roundSummary(room, r)),
       students: room.students.map((s) => ({
         id: s.id,
         name: s.name,
@@ -120,9 +164,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         submitted: stats[s.id].submitted,
         submittedAt: stats[s.id].submittedAt,
       })),
-      relations: listRelations(room),
+      relations: listRelations(rr),
       stats,
       analysis,
+      history: analyzeHistory(room),
       catalog: REASON_CATALOG,
       notice: storageNotice,
       seating: room.seating || null,
@@ -131,16 +176,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   }
 
   function studentView(req, room, student) {
+    const round = currentRound(room);
     const classmates = room.students.filter((s) => s.id !== student.id).map((s) => ({ id: s.id, name: s.name }));
-    const mine = room.relations?.[student.id] || {};
+    const mine = round.relations?.[student.id] || {};
     const relations = {};
     for (const c of classmates) if (mine[c.id]) relations[c.id] = mine[c.id];
     return {
-      room: { name: room.name, locked: Boolean(room.locked), minRelations: effectiveMin(room, classmates.length) },
+      room: { name: room.name, locked: Boolean(round.closedAt), minRelations: effectiveMin(room, classmates.length) },
+      round: roundView(round),
       me: { id: student.id, name: student.name },
       classmates,
       relations,
-      submittedAt: room.submissions?.[student.id]?.submittedAt || null,
+      submittedAt: round.submissions?.[student.id]?.submittedAt || null,
       catalog: REASON_CATALOG,
     };
   }
@@ -168,35 +215,15 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (!Number.isFinite(minRelations)) minRelations = 3;
     minRelations = Math.max(1, Math.min(LIMITS.minRelations, minRelations));
 
-    const room = {
-      id: newId(6),
-      name,
-      adminToken: newToken(24),
-      createdAt: new Date().toISOString(),
-      locked: false,
-      minRelations,
-      students: names.map(makeStudent),
-      relations: {},
-      submissions: {},
-    };
+    const room = newRoom(name, names, minRelations);
     await store.createRoom(room);
     res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
   });
 
-  // 체험용 예시 교실 (임의의 관계 데이터 포함)
+  // 체험용 예시 교실 (세 회차의 임의 관계 데이터 포함)
   app.post('/api/rooms/demo', async (req, res) => {
     const names = ['김하늘', '이도윤', '박서연', '최지우', '정민준', '강예린', '조현우', '윤서아', '임시우', '한지민', '오준서', '서다은'];
-    const room = {
-      id: newId(6),
-      name: '예시 교실 (체험용)',
-      adminToken: newToken(24),
-      createdAt: new Date().toISOString(),
-      locked: false,
-      minRelations: 3,
-      students: names.map(makeStudent),
-      relations: {},
-      submissions: {},
-    };
+    const room = newRoom('예시 교실 (체험용)', names, 3);
     const ids = room.students.map((s) => s.id);
     const goodTags = REASON_CATALOG.good.map((r) => r.id);
     const badTags = REASON_CATALOG.bad.map((r) => r.id);
@@ -204,23 +231,42 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     let seed = 7;
     const rand = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
     const pick = (arr) => arr[Math.floor(rand() * arr.length)];
-    const now = new Date().toISOString();
-    ids.forEach((from, i) => {
-      if (i === ids.length - 1) return; // 한 명은 미제출로 남겨 둠
-      const rels = {};
-      const count = 3 + Math.floor(rand() * 3);
-      const others = ids.filter((x) => x !== from);
-      while (Object.keys(rels).length < count) {
-        const to = pick(others);
-        if (rels[to]) continue;
-        const isBad = rand() < 0.3;
-        rels[to] = isBad
-          ? { type: 'bad', tags: [pick(badTags)], reason: rand() < 0.5 ? '지난주에 말다툼을 했어요.' : '', updatedAt: now }
-          : { type: 'good', tags: rand() < 0.7 ? [pick(goodTags)] : [], reason: rand() < 0.3 ? '쉬는 시간에 항상 같이 놀아요.' : '', updatedAt: now };
-      }
-      room.relations[from] = rels;
-      room.submissions[from] = { submittedAt: now };
-    });
+
+    const now = new Date();
+    const monthsAgo = (k) => new Date(now.getFullYear(), now.getMonth() - k, 5, 9, 0, 0);
+    const makeRelations = (prev, at, skipLast) => {
+      const relations = {};
+      const submissions = {};
+      ids.forEach((from, i) => {
+        if (skipLast && i === ids.length - 1) return; // 지금 회차는 한 명 미제출 상태로
+        const rels = {};
+        const others = ids.filter((x) => x !== from);
+        // 지난 회차 관계를 70% 유지하고 일부는 바뀜
+        for (const [to, rel] of Object.entries(prev?.[from] || {})) if (rand() < 0.7) rels[to] = { ...rel, updatedAt: at };
+        const count = 3 + Math.floor(rand() * 3);
+        while (Object.keys(rels).length < count) {
+          const to = pick(others);
+          if (rels[to]) continue;
+          const isBad = rand() < 0.3;
+          rels[to] = isBad
+            ? { type: 'bad', tags: [pick(badTags)], reason: rand() < 0.5 ? '지난주에 말다툼을 했어요.' : '', updatedAt: at }
+            : { type: 'good', tags: rand() < 0.7 ? [pick(goodTags)] : [], reason: rand() < 0.3 ? '쉬는 시간에 항상 같이 놀아요.' : '', updatedAt: at };
+        }
+        relations[from] = rels;
+        submissions[from] = { submittedAt: at };
+      });
+      return { relations, submissions };
+    };
+
+    room.rounds = [];
+    let prev = null;
+    for (let k = 2; k >= 0; k--) {
+      const at = monthsAgo(k).toISOString();
+      const data = makeRelations(prev, at, k === 0);
+      room.rounds.push({ id: newId(), name: monthName(at), startedAt: at, closedAt: k === 0 ? null : monthsAgo(k - 1).toISOString(), ...data });
+      prev = data.relations;
+    }
+    room.currentRoundId = room.rounds[room.rounds.length - 1].id;
     await store.createRoom(room);
     res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
   });
@@ -228,14 +274,17 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   // ---------- teacher API ----------
   app.get('/api/teacher/:adminToken', async (req, res) => {
     const room = await requireRoom(req);
-    res.json(teacherView(req, room));
+    res.json(teacherView(req, room, req.query.round ? String(req.query.round) : null));
   });
 
   app.patch('/api/teacher/:adminToken', async (req, res) => {
     const found = await requireRoom(req);
     const body = req.body || {};
     const room = await mutateRoom(found, (room) => {
-      if (typeof body.locked === 'boolean') room.locked = body.locked;
+      if (typeof body.locked === 'boolean') {
+        const round = currentRound(room);
+        round.closedAt = body.locked ? (round.closedAt || new Date().toISOString()) : null;
+      }
       if (body.minRelations !== undefined) {
         const n = Number.parseInt(body.minRelations, 10);
         if (!Number.isFinite(n) || n < 1 || n > LIMITS.minRelations) throw bad(`최소 인원은 1~${LIMITS.minRelations} 사이여야 해요.`);
@@ -256,6 +305,59 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json({ ok: true });
   });
 
+  // ---------- rounds ----------
+  // 새 회차 시작: 지금 회차를 마감하고 빈 회차를 엽니다.
+  app.post('/api/teacher/:adminToken/rounds', async (req, res) => {
+    const found = await requireRoom(req);
+    const name = cleanName(req.body?.name) || monthName();
+    if (name.length > LIMITS.roundName) throw bad(`회차 이름은 ${LIMITS.roundName}자 이하로 적어 주세요.`);
+    let created = null;
+    const room = await mutateRoom(found, (room) => {
+      if (room.rounds.length >= LIMITS.rounds) throw bad(`회차는 ${LIMITS.rounds}개까지 만들 수 있어요.`);
+      if (room.rounds.some((r) => r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}`);
+      const now = new Date().toISOString();
+      const cur = currentRound(room);
+      if (!cur.closedAt) cur.closedAt = now;
+      created = makeRound(name, now);
+      room.rounds.push(created);
+      room.currentRoundId = created.id;
+    });
+    res.status(201).json(teacherView(req, room, created.id));
+  });
+
+  // 회차 이름 바꾸기 / 마감 / 마감 해제 (마감 해제는 가장 최근 회차만)
+  app.patch('/api/teacher/:adminToken/rounds/:roundId', async (req, res) => {
+    const found = await requireRoom(req);
+    requireRound(found, req.params.roundId);
+    const body = req.body || {};
+    const room = await mutateRoom(found, (room) => {
+      const round = requireRound(room, req.params.roundId);
+      if (body.name !== undefined) {
+        const name = cleanName(body.name);
+        if (!name || name.length > LIMITS.roundName) throw bad('회차 이름이 올바르지 않아요.');
+        if (room.rounds.some((r) => r.id !== round.id && r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}`);
+        round.name = name;
+      }
+      if (typeof body.closed === 'boolean') {
+        if (!body.closed && round.id !== currentRound(room).id) throw bad('지난 회차는 다시 열 수 없어요. 새 회차를 시작해 주세요.');
+        round.closedAt = body.closed ? (round.closedAt || new Date().toISOString()) : null;
+      }
+    });
+    res.json(teacherView(req, room, req.params.roundId));
+  });
+
+  app.delete('/api/teacher/:adminToken/rounds/:roundId', async (req, res) => {
+    const found = await requireRoom(req);
+    requireRound(found, req.params.roundId);
+    const room = await mutateRoom(found, (room) => {
+      if (room.rounds.length <= 1) throw bad('회차가 하나뿐이면 지울 수 없어요. 대신 학생 응답 초기화를 사용해 주세요.');
+      room.rounds = room.rounds.filter((r) => r.id !== req.params.roundId);
+      if (room.currentRoundId === req.params.roundId) room.currentRoundId = room.rounds[room.rounds.length - 1].id;
+    });
+    res.json(teacherView(req, room));
+  });
+
+  // ---------- students ----------
   app.post('/api/teacher/:adminToken/students', async (req, res) => {
     const found = await requireRoom(req);
     const names = parseStudentNames(req.body?.name ?? req.body?.students);
@@ -290,11 +392,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const idx = room.students.findIndex((s) => s.id === req.params.studentId);
       if (idx === -1) throw new HttpError(404, '학생을 찾을 수 없어요.');
       const [student] = room.students.splice(idx, 1);
-      room.relations ||= {};
-      room.submissions ||= {};
-      delete room.relations[student.id];
-      delete room.submissions[student.id];
-      for (const targets of Object.values(room.relations)) delete targets[student.id];
+      for (const round of room.rounds) {
+        delete round.relations[student.id];
+        delete round.submissions[student.id];
+        for (const targets of Object.values(round.relations)) delete targets[student.id];
+      }
       if (room.teacherNotes) {
         delete room.teacherNotes.students?.[student.id];
         room.teacherNotes.rules = (room.teacherNotes.rules || []).filter((r) => r.a !== student.id && r.b !== student.id);
@@ -334,18 +436,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(teacherView(req, room));
   });
 
-  // 학생 응답 초기화
+  // 학생 응답 초기화 (기본: 지금 회차, body.roundId 로 지정 가능)
   app.post('/api/teacher/:adminToken/students/:studentId/reset', async (req, res) => {
     const found = await requireRoom(req);
     findStudent(found, req.params.studentId);
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
     const room = await mutateRoom(found, (room) => {
       const student = findStudent(room, req.params.studentId);
-      room.relations ||= {};
-      room.submissions ||= {};
-      delete room.relations[student.id];
-      delete room.submissions[student.id];
+      const round = roundId ? requireRound(room, roundId) : currentRound(room);
+      delete round.relations[student.id];
+      delete round.submissions[student.id];
     });
-    res.json(teacherView(req, room));
+    res.json(teacherView(req, room, roundId));
   });
 
   // 학생 링크(QR) 재발급 - 기존 링크는 더 이상 동작하지 않음
@@ -397,17 +499,24 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/api/teacher/:adminToken/export.json', async (req, res) => {
     const room = await requireRoom(req);
     const view = teacherView(req, room);
+    const rounds = room.rounds.map((r) => {
+      const rr = roundRoom(room, r);
+      const stats = computeStats(rr);
+      return { ...roundView(r), relations: listRelations(rr), analysis: analyzeConflicts(rr, stats) };
+    });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), relations: view.relations, analysis: view.analysis, teacherNotes: view.teacherNotes, seating: view.seating });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
     const room = await requireRoom(req);
     const nameOf = Object.fromEntries(room.students.map((s) => [s.id, s.name]));
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['보낸 학생', '받은 학생', '관계', '선택한 이유', '직접 쓴 이유', '수정 시각'].map(esc).join(',')];
-    for (const r of listRelations(room)) {
-      rows.push([nameOf[r.from], nameOf[r.to], r.type === 'good' ? '좋은 사이' : '안 좋은 사이', r.tagLabels.join('; '), r.reason, r.updatedAt].map(esc).join(','));
+    const rows = [['회차', '보낸 학생', '받은 학생', '관계', '선택한 이유', '직접 쓴 이유', '수정 시각'].map(esc).join(',')];
+    for (const round of room.rounds) {
+      for (const r of listRelations(roundRoom(room, round))) {
+        rows.push([round.name, nameOf[r.from], nameOf[r.to], r.type === 'good' ? '좋은 사이' : '안 좋은 사이', r.tagLabels.join('; '), r.reason, r.updatedAt].map(esc).join(','));
+      }
     }
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.csv`);
     res.type('text/csv; charset=utf-8').send(`﻿${rows.join('\r\n')}`);
@@ -423,15 +532,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const { room: found, student: me } = await requireStudent(req);
     const input = req.body?.relations;
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('보낸 내용이 올바르지 않아요.');
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
 
     const room = await mutateRoom(found, (room) => {
       const student = room.students.find((s) => s.id === me.id && s.token === me.token);
       if (!student) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
-      if (room.locked) throw new HttpError(403, '선생님이 제출을 마감했어요. 더 이상 수정할 수 없어요.');
+      const round = currentRound(room);
+      if (roundId && roundId !== round.id) throw new HttpError(409, '선생님이 새 조사를 시작했어요. 화면을 새로고침한 뒤 다시 표시해 주세요.');
+      if (round.closedAt) throw new HttpError(403, '선생님이 이번 조사를 마감했어요. 더 이상 수정할 수 없어요.');
 
       const classmates = new Set(room.students.filter((s) => s.id !== student.id).map((s) => s.id));
       const now = new Date().toISOString();
-      const prev = room.relations?.[student.id] || {};
+      const prev = round.relations[student.id] || {};
       const next = {};
       for (const [toId, r] of Object.entries(input)) {
         if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
@@ -450,10 +562,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const min = effectiveMin(room, classmates.size);
       if (Object.keys(next).length < min) throw bad(`친구를 ${min}명 이상 표시해 주세요. (지금 ${Object.keys(next).length}명)`);
 
-      room.relations ||= {};
-      room.submissions ||= {};
-      room.relations[student.id] = next;
-      room.submissions[student.id] = { submittedAt: now, firstSubmittedAt: room.submissions[student.id]?.firstSubmittedAt || now };
+      round.relations[student.id] = next;
+      round.submissions[student.id] = { submittedAt: now, firstSubmittedAt: round.submissions[student.id]?.firstSubmittedAt || now };
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });

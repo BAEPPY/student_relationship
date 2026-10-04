@@ -14,8 +14,10 @@ const STORES = [
 ];
 
 for (const [label, makeStore] of STORES) describe(`API (${label})`, () => {
+let store;
 before(async () => {
-  const app = createApp({ store: await makeStore(), baseUrl: 'https://example.test' });
+  store = await makeStore();
+  const app = createApp({ store, baseUrl: 'https://example.test' });
   await new Promise((resolve) => { server = app.listen(0, resolve); });
   url = `http://127.0.0.1:${server.address().port}`;
 });
@@ -211,5 +213,89 @@ test('교사 메모와 지정 규칙 저장', async () => {
   const removed = await call(`/api/teacher/${t}/students/${a.id}`, 'DELETE');
   assert.equal(removed.json.teacherNotes.students[a.id], undefined);
   assert.equal(removed.json.teacherNotes.rules.length, 1);
+});
+
+test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제출 거부, 회차별 조회', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '회차반', students: '가\n나\n다', minRelations: 1 });
+  const t = created.json.adminToken;
+  let view = await call(`/api/teacher/${t}`);
+  assert.equal(view.json.rounds.length, 1);
+  assert.match(view.json.round.name, /^\d{4}년 \d{1,2}월$/);
+  const [a, b] = view.json.students;
+  const round1 = view.json.round.id;
+
+  // 1회차 제출
+  let r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'good', tags: [], reason: '' } } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.round.id, round1);
+
+  // 새 회차 시작 → 1회차 마감, 2회차 열림, 학생 화면은 빈 상태
+  r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' });
+  assert.equal(r.status, 201);
+  const round2 = r.json.round.id;
+  assert.notEqual(round2, round1);
+  assert.equal(r.json.rounds.length, 2);
+  assert.equal(r.json.rounds[0].open, false);
+  assert.equal(r.json.rounds[1].open, true);
+  const me = await call(`/api/student/${a.token}`);
+  assert.equal(me.json.round.id, round2);
+  assert.equal(me.json.round.name, '2026년 11월');
+  assert.deepEqual(me.json.relations, {});
+  assert.equal(me.json.submittedAt, null);
+
+  // 옛 회차 번호로 제출하면 거부 (데이터 섞임 방지)
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '' } } });
+  assert.equal(r.status, 409);
+  // 2회차로 제출
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '' } } });
+  assert.equal(r.status, 200);
+
+  // 1회차 데이터는 그대로
+  view = await call(`/api/teacher/${t}?round=${round1}`);
+  assert.equal(view.json.relations.length, 1);
+  assert.equal(view.json.relations[0].type, 'good');
+  view = await call(`/api/teacher/${t}`);
+  assert.equal(view.json.round.id, round2);
+  assert.equal(view.json.relations[0].type, 'bad');
+  assert.equal(view.json.history.trend.length, 2);
+  assert.equal(view.json.history.changes.newConflicts.length, 1);
+
+  // 같은 이름 회차 거부, 지난 회차 다시 열기 거부, 이름 바꾸기
+  assert.equal((await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' })).status, 400);
+  assert.equal((await call(`/api/teacher/${t}/rounds/${round1}`, 'PATCH', { closed: false })).status, 400);
+  r = await call(`/api/teacher/${t}/rounds/${round2}`, 'PATCH', { name: '11월 조사', closed: true });
+  assert.equal(r.json.round.name, '11월 조사');
+  assert.equal(r.json.round.open, false);
+  assert.equal((await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'good' } } })).status, 403);
+  r = await call(`/api/teacher/${t}/rounds/${round2}`, 'PATCH', { closed: false });
+  assert.equal(r.json.round.open, true);
+
+  // CSV 에 회차 열 포함, 회차 삭제
+  const csv = await call(`/api/teacher/${t}/export.csv`);
+  assert.match(csv.text, /회차/);
+  assert.match(csv.text, /11월 조사/);
+  r = await call(`/api/teacher/${t}/rounds/${round1}`, 'DELETE');
+  assert.equal(r.json.rounds.length, 1);
+  assert.equal((await call(`/api/teacher/${t}/rounds/${round2}`, 'DELETE')).status, 400);
+});
+
+test('예전 구조(relations/submissions/locked)의 교실도 회차로 자동 변환된다', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '옛반', students: '가\n나' });
+  const t = created.json.adminToken;
+  const legacy = await call(`/api/teacher/${t}`);
+  const [a, b] = legacy.json.students;
+  // 저장소에 예전 구조로 직접 써 넣음
+  const room = await store.findRoomByAdminToken(t);
+  await store.updateRoom(room.id, (rm) => {
+    delete rm.rounds; delete rm.currentRoundId;
+    rm.relations = { [a.id]: { [b.id]: { type: 'good', tags: [], reason: '' } } };
+    rm.submissions = { [a.id]: { submittedAt: '2026-09-01T00:00:00.000Z' } };
+    rm.locked = true;
+  });
+  const view = await call(`/api/teacher/${t}`);
+  assert.equal(view.json.rounds.length, 1);
+  assert.equal(view.json.round.open, false);
+  assert.equal(view.json.relations.length, 1);
+  assert.equal(view.json.room.locked, true);
 });
 });
