@@ -8,6 +8,7 @@ import { REASON_CATALOG, isValidTag } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
 import { analyzeHistory } from './history.js';
+import { purgeExpired, purgeAll, retentionView, roundExpiresAt, RETENTION_MONTHS } from './retention.js';
 import * as pages from './pages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -105,17 +106,31 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   const adminUrl = (req, room) => `${publicBase(req)}/t/${room.adminToken}`;
 
   // ---------- helpers ----------
+  // 보관 기간이 지난 회차는 교실을 열 때마다 정리합니다 (예약 작업과 별개로 이중 안전장치)
+  async function applyRetention(room) {
+    const probe = purgeExpired(structuredClone(room));
+    if (!probe.changed) return room;
+    if (probe.deleteRoom) {
+      await store.deleteRoom(room.id);
+      throw new HttpError(410, `이 교실은 ${RETENTION_MONTHS}개월 동안 사용되지 않아 보관 기간이 끝나 삭제되었어요.`);
+    }
+    const updated = await store.updateRoom(room.id, (fresh) => { ensureRounds(fresh); purgeExpired(fresh); });
+    return updated || room;
+  }
+
   async function requireRoom(req) {
     const room = await store.findRoomByAdminToken(req.params.adminToken);
     if (!room) throw new HttpError(404, '교실을 찾을 수 없어요. 관리자 링크를 확인해 주세요.');
-    return ensureRounds(room);
+    return applyRetention(ensureRounds(room));
   }
 
   async function requireStudent(req) {
     const found = await store.findStudentByToken(req.params.token);
     if (!found) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
     ensureRounds(found.room);
-    return found;
+    const room = await applyRetention(found.room);
+    const student = room.students.find((st) => st.id === found.student.id) || found.student;
+    return { room, student };
   }
 
   // 교실을 잠그고(저장소에 따라) 읽어서 고친 뒤 저장합니다. mutator 가 던지면 아무것도 바뀌지 않습니다.
@@ -154,6 +169,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const submitted = Object.values(stats).filter((s) => s.submitted).length;
     return {
       ...roundView(round),
+      expiresAt: roundExpiresAt(round),
       submitted,
       total: room.students.length,
       good: Object.values(stats).reduce((n, s) => n + s.outGood.length, 0),
@@ -196,6 +212,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       notice: storageNotice,
       seating: room.seating || null,
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
+      retention: retentionView(room),
     };
   }
 
@@ -226,7 +243,17 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
-  app.get('/api/health', (req, res) => res.json({ ok: true, storage: storageKind, notice: storageNotice || null }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, storage: storageKind, notice: storageNotice || null, retentionMonths: RETENTION_MONTHS }));
+
+  // 보관 기간이 지난 데이터 정리. CRON_SECRET 이 설정되어 있으면 그 값으로만 호출할 수 있습니다.
+  const purgeHandler = async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.get('authorization') !== `Bearer ${secret}`) throw new HttpError(401, '권한이 없어요.');
+    const result = await purgeAll(store);
+    res.json({ ok: true, retentionMonths: RETENTION_MONTHS, ...result });
+  };
+  app.get('/api/maintenance/purge', purgeHandler);
+  app.post('/api/maintenance/purge', purgeHandler);
 
   // ---------- room creation ----------
   app.post('/api/rooms', async (req, res) => {

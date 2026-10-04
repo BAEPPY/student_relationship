@@ -46,6 +46,8 @@ export class FileStore {
 
   getRoom(id) { return this.data.rooms[id] || null; }
 
+  listRooms() { return Object.values(this.data.rooms); }
+
   createRoom(room) {
     this.data.rooms[room.id] = room;
     this.save();

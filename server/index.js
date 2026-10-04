@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { openStore } from './storage.js';
+import { purgeAll, RETENTION_MONTHS } from './retention.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -18,6 +19,18 @@ if (kind === 'postgres') {
 }
 
 const app = createApp({ store, storageKind: kind, storageNotice: notice });
+
+// 보관 기간(기본 14개월)이 지난 응답 정리: 시작할 때 한 번, 그 뒤 하루에 한 번
+async function runRetention() {
+  try {
+    const r = await purgeAll(store);
+    if (r.deletedRounds || r.deletedRooms) console.log(`[보관 정책] ${RETENTION_MONTHS}개월이 지난 데이터 정리: 회차 ${r.deletedRounds}개, 교실 ${r.deletedRooms}개 삭제`);
+  } catch (err) {
+    console.error('[보관 정책] 정리 중 오류:', err.message);
+  }
+}
+runRetention();
+setInterval(runRetention, 24 * 60 * 60 * 1000).unref();
 app.listen(PORT, '0.0.0.0', () => {
   console.log('학생 관계 마인드맵 서버 실행 중');
   console.log(`  이 컴퓨터에서:      http://localhost:${PORT}`);

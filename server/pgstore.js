@@ -38,6 +38,11 @@ export class PgStore {
     return rows[0]?.data || null;
   }
 
+  async listRooms() {
+    const { rows } = await this.pool.query('SELECT data FROM rooms ORDER BY updated_at');
+    return rows.map((r) => r.data);
+  }
+
   async createRoom(room) {
     await this.pool.query(
       'INSERT INTO rooms (id, data, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()',

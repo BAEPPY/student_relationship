@@ -337,4 +337,58 @@ test('최소 인원: 좋은 사이 3명과 안 좋은 사이 3명을 각각 채�
   const sv = await call(`/api/student/${(await call(`/api/teacher/${small.json.adminToken}`)).json.students[0].token}`);
   assert.equal(sv.json.room.minGood + sv.json.room.minBad <= 2, true);
 });
+
+test('보관 정책: 오래된 회차는 접근할 때 삭제되고, 경고와 기록이 보인다', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '보관반', students: '가\n나\n다' });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  const [a, b] = view.json.students;
+  const room = await store.findRoomByAdminToken(t);
+  const old = (m) => new Date(Date.now() - m * 30.5 * 86400000).toISOString();
+  await store.updateRoom(room.id, (rm) => {
+    rm.rounds.unshift(
+      { id: 'old1', name: '아주 옛날', startedAt: old(17), closedAt: old(16), relations: { [a.id]: { [b.id]: { type: 'good', tags: [], reason: '' } } }, submissions: { [a.id]: { submittedAt: old(16) } } },
+      { id: 'soon', name: '곧 삭제', startedAt: old(13.5), closedAt: old(13.2), relations: {}, submissions: {} },
+    );
+  });
+  const after = await call(`/api/teacher/${t}`);
+  assert.equal(after.status, 200);
+  assert.deepEqual(after.json.rounds.map((r) => r.name).includes('아주 옛날'), false);
+  assert.equal(after.json.rounds.some((r) => r.name === '곧 삭제'), true);
+  assert.equal(after.json.retention.months, 14);
+  assert.deepEqual(after.json.retention.expiring.map((r) => r.name), ['곧 삭제']);
+  assert.equal(after.json.retention.log.length, 1);
+  assert.equal(after.json.retention.log[0].name, '아주 옛날');
+  assert.ok(after.json.rounds.every((r) => r.expiresAt));
+
+  // 예약 작업 엔드포인트
+  const purge = await call('/api/maintenance/purge');
+  assert.equal(purge.status, 200);
+  assert.equal(purge.json.retentionMonths, 14);
+  assert.ok(purge.json.rooms >= 1);
+
+  // 14개월 동안 아무 활동이 없는 교실은 통째로 삭제
+  const dead = await call('/api/rooms', 'POST', { name: '잠든반', students: '가\n나' });
+  const deadRoom = await store.findRoomByAdminToken(dead.json.adminToken);
+  await store.updateRoom(deadRoom.id, (rm) => {
+    rm.createdAt = old(20);
+    rm.rounds = [{ id: 'x', name: '옛날', startedAt: old(20), closedAt: old(19), relations: {}, submissions: {} }];
+    rm.currentRoundId = 'x';
+  });
+  const gone = await call(`/api/teacher/${dead.json.adminToken}`);
+  assert.equal(gone.status, 410);
+  assert.match(gone.json.error, /14개월/);
+  assert.equal((await call(`/api/teacher/${dead.json.adminToken}`)).status, 404);
+});
+
+test('보관 정책 엔드포인트는 CRON_SECRET 이 있으면 비밀값을 요구한다', async () => {
+  process.env.CRON_SECRET = 'shh';
+  try {
+    assert.equal((await call('/api/maintenance/purge')).status, 401);
+    const res = await fetch(`${url}/api/maintenance/purge`, { headers: { authorization: 'Bearer shh' } });
+    assert.equal(res.status, 200);
+  } finally {
+    delete process.env.CRON_SECRET;
+  }
+});
 });

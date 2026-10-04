@@ -35,6 +35,7 @@ export class FakePool {
     if (/^INSERT INTO rooms/.test(text) || /^UPDATE rooms/.test(text)) { rows.set(params[0], JSON.parse(params[1])); return { rows: [] }; }
     if (/^DELETE FROM rooms/.test(text)) { rows.delete(params[0]); return { rows: [] }; }
     if (/WHERE id = \$1/.test(text)) { const d = rows.get(params[0]); return { rows: d ? [{ data: clone(d) }] : [] }; }
+    if (/^SELECT data FROM rooms ORDER BY/.test(text)) return { rows: [...rows.values()].map((d) => ({ data: clone(d) })) };
     if (/data->>'adminToken'/.test(text)) {
       for (const d of rows.values()) if (d.adminToken === params[0]) return { rows: [{ data: clone(d) }] };
       return { rows: [] };

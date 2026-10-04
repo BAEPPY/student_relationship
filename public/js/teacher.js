@@ -136,9 +136,10 @@ function renderHeader() {
   const card = document.getElementById('header-card');
   const pct = students.length ? Math.round((analysis.submittedCount / students.length) * 100) : 0;
   const isCurrent = round.id === state.currentRoundId;
+  const soon = new Set((state.retention?.expiring || []).map((x) => x.id));
   const roundSelect = el('select', { class: 'select' }, rounds.map((r) => el('option', {
     value: r.id, selected: r.id === round.id ? true : null,
-    text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}`,
+    text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}${soon.has(r.id) ? ` · ⚠️ ${fmtDay(r.expiresAt)} 삭제 예정` : ''}`,
   })));
   roundSelect.addEventListener('change', () => { ui.roundId = roundSelect.value; closePopover(); ui.selectedEdge = null; ui.highlight = null; ui.panelStudent = null; load(); });
   setChildren(card,
@@ -188,8 +189,39 @@ function renderHeader() {
       stat('고립 위험', analysis.isolated.length ? analysis.isolated.join(', ') : '없음', '좋은 사이로 지목받지 못한 학생'),
     ]),
     isCurrent && !round.open ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0 }, text: `${round.name} 조사가 마감된 상태예요. 학생 페이지는 읽기 전용이에요. 다음 조사를 하려면 "새 회차 시작"을 누르세요.` }) : null,
+    retentionNotice(),
     state.notice ? el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 }, text: `⚠️ ${state.notice}` }) : null,
   );
+}
+
+function fmtDay(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
+// 보관 정책: 14개월이 지난 회차는 자동 삭제. 미리 알리고 내보내기를 권함
+function retentionNotice() {
+  const r = state.retention;
+  if (!r) return null;
+  const exportBtns = el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+    el('a', { class: 'btn small primary', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
+    el('a', { class: 'btn small', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+  ]);
+  const parts = [];
+  if (r.expiring.length) {
+    parts.push(el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 } }, [
+      el('div', { style: { fontWeight: 700 }, text: `⚠️ 곧 삭제되는 회차가 있어요. 보관하려면 지금 내보내 두세요.` }),
+      el('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, r.expiring.map((x) => el('li', { text: `${x.name} 회차 → ${fmtDay(x.expiresAt)}에 자동 삭제` }))),
+      exportBtns,
+    ]));
+  }
+  const recent = (r.log || []).slice(-3).reverse();
+  parts.push(el('div', { class: 'muted', style: { marginTop: '10px', fontSize: '13px' } }, [
+    `🗓️ 보관 정책: 조사 응답은 마감 뒤 ${r.months}개월이 지나면 자동으로 삭제돼요. 교실 전체가 ${r.months}개월 동안 사용되지 않으면 교실도 삭제돼요. 오래 보관하려면 CSV/JSON으로 내보내 두세요.`,
+    recent.length ? el('div', { style: { marginTop: '4px' }, text: `최근 자동 삭제: ${recent.map((x) => `${x.name} (${fmtDay(x.deletedAt)}, 응답 ${x.submitted}명)`).join(' · ')}` }) : null,
+  ]));
+  return el('div', {}, parts);
 }
 
 function stat(label, value, sub) {

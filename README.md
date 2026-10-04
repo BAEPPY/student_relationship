@@ -114,6 +114,8 @@ npm start
 | `DATABASE_URL` | PostgreSQL 연결 문자열. 설정하면 데이터를 DB 에 저장합니다. (Neon, Supabase, Render Postgres 등) | 없음 (파일 저장) |
 | `DATA_DIR` | `DATABASE_URL` 이 없을 때 데이터 파일(`rooms.json`)을 저장할 폴더 | `./data` |
 | `BASE_URL` | QR 코드·링크에 사용할 공개 주소 (예: `https://example.com`). 비워 두면 접속한 주소를 그대로 사용합니다. | 없음 |
+| `RETENTION_MONTHS` | 응답 보관 기간(개월). 지나면 자동 삭제 | `14` |
+| `CRON_SECRET` | 설정하면 `/api/maintenance/purge` 호출 시 `Authorization: Bearer <값>` 을 요구합니다. Vercel 은 설정 시 자동으로 붙입니다. | 없음 |
 | `DATABASE_SSL` | `false` 로 두면 DB 연결에 SSL 을 쓰지 않습니다. 기본은 외부 주소면 SSL 사용, `localhost` 나 내부 호스트명이면 미사용 | 자동 |
 | `DATABASE_SSL_VERIFY` | `false` 로 두면 DB 인증서 검증을 건너뜁니다. (자체 서명 인증서를 쓰는 곳에서만) | `true` |
 
@@ -134,6 +136,15 @@ docker run -p 3000:3000 -e DATABASE_URL=postgresql://... student-relationship
 - 회차별 변화 분석의 "새로 생긴 갈등"은 지난 회차에 없던 안 좋은 사이가 이번 회차에 생긴 쌍, "해소된 갈등"은 지난 회차에 있던 안 좋은 사이가 이번 회차에 사라진 쌍(응답한 학생 기준), "계속되는 갈등"은 두 회차 모두 있는 쌍입니다.
 - CSV 내보내기에는 회차 열이 있고, JSON 내보내기에는 모든 회차의 관계와 분석, 변화 분석이 들어갑니다.
 - 회차 기능 이전에 만든 교실은 처음 열 때 기존 응답이 1회차로 자동 변환됩니다.
+
+## 데이터 보관 기간 (14개월)
+
+- 조사 응답은 회차 마감 뒤 **14개월**이 지나면 자동으로 삭제됩니다. 열려 있는 회차는 마지막 제출 시각을 기준으로 계산합니다.
+- 교실 전체가 14개월 동안 아무 활동(제출, 자리 배정 저장, 메모 수정)이 없으면 교실도 삭제됩니다.
+- 삭제 60일 전부터 선생님 페이지에 빨간 경고와 삭제 예정일이 표시되고, 회차 목록에도 "⚠️ 삭제 예정"이 붙습니다. 삭제된 회차는 선생님 페이지 아래에 "최근 자동 삭제" 기록으로 남습니다.
+- 삭제는 두 겹으로 돌아갑니다. Vercel 에서는 `vercel.json` 의 예약 작업이 매일 새벽 3시(한국 시간)에 `/api/maintenance/purge` 를 호출하고, 일반 서버에서는 시작할 때와 하루에 한 번 실행됩니다. 그 밖에도 교실을 열 때마다 검사합니다.
+- 오래 보관하려면 선생님 페이지의 **CSV/JSON 내보내기**로 파일을 받아 두세요. JSON 에는 모든 회차와 분석이 들어 있습니다.
+- 기간을 바꾸려면 환경 변수 `RETENTION_MONTHS` 를 설정하세요. `CRON_SECRET` 을 설정하면 예약 작업 주소를 그 값 없이는 호출할 수 없습니다 (Vercel 은 자동으로 붙여 줍니다).
 
 ## 메모 자동 분류 방식
 
@@ -181,6 +192,7 @@ server/
   storage.js    환경에 맞는 저장소 선택
   rounds.js     회차 구조와 변환
   history.js    회차별 변화 분석
+  retention.js  보관 기간(14개월) 정책과 자동 삭제
   store.js      JSON 파일 저장소
   pgstore.js    PostgreSQL 저장소 (DATABASE_URL)
   analysis.js   관계 통계와 갈등 가능성 분석
@@ -194,7 +206,7 @@ public/
   js/notes-parser.js  교사 메모 자동 분류 (규칙 기반)
   js/student.js  학생 페이지
   css/style.css
-vercel.json     Vercel 설정 (함수 리전)
+vercel.json     Vercel 설정 (함수 리전, 매일 정리 예약 작업)
 render.yaml     Render 원클릭 배포 설정
 Dockerfile      컨테이너 배포용
 test/           node:test 기반 테스트
