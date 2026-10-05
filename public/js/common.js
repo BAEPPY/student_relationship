@@ -93,6 +93,17 @@ export async function copyRich({ text, html, message = '복사했어요.' }) {
   }
 }
 
+/** 선생님 페이지들(관계도 · 자리 배정 · 1인 1역 · QR 인쇄) 사이를 오가는 위쪽 메뉴의 주소를 채웁니다. */
+export function setupPageNav(adminToken, roundId = null) {
+  const t = encodeURIComponent(adminToken);
+  const q = roundId ? `?round=${encodeURIComponent(roundId)}` : '';
+  const urls = { dashboard: `/t/${t}`, seats: `/t/${t}/seats${q}`, roles: `/t/${t}/roles${q}`, print: `/t/${t}/print` };
+  for (const a of document.querySelectorAll('.page-nav a[data-nav]')) {
+    const url = urls[a.dataset.nav];
+    if (url) a.href = url;
+  }
+}
+
 export const TYPE_LABEL = { good: '좋은 사이', bad: '안 좋은 사이' };
 export const TYPE_ICON = { good: '❤️', bad: '⚡' };
 

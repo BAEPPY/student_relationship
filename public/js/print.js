@@ -1,7 +1,8 @@
-import { api, el, copyText } from './common.js';
+import { setupPageNav, api, el, copyText } from './common.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
+setupPageNav(adminToken);
 const app = document.getElementById('app');
 let data = null;
 let showLinks = false;

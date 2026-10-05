@@ -1,4 +1,4 @@
-import { api, el, toast, setChildren, TYPE_ICON } from './common.js';
+import { api, el, toast, setChildren, setupPageNav, TYPE_ICON } from './common.js';
 import { parseTeacherNotes } from './notes-parser.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -6,7 +6,7 @@ const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
 const roundParam = new URLSearchParams(location.search).get('round');
 const dataUrl = roundParam ? `${base}?round=${encodeURIComponent(roundParam)}` : base;
 const app = document.getElementById('app');
-document.getElementById('back-link').href = `/t/${encodeURIComponent(adminToken)}`;
+setupPageNav(adminToken, roundParam);
 
 // ---------- 상태 ----------
 let data = null;                 // 교사 API 응답

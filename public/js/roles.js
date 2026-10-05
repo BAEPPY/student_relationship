@@ -1,5 +1,5 @@
 // 선생님 1인 1역 페이지: 역할 목록 · 지난달 현황 · 지원 현황 · 자동 배정/수정/확정 · 내보내기
-import { api, el, toast, setChildren, fmtDate, copyText } from './common.js';
+import { api, el, toast, setChildren, fmtDate, copyText, setupPageNav } from './common.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -7,7 +7,7 @@ const roundParam = new URLSearchParams(location.search).get('round');
 let roundQuery = roundParam ? `?round=${encodeURIComponent(roundParam)}` : '';   // 없는 회차면 현재 회차로 되돌립니다 (loadInitial)
 let dataUrl = `${base}${roundQuery}`;
 const app = document.getElementById('app');
-document.getElementById('back-link').href = `/t/${encodeURIComponent(adminToken)}`;
+setupPageNav(adminToken, roundParam);
 
 const PICK_LABEL = ['1지망', '2지망', '3지망'];
 const METHOD_LABEL = { rules: '규칙 배정', ai: 'AI 배정', manual: '직접 배정' };

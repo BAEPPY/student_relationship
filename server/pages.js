@@ -168,6 +168,12 @@ export const print = `<!doctype html>
   <header class="topbar no-print">
     <div class="topbar-inner">
       <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+<nav class="page-nav" aria-label="선생님 페이지 이동">
+        <a class="btn small" data-nav="dashboard" id="back-link" href="#">🗺️ 관계도</a>
+        <a class="btn small orange" data-nav="seats" href="#">🪑 자리 배정</a>
+        <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
+        <a class="btn small active" data-nav="print" target="_blank" href="#" aria-current="page">🖨️ QR 인쇄</a>
+      </nav>
       <span class="spacer"></span>
       <button type="button" class="btn" id="toggle-links">링크 목록 보기</button>
       <button type="button" class="btn primary" id="print-btn">인쇄하기</button>
@@ -217,7 +223,12 @@ export const seats = `<!doctype html>
       <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
       <span class="badge blue">자리 배정</span>
       <span class="spacer"></span>
-      <a class="btn small" id="back-link" href="#">선생님 페이지로</a>
+<nav class="page-nav" aria-label="선생님 페이지 이동">
+        <a class="btn small" data-nav="dashboard" id="back-link" href="#">🗺️ 관계도</a>
+        <a class="btn small orange active" data-nav="seats" href="#" aria-current="page">🪑 자리 배정</a>
+        <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
+        <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
+      </nav>
     </div>
   </header>
   <main class="container" id="app">
@@ -244,7 +255,12 @@ export const roles = `<!doctype html>
       <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
       <span class="badge blue">1인 1역</span>
       <span class="spacer"></span>
-      <a class="btn small" id="back-link" href="#">선생님 페이지로</a>
+<nav class="page-nav" aria-label="선생님 페이지 이동">
+        <a class="btn small" data-nav="dashboard" id="back-link" href="#">🗺️ 관계도</a>
+        <a class="btn small orange" data-nav="seats" href="#">🪑 자리 배정</a>
+        <a class="btn small green active" data-nav="roles" href="#" aria-current="page">🎒 1인 1역</a>
+        <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
+      </nav>
     </div>
   </header>
   <main class="container" id="app">
