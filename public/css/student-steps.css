@@ -152,12 +152,17 @@ body.kid .alert.rule b { font-family: var(--font-kid); font-weight: 400; }
   .role-card .role-pick:focus-visible { outline: none; }
   .role-card:has(> .role-pick:focus-visible) { outline: 3px solid rgba(255, 107, 107, .45); outline-offset: 2px; }
 }
+/* 고른 카드: 1지망 빨강 · 2지망 노랑 · 3지망 초록 */
 .role-card.chosen { border-color: var(--kid-coral); background: #fff1f1; box-shadow: 0 0 0 4px rgba(255, 107, 107, .15); }
+.role-card.chosen.rank-2 { border-color: #f4b400; background: #fff8dc; box-shadow: 0 0 0 4px rgba(244, 180, 0, .18); }
+.role-card.chosen.rank-3 { border-color: var(--kid-grass); background: #eef8e4; box-shadow: 0 0 0 4px rgba(139, 195, 74, .18); }
 .role-card .role-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .role-card .role-name { flex: 1 1 auto; min-width: 0; font-family: var(--font-kid); font-size: 19px; line-height: 1.25; color: var(--kid-brown); word-break: keep-all; }
 .role-card .slots { flex: none; }
 body.kid .role-card .badge.gray { background: #f1ebe3; color: #8a7a6c; }
 .role-card .pick-tag { flex: none; background: var(--kid-coral); color: #fff; border-radius: 999px; padding: 3px 11px; font-family: var(--font-kid); font-size: 14px; line-height: 1.2; box-shadow: 0 2px 0 #e05555; }
+.role-card.rank-2 .pick-tag { background: #f4b400; color: #4a3b2f; box-shadow: 0 2px 0 #d39b00; }
+.role-card.rank-3 .pick-tag { background: var(--kid-grass); box-shadow: 0 2px 0 var(--kid-grass-deep); }
 .role-card .role-sub { display: block; font-size: 13px; color: #8a7a6c; margin-top: 2px; }
 .role-card details { margin: -6px 0 0; padding: 0 14px 12px; font-size: 14px; }
 .role-card summary { cursor: pointer; color: #1f6fa8; font-size: 14px; list-style: none; display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; min-height: 28px; user-select: none; }
@@ -182,11 +187,14 @@ body.kid .role-card .badge.gray { background: #f1ebe3; color: #8a7a6c; }
 .wish-title { margin: 18px 0 10px; }
 body.kid .wish-slot { border: 2px solid #f0e6da; background: #fffdf9; margin-bottom: 12px; }
 body.kid .wish-slot.first { border-color: var(--kid-coral); }
+body.kid .wish-slot.rank-2.filled { border-color: #f4b400; background: #fffcf2; }
+body.kid .wish-slot.rank-3.filled { border-color: var(--kid-grass); background: #f6fbf1; }
 body.kid .wish-slot.has-error { border-color: #e04848; background: #fff6f6; }
 .wish-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .wish-head .spacer { flex: 1; }
 .wish-num { background: var(--kid-coral); color: #fff; border-radius: 999px; padding: 4px 14px; font-family: var(--font-kid); font-size: 17px; line-height: 1.2; box-shadow: 0 3px 0 #e05555; }
-.wish-slot:not(.first) .wish-num { background: var(--kid-orange); box-shadow: 0 3px 0 #e68a2e; }
+.wish-slot.rank-2 .wish-num { background: #f4b400; color: #4a3b2f; box-shadow: 0 3px 0 #d39b00; }
+.wish-slot.rank-3 .wish-num { background: var(--kid-grass); box-shadow: 0 3px 0 var(--kid-grass-deep); }
 body.kid .wish-slot select {
   width: 100%; padding: 12px 40px 12px 16px; border-radius: 18px; border: 2px solid #e8dfd3; background: #fff;
   font-family: var(--font-kid); font-size: 17px; color: var(--kid-brown); appearance: none; -webkit-appearance: none;
@@ -205,3 +213,8 @@ body.kid .wish-slot .btn.small { padding: 8px 16px; font-size: 15px; min-height:
 /* 선생님이 역할 목록을 바꿔서(또는 지난달 역할이라) 비워진 지망 */
 body.kid .wish-slot.stale { border-color: var(--kid-orange); }
 .slot-notice { background: #fff0c2; color: #6b4a00; border-radius: 14px; padding: 9px 12px; margin: 0 0 10px; font-family: var(--font-kid); font-size: 15px; line-height: 1.4; }
+
+/* 안내 문장의 지망 색 표시 */
+.rank-dot { display: inline-block; padding: 1px 9px; border-radius: 999px; font-family: var(--font-kid); font-size: 13px; color: #fff; background: var(--kid-coral); }
+.rank-dot.rank-2 { background: #f4b400; color: #4a3b2f; }
+.rank-dot.rank-3 { background: var(--kid-grass); }

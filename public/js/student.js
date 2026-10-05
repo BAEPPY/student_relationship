@@ -466,7 +466,7 @@ function renderApplication() {
       const ex = excluded.has(r.id);
       const at = chosenIndex(r.id);
       // 고르는 부분은 진짜 <button>, 설명(<details>)은 버튼 밖 형제 요소로
-      return el('div', { class: `role-card ${ex ? 'excluded' : ''} ${at >= 0 ? 'chosen' : ''}` }, [
+      return el('div', { class: `role-card ${ex ? 'excluded' : ''} ${at >= 0 ? `chosen rank-${at + 1}` : ''}` }, [
         ex ? el('span', { class: 'ribbon', 'aria-hidden': 'true', text: '지난달에 했던 역할' }) : null,
         el('button', {
           type: 'button',
@@ -543,7 +543,7 @@ function renderApplication() {
       stepError = null; refresh();
     });
     const showText = Boolean(c.roleId) || Boolean(c.reason || c.helpClass || c.helpSelf);
-    return el('section', { class: `card wish-slot ${i === 0 ? 'first' : ''} ${errs.role || errs.reason ? 'has-error' : ''} ${c.stale ? 'stale' : ''}`, id: `wish-${i}` }, [
+    return el('section', { class: `card wish-slot rank-${i + 1} ${i === 0 ? 'first' : ''} ${c.roleId ? 'filled' : ''} ${errs.role || errs.reason ? 'has-error' : ''} ${c.stale ? 'stale' : ''}`, id: `wish-${i}` }, [
       el('div', { class: 'wish-head' }, [
         el('span', { class: 'wish-num', text: `${i + 1}지망` }),
         el('span', { class: 'muted', text: i === 0 ? '꼭 골라야 해' : '골라도 되고 안 골라도 돼' }),
@@ -571,7 +571,7 @@ function renderApplication() {
   drawSlots();
   app.append(el('section', { class: 'card' }, [
     el('div', { class: 'card-title' }, [el('h2', { text: '🧹 어떤 역할이 있을까?' }), el('span', { class: 'muted', text: `${roles.length}개 역할` })]),
-    el('p', { class: 'muted', text: '카드를 누르면 1지망 → 2지망 → 3지망 순서로 들어가. 다시 누르면 빠져. "어떤 일을 해?"를 눌러 역할 설명을 꼭 읽어 봐!' }),
+    el('p', { class: 'muted' }, ['카드를 누르면 ', el('span', { class: 'rank-dot rank-1', text: '1지망' }), ' → ', el('span', { class: 'rank-dot rank-2', text: '2지망' }), ' → ', el('span', { class: 'rank-dot rank-3', text: '3지망' }), ' 순서로 들어가. 다시 누르면 빠져. "어떤 일을 해?"를 눌러 역할 설명을 꼭 읽어 봐!']),
     pickerBox,
   ]));
   app.append(el('h2', { class: 'wish-title', text: '✍️ 내 지원서' }));
