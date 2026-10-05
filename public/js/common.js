@@ -93,15 +93,96 @@ export async function copyRich({ text, html, message = '복사했어요.' }) {
   }
 }
 
-/** 선생님 페이지들(관계도 · 자리 배정 · 1인 1역 · QR 인쇄) 사이를 오가는 위쪽 메뉴의 주소를 채웁니다. */
+/** 선생님 페이지들(관계도 · 자리 배정 · 1인 1역 · QR 인쇄 · 종합 보고서) 사이를 오가는 위쪽 메뉴의 주소를 채웁니다. */
 export function setupPageNav(adminToken, roundId = null) {
   const t = encodeURIComponent(adminToken);
   const q = roundId ? `?round=${encodeURIComponent(roundId)}` : '';
-  const urls = { dashboard: `/t/${t}`, seats: `/t/${t}/seats${q}`, roles: `/t/${t}/roles${q}`, print: `/t/${t}/print` };
+  const urls = { dashboard: `/t/${t}`, seats: `/t/${t}/seats${q}`, roles: `/t/${t}/roles${q}`, print: `/t/${t}/print`, report: `/t/${t}/report${q}` };
   for (const a of document.querySelectorAll('.page-nav a[data-nav]')) {
     const url = urls[a.dataset.nav];
     if (url) a.href = url;
   }
+}
+
+// ---------- 설명 팝업 ("?" 버튼) ----------
+// 버튼 바로 뒤에 말풍선(.help-pop)을 형제로 붙여요. 카드를 다시 그리면 버튼과 함께 사라지고,
+// 위치는 화면 기준(position: fixed)으로 잡아 overflow 가 있는 상자 안에서도 잘리지 않아요.
+let helpOpen = null;      // 지금 열린 말풍선 { btn, pop }
+let helpSeq = 0;
+let helpListening = false;
+
+function placeHelpPop(btn, pop) {
+  const r = btn.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth;
+  const vh = window.innerHeight;
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  let left = r.left;                                   // 기본: 버튼 왼쪽에 맞춰 아래로
+  if (left + pw > vw - 8) left = r.right - pw;         // 오른쪽 끝에 가까우면 왼쪽으로 펼침
+  left = Math.max(8, Math.min(left, vw - pw - 8));
+  let top = r.bottom + 8;
+  let above = false;
+  if (top + ph > vh - 8 && r.top - ph - 8 >= 8) { top = r.top - ph - 8; above = true; }   // 아래 자리가 없으면 위로
+  top = Math.max(8, top);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+  pop.classList.toggle('above', above);
+  pop.style.setProperty('--arrow-x', `${Math.max(10, Math.min(pw - 20, r.left + r.width / 2 - left - 5))}px`);
+}
+
+function onHelpMove() {
+  if (!helpOpen) return;
+  if (!helpOpen.btn.isConnected) return closeHelp();
+  placeHelpPop(helpOpen.btn, helpOpen.pop);
+}
+
+function closeHelp({ focus = false } = {}) {
+  if (!helpOpen) return;
+  const { btn, pop } = helpOpen;
+  helpOpen = null;
+  pop.remove();
+  btn.setAttribute('aria-expanded', 'false');
+  btn.classList.remove('open');
+  window.removeEventListener('scroll', onHelpMove, true);
+  window.removeEventListener('resize', onHelpMove);
+  if (focus && btn.isConnected) btn.focus();
+}
+
+function openHelp(btn, pop) {
+  closeHelp();                                          // 한 번에 하나만
+  btn.after(pop);
+  helpOpen = { btn, pop };
+  btn.setAttribute('aria-expanded', 'true');
+  btn.classList.add('open');
+  placeHelpPop(btn, pop);
+  window.addEventListener('scroll', onHelpMove, true);
+  window.addEventListener('resize', onHelpMove);
+  if (!helpListening) {
+    helpListening = true;
+    document.addEventListener('click', (e) => {
+      if (helpOpen && !helpOpen.pop.contains(e.target) && !helpOpen.btn.contains(e.target)) closeHelp();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && helpOpen) { e.preventDefault(); closeHelp({ focus: true }); } });
+  }
+}
+
+/**
+ * 작은 둥근 "?" 버튼을 돌려줍니다. 누르면 옆에 설명 말풍선이 열려요.
+ * text 는 한 문단(문자열)이나 여러 문단(배열). 바깥 클릭 · Esc · 버튼 다시 누르기로 닫히고, 인쇄에는 안 나와요.
+ */
+export function helpTip(text, { title } = {}) {
+  const id = `help-pop-${++helpSeq}`;
+  const lines = [].concat(text).filter((t) => t !== null && t !== undefined && t !== '');
+  const btn = el('button', { type: 'button', class: 'help-btn', 'aria-label': '설명', 'aria-expanded': 'false', 'aria-controls': id, text: '?' });
+  btn.addEventListener('click', () => {
+    if (helpOpen && helpOpen.btn === btn) return closeHelp();
+    const pop = el('div', { class: 'help-pop', id, role: 'tooltip' }, [
+      title ? el('div', { class: 'help-title', text: title }) : null,
+      ...lines.map((t) => el('p', { text: t })),
+    ]);
+    openHelp(btn, pop);
+  });
+  return btn;
 }
 
 export const TYPE_LABEL = { good: '좋은 사이', bad: '안 좋은 사이' };

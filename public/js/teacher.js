@@ -1,4 +1,4 @@
-import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, TYPE_LABEL, TYPE_ICON } from './common.js';
+import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, helpTip, TYPE_LABEL, TYPE_ICON } from './common.js';
 import { RelationGraph } from './graph.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -33,6 +33,18 @@ const nameOf = (id) => state?.stats[id]?.name || '?';
 const rolesPageUrl = () => `/t/${encodeURIComponent(adminToken)}/roles?round=${encodeURIComponent(state.round.id)}`;
 const seatsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(state.round.id)}`;
 const printPageUrl = () => `/t/${encodeURIComponent(adminToken)}/print`;
+const reportPageUrl = () => `/t/${encodeURIComponent(adminToken)}/report?round=${encodeURIComponent(state.round.id)}`;
+// "?" 버튼을 누르면 뜨는 짧은 설명 (common.js helpTip)
+const HELP = {
+  csv: '엑셀·구글 시트로 바로 열리는 표예요. 학생이 표시한 관계만 들어가요: 회차 · 보낸 학생 · 받은 학생 · 관계 · 선택한 이유 · 직접 쓴 이유 · 수정 시각. 관계를 정렬하거나 필터로 볼 때 좋아요.',
+  json: '모든 자료를 한 파일에 통째로 담은 보관용 파일이에요. 모든 회차의 관계와 갈등 분석, 회차별 변화, 선생님 메모·규칙, 자리 배정, 1인 1역(역할·달별 기록·설문·지원서·배정), AI 분석까지 들어가요. 엑셀로 보기엔 불편하지만 14개월 뒤 자동 삭제 전에 보관하거나 다른 프로그램에 넣을 때 써요. 학생 링크(토큰)는 들어 있지 않아요.',
+  minCount: '학생이 제출하려면 꼭 표시해야 하는 수예요. 반 인원이 적으면 자동으로 줄어들어요.',
+  analysis: '응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 더해 2~97%로 어림해요. 판단 근거가 아니라 먼저 살펴볼 관계를 찾는 참고용이에요.',
+  ai: '학생 이름을 S1, S2 같은 가명으로 바꿔 보내고 결과만 저장해요. 한 번에 30초~1분, 사용량(비용)이 들어요.',
+  report: '관계도 분석 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서로 모아요. 화면에서 바로 인쇄하거나 PDF로 저장하고, 한글(.hwpx)·워드(.docx) 파일로도 내려받을 수 있어요.',
+};
+/** 내보내기 링크 옆에 "?" 설명 버튼을 붙여요 (줄 바꿈이 생겨도 버튼과 함께 다녀요). */
+const withHelp = (node, text) => el('span', { class: 'with-help' }, [node, helpTip(text)]);
 // 역할 목록에서 지워진 역할은 roles.js 와 같은 표기로 보여줍니다
 const roleNameOf = (roleId) => (state?.roles || []).find((r) => r.id === roleId)?.name || '(지워진 역할)';
 const scrollToGraph = () => document.getElementById('graph-container')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -161,10 +173,10 @@ function renderAll() {
   document.title = `${state.room.name} · ${state.round.name} · 선생님 페이지`;
 }
 
-/** 카드 제목 줄: 제목 + 한 줄 설명(왼쪽), 상태 표시(오른쪽) */
-function cardTitle(title, desc, right = null) {
+/** 카드 제목 줄: 제목 + 한 줄 설명(왼쪽), 상태 표시(오른쪽). help 를 주면 제목 옆에 "?" 설명 버튼이 붙어요. */
+function cardTitle(title, desc, right = null, help = null) {
   return el('div', { class: 'card-title' }, [
-    el('div', { class: 'card-heading' }, [el('h2', { text: title }), desc ? el('p', { class: 'card-desc', text: desc }) : null]),
+    el('div', { class: 'card-heading' }, [el('h2', {}, [title, help ? helpTip(help) : null]), desc ? el('p', { class: 'card-desc', text: desc }) : null]),
     right,
   ]);
 }
@@ -241,6 +253,7 @@ function buildNav() {
     el('a', { class: 'btn small orange', id: 'nav-seats', href: '#', text: '자리 배정' }),
     el('a', { class: 'btn small green', id: 'nav-roles', href: '#', text: '1인 1역' }),
     el('a', { class: 'btn small', id: 'nav-print', href: '#', target: '_blank', text: 'QR 인쇄' }),
+    el('a', { class: 'btn small', id: 'nav-report', href: '#', text: '📑 보고서' }),
   ]);
 }
 
@@ -249,6 +262,7 @@ function renderNav() {
   set('nav-seats', seatsPageUrl());
   set('nav-roles', rolesPageUrl());
   set('nav-print', printPageUrl());
+  set('nav-report', reportPageUrl());
 }
 
 /** 붙어 다니는 줄의 높이를 CSS 변수로 알려 줘요 (카드 scroll-margin, 학생 표 머리글 위치에 사용). */
@@ -388,8 +402,8 @@ function renderHeader() {
             title: `${round.name} 1인 1역 지원서를 낸 학생 수`, text: `지원서 ${appCount}/${students.length}`,
           }) : null,
         ]),
-        el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
-        el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }),
+        withHelp(el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }), HELP.csv),
+        withHelp(el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }), HELP.json),
         el('button', { type: 'button', class: 'btn', text: '새로고침', onClick: () => load() }),
       ]),
     ]),
@@ -430,8 +444,8 @@ function retentionAlert() {
     el('div', { class: 'alert-title', text: '⚠️ 곧 삭제되는 회차가 있어요. 보관하려면 지금 내보내 두세요.' }),
     el('ul', { class: 'alert-list' }, r.expiring.map((x) => el('li', { text: `${x.name} 회차 → ${fmtDay(x.expiresAt)}에 자동 삭제` }))),
     el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
-      el('a', { class: 'btn small primary', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
-      el('a', { class: 'btn small', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+      withHelp(el('a', { class: 'btn small primary', href: `${base}/export.csv`, text: 'CSV 내보내기' }), HELP.csv),
+      withHelp(el('a', { class: 'btn small', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }), HELP.json),
     ]),
   ]);
 }
@@ -680,7 +694,7 @@ function renderAnalysis() {
   ];
   setChildren(card,
     cardTitle('갈등 가능성 분석', '안 좋은 사이로 표시된 관계마다 앞으로 갈등이 생길 가능성을 어림해요. 가능성이 높은 순서로 보여 주고, 이름을 누르면 관계도에서 두 학생만 강조돼요.',
-      el('span', { class: 'badge gray', text: `${a.submittedCount}명 응답 기준` })),
+      el('span', { class: 'badge gray', text: `${a.submittedCount}명 응답 기준` }), HELP.analysis),
     el('div', { class: 'alert info prose', text: '학생들의 응답(관계 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부)을 바탕으로 한 참고용 수치예요. 학생을 판단하는 근거가 아니라, 먼저 관심을 기울일 관계를 찾는 도구로 활용해 주세요.' }),
     el('div', { class: 'grid-2 analysis-grid' }, [
       el('div', {}, [
@@ -831,7 +845,7 @@ function renderAiPanel() {
 
   setChildren(card,
     cardTitle('🤖 AI 관계·역할 분석', '관계도·성향 설문·1인 1역 지원서·교사 메모를 함께 읽고 학급 요약, 주의할 관계, 학생별 어울리는 역할을 풀어서 설명해요.',
-      el('span', { class: 'muted', text: enabled ? (a ? `마지막 분석 ${fmtDate(a.createdAt)}` : '아직 분석 전') : '꺼져 있음' })),
+      el('span', { class: 'muted', text: enabled ? (a ? `마지막 분석 ${fmtDate(a.createdAt)}` : '아직 분석 전') : '꺼져 있음' }), HELP.ai),
     controls,
     ...results,
   );
@@ -1040,7 +1054,7 @@ function renderStudents() {
         el('p', { class: 'muted', style: { marginTop: '8px' }, text: `${FILE_HINT} 명단 파일에서 이름을 읽어 와요. 이미 있는 이름은 건너뛰고, 추가하기 전에 목록을 확인해요.` }),
       ]),
       el('div', {}, [
-        el('h3', { text: '꼭 표시해야 하는 인원' }),
+        el('h3', {}, ['꼭 표시해야 하는 인원', helpTip(HELP.minCount)]),
         el('form', { class: 'min-form', onSubmit: (e) => {
           e.preventDefault();
           action(api(base, { method: 'PATCH', body: { minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value) } }), '저장했어요.');
@@ -1091,17 +1105,55 @@ function renderMemo() {
   );
 }
 
-// ---------- 데이터 관리: 내보내기 · 보관 안내 · 교실 삭제 ----------
+// ---------- 종합 보고서 파일 받기 (한글 · 워드) ----------
+const reportFileName = (kind) => `종합보고서_${(state?.round?.name || '보고서').replace(/[\\/:*?"<>|]+/g, ' ').trim()}.${kind}`;
+
+/** 보고서 파일을 받아 정해진 이름으로 저장해요 (roles.js 의 downloadExport 와 같은 방식). */
+async function downloadReport(kind, btn) {
+  const name = reportFileName(kind);
+  if (btn) btn.disabled = true;
+  toast(`${kind === 'hwpx' ? '한글' : '워드'} 파일을 만드는 중…`, 1500);
+  try {
+    const res = await fetch(`${base}/report.${kind}?round=${encodeURIComponent(state.round.id)}`);
+    if (!res.ok) {
+      let msg = `파일을 만들지 못했어요 (${res.status})`;
+      try { msg = (await res.json()).error || msg; } catch { /* 본문 없음 */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: name, style: { display: 'none' } });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    toast(`${name} 파일을 내려받았어요. ${kind === 'hwpx' ? '한글 2014 이상에서 열어 주세요. 열리지 않으면 워드 파일을 써 주세요.' : '워드와 한글 모두에서 열려요.'}`, 5000);
+  } catch (err) {
+    toast(err.message, 4500);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---------- 데이터 관리: 내보내기 · 종합 보고서 · 보관 안내 · 교실 삭제 ----------
 function renderDataCard() {
   const card = document.getElementById('danger-card');
   const { room } = state;
   const r = state.retention;
   const recent = (r?.log || []).slice().reverse();
   setChildren(card,
-    cardTitle('데이터 관리', '응답을 파일로 내보내 보관하거나, 자동 삭제 정책을 확인하고, 교실을 삭제할 수 있어요.'),
+    cardTitle('데이터 관리', '응답을 파일로 내보내 보관하거나, 종합 보고서를 만들고, 자동 삭제 정책을 확인하고, 교실을 삭제할 수 있어요.'),
     el('div', { class: 'btn-row' }, [
-      el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
-      el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+      withHelp(el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }), HELP.csv),
+      withHelp(el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }), HELP.json),
+    ]),
+    el('div', { class: 'report-row', id: 'report-row' }, [
+      el('h3', {}, ['종합 보고서', helpTip(HELP.report)]),
+      el('p', { class: 'muted', text: `관계도 분석 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서로 모아요. (${state.round.name} 회차)` }),
+      el('div', { class: 'btn-row' }, [
+        el('a', { class: 'btn primary', id: 'report-link', href: reportPageUrl(), text: '📑 보고서 보기 (인쇄·PDF)' }),
+        el('button', { type: 'button', class: 'btn', id: 'report-hwpx', title: '한글 2014 이상에서 열려요', text: '📄 한글 파일', onClick: (e) => downloadReport('hwpx', e.currentTarget) }),
+        el('button', { type: 'button', class: 'btn', id: 'report-docx', title: '워드·한글 모두 열려요', text: '📄 워드 파일', onClick: (e) => downloadReport('docx', e.currentTarget) }),
+      ]),
     ]),
     r ? fold('retention', '🗓️ 데이터 보관 안내', `마감 뒤 ${r.months}개월이 지나면 자동 삭제`, [
       el('p', { class: 'prose', text: `조사 응답은 마감 뒤 ${r.months}개월이 지나면 자동으로 삭제돼요. 교실 전체가 ${r.months}개월 동안 사용되지 않으면 교실도 삭제돼요. 오래 보관하려면 CSV/JSON으로 내보내 두세요. 삭제 60일 전부터 위의 머리 카드와 회차 목록에 미리 알려 드려요.` }),

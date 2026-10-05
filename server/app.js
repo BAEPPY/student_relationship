@@ -15,7 +15,8 @@ import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAss
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
-import { buildRolesHwpx, buildRolesDocx } from './export-docs.js';
+import { buildRolesHwpx, buildRolesDocx, makeHwpxDocument, makeDocxDocument } from './export-docs.js';
+import { reportDocument } from './report.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -289,6 +290,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/t/:adminToken/print', page(pages.print));
   app.get('/t/:adminToken/seats', page(pages.seats));
   app.get('/t/:adminToken/roles', page(pages.roles));
+  app.get('/t/:adminToken/report', (req, res) => res.type('html').send(pages.report || pages.notFound));
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
@@ -836,6 +838,29 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   };
   app.get('/api/teacher/:adminToken/roles/export.hwpx', exportRoles('hwpx'));
   app.get('/api/teacher/:adminToken/roles/export.docx', exportRoles('docx'));
+
+  // 종합 보고서: 관계도 분석 · 갈등 가능성 · AI 분석 · 자리 · 1인 1역 · 회차별 변화를 한 문서로 모읍니다.
+  const reportFor = (req, room) => {
+    const round = req.query.round ? requireRound(room, String(req.query.round)) : currentRound(room);
+    return { round, doc: reportDocument({ room, round, reasons: req.query.reasons === '1' }) };
+  };
+  app.get('/api/teacher/:adminToken/report.json', async (req, res) => {
+    const room = await requireRoom(req);
+    const { round, doc } = reportFor(req, room);
+    res.json({ ...doc, round: { id: round.id, name: round.name }, rounds: room.rounds.map((r) => ({ id: r.id, name: r.name })) });
+  });
+  const exportReport = (kind) => async (req, res) => {
+    const room = await requireRoom(req);
+    const { round, doc } = reportFor(req, room);
+    const file = kind === 'hwpx' ? makeHwpxDocument(doc) : makeDocxDocument(doc);
+    const base = `종합보고서_${round.name}`.replace(/[\\/:*?"<>|]+/g, ' ').trim();
+    const ascii = `report_${round.name.replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '') || 'export'}`;
+    res.setHeader('Content-Type', kind === 'hwpx' ? 'application/hwp+zip' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${ascii}.${kind}"; filename*=UTF-8''${encodeURIComponent(base)}.${kind}`);
+    res.send(file);
+  };
+  app.get('/api/teacher/:adminToken/report.hwpx', exportReport('hwpx'));
+  app.get('/api/teacher/:adminToken/report.docx', exportReport('docx'));
 
   // 지난달(또는 어떤 달) 배정 기록 저장/수정
   app.put('/api/teacher/:adminToken/roles/history', async (req, res) => {

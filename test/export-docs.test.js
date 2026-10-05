@@ -1,7 +1,7 @@
 // 배정표 내보내기(한글 HWPX · 워드 DOCX) 테스트: 만든 파일을 우리 파서로 다시 읽어 확인합니다.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { rolesDocument, makeHwpxDocument, makeDocxDocument, hwpxHeaderXml, hwpxSectionXml, buildRolesHwpx } from '../server/export-docs.js';
+import { rolesDocument, makeHwpxDocument, makeDocxDocument, hwpxHeaderXml, hwpxSectionXml, docxDocumentXml, docBlocks, buildRolesHwpx } from '../server/export-docs.js';
 import { makeZip, crc32 } from '../server/zipwrite.js';
 import { readZip, extractDocument, documentToText } from '../server/docfiles.js';
 import { DEFAULT_ROLES, parseHistoryText } from '../server/roles.js';
@@ -174,5 +174,57 @@ describe('내보내기 API', () => {
     assert.equal(extractDocument(r.buf, 'a.docx').blocks.filter((b) => b.type === 'table').length, 1);
     assert.equal((await call(`/api/teacher/${t}/roles/export.hwpx?round=nope`)).status, 404);
     assert.equal((await call('/api/teacher/nope/roles/export.hwpx')).status, 404);
+  });
+});
+
+describe('문서 블록 렌더링 (보고서용)', () => {
+  const doc = {
+    title: '블록 문서',
+    subtitle: '부제목 줄',
+    meta: [],
+    blocks: [
+      { type: 'heading', text: '1. 큰 제목', level: 2 },
+      { type: 'paragraph', text: '흐린 설명 문단', style: 'muted' },
+      { type: 'list', items: ['첫째 항목', '둘째 항목'] },
+      { type: 'stats', items: [{ label: '제출', value: '3 / 4명', sub: '75% 제출' }, { label: '고립 위험', value: '0명' }] },
+      { type: 'pagebreak' },
+      { type: 'heading', text: '작은 제목', level: 3 },
+      { type: 'seatmap', podium: 'top', blocks: [{ cols: 2, rows: 1, cells: [['김하늘', '']] }] },
+      { type: 'table', caption: '표 하나', columns: [{ label: '가', width: 0.5 }, { label: '나', width: 0.5 }], rows: [[{ text: '굵게', bold: true }, '보통\n둘째 줄']], header: true },
+      { type: 'paragraph', text: '마지막 안내', style: 'note' },
+    ],
+  };
+  test('한글: 제목 글자 모양, 목록 글머리, 통계 표, 쪽 나눔, 자리표', () => {
+    const xml = hwpxSectionXml(doc);
+    assert.ok(xml.includes('<hp:t>부제목 줄</hp:t>'));
+    assert.match(xml, /charPrIDRef="19"><hp:t>1\. 큰 제목<\/hp:t>/, '큰 제목은 캡션 글자 모양');
+    assert.match(xml, /charPrIDRef="9"><hp:t>작은 제목<\/hp:t>/, '작은 제목은 굵은 셀 글자 모양');
+    assert.match(xml, /charPrIDRef="4"><hp:t>흐린 설명 문단<\/hp:t>/, '흐린 문단은 note 글자 모양');
+    assert.ok(xml.includes('<hp:t>• 첫째 항목</hp:t>') && xml.includes('<hp:t>• 둘째 항목</hp:t>'));
+    assert.ok(xml.includes('<hp:t>항목</hp:t>') && xml.includes('<hp:t>75% 제출</hp:t>'), '통계는 항목·값·설명 표로');
+    assert.match(xml, /pageBreak="1"[^>]*>(?:(?!<hp:p ).)*<hp:t>작은 제목<\/hp:t>/, '쪽 나눔 다음 문단에 pageBreak');
+    assert.equal((xml.match(/pageBreak="1"/g) || []).length, 1);
+    assert.ok(xml.includes('<hp:t>교탁 · 칠판 (위쪽)</hp:t>') && xml.includes('<hp:t>1분단 (위가 칠판 쪽)</hp:t>') && xml.includes('<hp:t>(빈 자리)</hp:t>'));
+    assert.equal((xml.match(/<hp:tbl /g) || []).length, 3, '통계 + 자리표 + 표');
+    const back = extractDocument(makeHwpxDocument(doc, { now: new Date('2026-10-05T03:00:00Z') }), 'b.hwpx');
+    const text = documentToText(back);
+    for (const s of ['블록 문서', '부제목 줄', '1. 큰 제목', '• 첫째 항목', '작은 제목', '김하늘', '(빈 자리)', '표 하나', '둘째 줄', '마지막 안내']) assert.ok(text.includes(s), `"${s}" 없음`);
+    assert.equal(back.blocks.filter((b) => b.type === 'table').length, 3);
+  });
+  test('워드: 같은 블록이 쪽 나눔·목록·표로 들어간다', () => {
+    const xml = docxDocumentXml(doc);
+    assert.equal((xml.match(/<w:br w:type="page"\/>/g) || []).length, 1);
+    assert.ok(xml.includes('>• 첫째 항목</w:t>'), '목록 글머리');
+    assert.equal((xml.match(/<w:tbl>/g) || []).length, 3);
+    assert.ok(xml.includes('교탁 · 칠판 (위쪽)') && xml.includes('1분단 (위가 칠판 쪽)'));
+    const back = extractDocument(makeDocxDocument(doc, { now: new Date('2026-10-05T03:00:00Z') }), 'b.docx');
+    const text = documentToText(back);
+    for (const s of ['블록 문서', '부제목 줄', '1. 큰 제목', '• 둘째 항목', '작은 제목', '75% 제출', '김하늘', '(빈 자리)', '표 하나', '마지막 안내']) assert.ok(text.includes(s), `"${s}" 없음`);
+    assert.equal(back.blocks.filter((b) => b.type === 'table').length, 3);
+  });
+  test('예전 모델(tables · notes)도 블록으로 바뀐다', () => {
+    const blocks = docBlocks({ title: 'x', tables: [{ columns: [{ label: 'a', width: 1 }], rows: [['1']], header: true }], notes: ['메모'] });
+    assert.deepEqual(blocks.map((b) => b.type), ['table', 'paragraph']);
+    assert.equal(blocks[1].style, 'note');
   });
 });

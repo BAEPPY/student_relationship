@@ -7,6 +7,31 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const paras = (cell) => (cell && typeof cell === 'object' && !Array.isArray(cell) ? String(cell.text ?? '') : String(cell ?? '')).split(/\r?\n/);
 const cellOpts = (cell) => (cell && typeof cell === 'object' && !Array.isArray(cell) ? cell : {});
 
+/**
+ * 문서 모델을 블록 목록으로 통일합니다.
+ * 블록: heading{text,level} · paragraph{text,style?} · list{items} · stats{items:[{label,value,sub?}]} · table{caption?,columns,rows,header}
+ *       · seatmap{podium,blocks:[{cols,rows,cells}]} · pagebreak
+ * (예전 모델 { title, meta, tables, notes } 도 받습니다)
+ */
+export function docBlocks(doc) {
+  if (Array.isArray(doc.blocks)) return doc.blocks;
+  return [
+    ...(doc.tables || []).flatMap((t) => [{ type: 'table', ...t }]),
+    ...(doc.notes || []).map((n) => ({ type: 'paragraph', text: n, style: 'note' })),
+  ];
+}
+
+/** 자리표 블록 → 표 블록들 (한글·워드용: 분단마다 표 하나, 칠판이 위) */
+function seatmapTables(block) {
+  return (block.blocks || []).map((b, i) => ({
+    type: 'table',
+    caption: `${i + 1}분단 (위가 칠판 쪽)`,
+    columns: Array.from({ length: b.cols }, () => ({ label: '', width: 1 / b.cols })),
+    rows: (b.cells || []).map((row) => Array.from({ length: b.cols }, (_, ci) => ({ text: row?.[ci] || '(빈 자리)', align: 'center', bold: Boolean(row?.[ci]) }))),
+    header: false,
+  }));
+}
+
 // ---------- 공통: 배정표 문서 모델 ----------
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -105,9 +130,9 @@ export function hwpxSectionXml(doc) {
   const topId = () => String(nextId++);
   const lineseg = (vertsize, width, vertpos = 0) => `<hp:linesegarray><hp:lineseg textpos="0" vertpos="${vertpos}" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray>`;
   // 문단: 한글이 쓰는 속성 그대로. 셀 안 첫 문단은 id 2147483648, 그다음은 0 (한글 저장 파일과 같은 방식)
-  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0 } = {}) => {
+  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0, pageBreak = 0 } = {}) => {
     const size = charHeight(charPr);
-    return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(size, width, vertpos)}</hp:p>`;
+    return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="${pageBreak ? 1 : 0}" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(size, width, vertpos)}</hp:p>`;
   };
   const top = (text, opts = {}) => p(text, { id: topId(), ...opts });
 
@@ -146,14 +171,28 @@ export function hwpxSectionXml(doc) {
     return `${t.caption ? top(t.caption, { paraPr: PA.left, charPr: CH.caption }) : ''}${tablePara}`;
   };
 
+  let pageBreakNext = false;
+  const block = (b) => {
+    const opts = pageBreakNext ? { pageBreak: 1 } : {};
+    pageBreakNext = false;
+    switch (b.type) {
+      case 'heading': return top(b.text, { paraPr: PA.left, charPr: b.level >= 3 ? CH.cellBold : CH.caption, ...opts });
+      case 'paragraph': return top(b.text, { paraPr: PA.left, charPr: b.style === 'muted' || b.style === 'note' ? CH.note : CH.body, ...opts });
+      case 'list': return (b.items || []).map((it, i) => top(`• ${it}`, { paraPr: PA.left, charPr: CH.body, ...(i ? {} : opts) })).join('');
+      case 'stats': return table({ columns: [{ label: '항목', width: 0.34 }, { label: '값', width: 0.26 }, { label: '설명', width: 0.4 }], rows: (b.items || []).map((it) => [{ text: it.label, bold: true }, { text: it.value, align: 'center' }, it.sub || '']), header: true });
+      case 'table': return table(b);
+      case 'seatmap': return [top('교탁 · 칠판 (위쪽)', { paraPr: PA.center, charPr: CH.cellBold }), ...seatmapTables(b).map((t) => table(t))].join('');
+      case 'pagebreak': pageBreakNext = true; return '';
+      default: return '';
+    }
+  };
   const body = [
     // 첫 문단: 구역·단 설정 + 제목 (한글 저장 파일처럼 첫 문단의 첫 run 에 secPr 이 들어갑니다)
     top(doc.title, { paraPr: PA.center, charPr: CH.title, lead: `<hp:run charPrIDRef="${CH.body}">${secPr()}</hp:run>` }),
-    ...doc.meta.map((m) => top(m, { paraPr: PA.center, charPr: CH.small })),
+    ...(doc.subtitle ? [top(doc.subtitle, { paraPr: PA.center, charPr: CH.cellSub })] : []),
+    ...(doc.meta || []).map((m) => top(m, { paraPr: PA.center, charPr: CH.small })),
     top(''),
-    ...doc.tables.flatMap((t, i) => [i ? top('') : '', table(t)]),
-    top(''),
-    ...doc.notes.map((n) => top(n, { paraPr: PA.left, charPr: CH.note })),
+    ...docBlocks(doc).map((b, i, arr) => (b.type === 'pagebreak' ? block(b) : `${i && arr[i - 1].type !== 'heading' && b.type !== 'heading' ? top('') : ''}${block(b)}`)),
   ].join('');
   return `${XML_HEAD}<hs:sec ${HWP_NS}>${body}</hs:sec>`;
 }
@@ -171,7 +210,12 @@ const HWPX_STATIC = {
 
 /** 문서 모델 → HWPX(zip). 항목 순서와 압축 방식은 한글 저장 파일과 같게 (mimetype 을 맨 앞에 압축 없이) */
 export function makeHwpxDocument(doc, { now = new Date() } = {}) {
-  const preview = [doc.title, ...doc.meta, ...doc.tables.flatMap((t) => [t.caption || '', ...(t.header ? [t.columns.map((c) => c.label).join('\t')] : []), ...t.rows.map((r) => r.map((c) => paras(c).join(' ')).join('\t'))]), ...doc.notes].filter(Boolean).join('\n');
+  const preview = [doc.title, doc.subtitle || '', ...(doc.meta || []), ...docBlocks(doc).flatMap((b) => {
+    if (b.type === 'table') return [b.caption || '', ...(b.header ? [b.columns.map((c) => c.label).join('\t')] : []), ...b.rows.map((r) => r.map((c) => paras(c).join(' ')).join('\t'))];
+    if (b.type === 'list') return b.items || [];
+    if (b.type === 'stats') return (b.items || []).map((it) => `${it.label}: ${it.value}`);
+    return [b.text || ''];
+  })].filter(Boolean).join('\n').slice(0, 4000);
   // 항목 순서와 압축 방식은 한글이 저장한 파일과 같게 (mimetype·version.xml 은 압축 없이)
   return makeZip([
     { name: 'mimetype', data: 'application/hwp+zip', store: true },
@@ -215,12 +259,23 @@ export function docxDocumentXml(doc) {
     }).join('')}</w:tr>`).join('');
     return `${t.caption ? docxP(t.caption, { bold: true, after: 80 }) : ''}<w:tbl><w:tblPr><w:tblW w:w="${TEXT_TW}" w:type="dxa"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid>${cols.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${trs}</w:tbl>`;
   };
+  const block = (b) => {
+    switch (b.type) {
+      case 'heading': return docxP(b.text, { bold: true, size: b.level >= 3 ? 24 : 28, after: 100 });
+      case 'paragraph': return docxP(b.text, b.style === 'muted' || b.style === 'note' ? { size: 18, color: '555555' } : {});
+      case 'list': return (b.items || []).map((it) => docxP(`• ${it}`, { after: 40 })).join('');
+      case 'stats': return table({ columns: [{ label: '항목', width: 0.34 }, { label: '값', width: 0.26 }, { label: '설명', width: 0.4 }], rows: (b.items || []).map((it) => [{ text: it.label, bold: true }, { text: it.value, align: 'center' }, it.sub || '']), header: true });
+      case 'table': return table(b);
+      case 'seatmap': return [docxP('교탁 · 칠판 (위쪽)', { align: 'center', bold: true }), ...seatmapTables(b).map((t) => `${table(t)}${docxP('', { after: 120 })}`)].join('');
+      case 'pagebreak': return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+      default: return '';
+    }
+  };
   const body = [
     docxP(doc.title, { align: 'center', bold: true, size: 32, after: 160 }),
-    ...doc.meta.map((m) => docxP(m, { align: 'center', size: 18, color: '555555', after: 240 })),
-    ...doc.tables.flatMap((t, i) => [i ? docxP('', { after: 200 }) : '', table(t)]),
-    docxP('', { after: 120 }),
-    ...doc.notes.map((n) => docxP(n, { size: 18, color: '555555' })),
+    ...(doc.subtitle ? [docxP(doc.subtitle, { align: 'center', size: 22, after: 120 })] : []),
+    ...(doc.meta || []).map((m) => docxP(m, { align: 'center', size: 18, color: '555555', after: 240 })),
+    ...docBlocks(doc).map((b, i, arr) => `${i && b.type === 'table' && arr[i - 1].type === 'table' ? docxP('', { after: 120 }) : ''}${block(b)}`),
     `<w:sectPr><w:pgSz w:w="${PAGE_TW.width}" w:h="${PAGE_TW.height}"/><w:pgMar w:top="${PAGE_TW.margin}" w:right="${PAGE_TW.margin}" w:bottom="${PAGE_TW.margin}" w:left="${PAGE_TW.margin}" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>`,
   ].join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W_NS}><w:body>${body}</w:body></w:document>`;
