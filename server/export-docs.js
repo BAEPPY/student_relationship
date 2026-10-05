@@ -110,29 +110,87 @@ const PAGE = { width: 59528, height: 84186, left: 5669, right: 5669, top: 5669, 
 const TEXT_WIDTH = PAGE.width - PAGE.left - PAGE.right; // 48190
 const CELL_MARGIN = { left: 510, right: 510, top: 141, bottom: 141 };
 
-export function hwpxHeaderXml() { return HEADER_XML; }
+// 글꼴: 머리 부분의 글꼴 목록을 한컴 윤고딕으로 통일합니다 (0 = 윤고딕 250 굵은 쪽, 1 = 윤고딕 240 보통).
+// 글자 모양(charPr)마다 굵게이거나 큰 글자(15pt 이상)는 250, 나머지는 240 을 가리키게 합니다.
+const FONT_BOLD = '한컴 윤고딕 250';
+const FONT_REGULAR = '한컴 윤고딕 240';
+const HWPX_HEADER = HEADER_XML
+  .replace(/<hh:font id="0" face="[^"]*"/g, `<hh:font id="0" face="${FONT_BOLD}"`)
+  .replace(/<hh:font id="1" face="[^"]*"/g, `<hh:font id="1" face="${FONT_REGULAR}"`)
+  .replace(/<hh:charPr id="(\d+)" height="(\d+)"([^>]*)>([\s\S]*?)<\/hh:charPr>/g, (m, id, height, attrs, body) => {
+    const font = body.includes('<hh:bold/>') || Number(height) >= 1500 ? 0 : 1;
+    const ref = `<hh:fontRef hangul="${font}" latin="${font}" hanja="${font}" japanese="${font}" other="${font}" symbol="${font}" user="${font}"/>`;
+    return `<hh:charPr id="${id}" height="${height}"${attrs}>${body.replace(/<hh:fontRef [^>]*\/>/, ref)}</hh:charPr>`;
+  });
+
+export function hwpxHeaderXml() { return HWPX_HEADER; }
 
 function secPr() {
   const pbf = (type) => `<hp:pageBorderFill type="${type}" borderFillIDRef="${BF.none}" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>`;
   return `<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0"><hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/><hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/><hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/><hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/><hp:pagePr landscape="WIDELY" width="${PAGE.width}" height="${PAGE.height}" gutterType="LEFT_ONLY"><hp:margin header="${PAGE.header}" footer="${PAGE.footer}" gutter="0" left="${PAGE.left}" right="${PAGE.right}" top="${PAGE.top}" bottom="${PAGE.bottom}"/></hp:pagePr><hp:footNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="EACH_COLUMN" beneathText="0"/></hp:footNotePr><hp:endNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="END_OF_DOCUMENT" beneathText="0"/></hp:endNotePr>${pbf('BOTH')}${pbf('EVEN')}${pbf('ODD')}</hp:secPr><hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/></hp:ctrl>`;
 }
 
-/** 글자 수로 줄 수를 어림합니다 (한글은 글자 크기만큼, 영숫자는 그 절반 폭으로 봄) */
-function estimateLines(text, innerWidth, size) {
-  let width = 0;
-  for (const ch of text) width += /[ᄀ-ᇿ㄰-㆏가-힯一-鿿＀-￯]/.test(ch) ? size : size * 0.55;
-  return Math.max(1, Math.ceil(width / Math.max(1, innerWidth)));
+/** 글자 폭 어림 (글자 크기 대비): 한글·한자·전각은 0.95, 띄어쓰기 0.33, 좁은 문장부호 0.4, 나머지 영숫자 0.6 (실제보다 조금 넓게 봐서 줄이 모자라지 않게) */
+function charWidth(ch, size) {
+  if (ch === ' ') return size * 0.33;
+  if (/[.,:;'|!·]/.test(ch)) return size * 0.4;
+  if (/[\x21-\x7e]/.test(ch)) return size * 0.6;
+  return size * 0.95;   // 한컴 윤고딕 한글 글자 폭은 글자 크기의 0.9 배쯤 (한글이 저장한 줄 나눔으로 확인)
 }
+
+/**
+ * 한글처럼 어절 단위로 줄을 나눠 각 줄의 시작 위치(UTF-16 글자 번호)를 돌려줍니다. 빈 글도 한 줄.
+ * 줄 끝의 띄어쓰기는 폭을 넘어도 그 줄에 남깁니다 (한글 저장 파일과 같은 방식).
+ */
+function wrapLines(text, innerWidth, size) {
+  const max = Math.max(1, innerWidth);
+  const starts = [0];
+  let width = 0;
+  let lastSpace = -1;        // 지금 줄에서 마지막 띄어쓰기 바로 다음 위치
+  let widthAfterSpace = 0;   // 그 위치부터 지금까지의 폭
+  let i = 0;
+  while (i < text.length) {
+    const cp = text.codePointAt(i);
+    const ch = String.fromCodePoint(cp);
+    const w = charWidth(ch, size);
+    if (ch === ' ') {
+      width += w;
+      i += ch.length;
+      lastSpace = i;
+      widthAfterSpace = 0;
+      continue;
+    }
+    if (width + w > max && i > starts[starts.length - 1]) {
+      if (lastSpace > starts[starts.length - 1]) {
+        starts.push(lastSpace);
+        width = widthAfterSpace;
+      } else {
+        starts.push(i);
+        width = 0;
+      }
+      lastSpace = -1;
+      widthAfterSpace = 0;
+    }
+    width += w;
+    widthAfterSpace += w;
+    i += ch.length;
+  }
+  return starts;
+}
+const lineHeight = (size) => Math.round(size * 1.6);
+
 const charHeight = (charPr) => ({ 0: 1000, 2: 900, 4: 900, 7: 1200, 8: 1300, 9: 1200, 12: 1200, 14: 1800, 19: 1500 }[charPr] || 1000);
 
 export function hwpxSectionXml(doc) {
   let nextId = 3121190098;
+  let zOrder = 0;
   const topId = () => String(nextId++);
-  const lineseg = (vertsize, width, vertpos = 0) => `<hp:linesegarray><hp:lineseg textpos="0" vertpos="${vertpos}" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray>`;
+  // 줄 정보: 한글은 저장된 줄 나눔을 그대로 믿고 그리므로 줄마다 lineseg 를 하나씩 씁니다 (하나만 쓰면 긴 글이 겹쳐 보임)
+  const lineseg = (starts, vertsize, width, vertpos = 0) => `<hp:linesegarray>${starts.map((textpos, i) => `<hp:lineseg textpos="${textpos}" vertpos="${vertpos + i * lineHeight(vertsize)}" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/>`).join('')}</hp:linesegarray>`;
   // 문단: 한글이 쓰는 속성 그대로. 셀 안 첫 문단은 id 2147483648, 그다음은 0 (한글 저장 파일과 같은 방식)
-  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0, pageBreak = 0 } = {}) => {
+  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0, pageBreak = 0, starts = null } = {}) => {
     const size = charHeight(charPr);
-    return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="${pageBreak ? 1 : 0}" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(size, width, vertpos)}</hp:p>`;
+    return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="${pageBreak ? 1 : 0}" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(starts || wrapLines(text || '', width, size), size, width, vertpos)}</hp:p>`;
   };
   const top = (text, opts = {}) => p(text, { id: topId(), ...opts });
 
@@ -150,8 +208,8 @@ export function hwpxSectionXml(doc) {
     const rowHeights = allRows.map((row) => Math.max(...row.map((cell, ci) => {
       const st = styleOf(cell, ci);
       const inner = cols[ci] - CELL_MARGIN.left - CELL_MARGIN.right;
-      const lines = paras(cell).reduce((n, line, li) => n + estimateLines(line, inner, charHeight(li && st.subCharPr ? st.subCharPr : st.charPr)), 0);
-      return Math.round(lines * charHeight(st.charPr) * 1.6) + CELL_MARGIN.top + CELL_MARGIN.bottom + 300;
+      const height = paras(cell).reduce((n, line, li) => { const size = charHeight(li && st.subCharPr ? st.subCharPr : st.charPr); return n + wrapLines(line, inner, size).length * lineHeight(size); }, 0);
+      return height + CELL_MARGIN.top + CELL_MARGIN.bottom + 300;
     })));
     const height = rowHeights.reduce((a, b) => a + b, 0);
     const trs = allRows.map((row, ri) => `<hp:tr>${row.map((cell, ci) => {
@@ -160,14 +218,17 @@ export function hwpxSectionXml(doc) {
       let vert = 0;
       const body = paras(cell).map((line, li) => {
         const charPr = li && st.subCharPr ? st.subCharPr : st.charPr;
-        const xml = p(line, { id: li ? '0' : '2147483648', paraPr: st.paraPr, charPr, width: inner, vertpos: vert });
-        vert += Math.round(charHeight(charPr) * 1.6);
+        const starts = wrapLines(line, inner, charHeight(charPr));
+        const xml = p(line, { id: li ? '0' : '2147483648', paraPr: st.paraPr, charPr, width: inner, vertpos: vert, starts });
+        vert += starts.length * lineHeight(charHeight(charPr));
         return xml;
       }).join('');
       return `<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="${BF.line}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body}</hp:subList><hp:cellAddr colAddr="${ci}" rowAddr="${ri}"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="${cols[ci]}" height="${rowHeights[ri]}"/><hp:cellMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/></hp:tc>`;
     }).join('')}</hp:tr>`).join('');
-    const tbl = `<hp:tbl id="${topId()}" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="${allRows.length}" colCnt="${cols.length}" cellSpacing="0" borderFillIDRef="${BF.line}" noAdjust="0"><hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="283" right="283" top="283" bottom="283"/><hp:inMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/>${trs}</hp:tbl>`;
-    const tablePara = `<hp:p id="${topId()}" paraPrIDRef="${PA.justify}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${CH.body}">${tbl}<hp:t/></hp:run>${lineseg(height, TEXT_WIDTH)}</hp:p>`;
+    // 표는 "글자처럼 취급" 하지 않고(treatAsChar=0) 문단에 붙여 자리를 차지하게 하며, 쪽 경계에서 나눕니다(pageBreak=TABLE). 제목 줄은 쪽마다 반복.
+    const tbl = `<hp:tbl id="${topId()}" zOrder="${zOrder++}" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="TABLE" repeatHeader="1" rowCnt="${allRows.length}" colCnt="${cols.length}" cellSpacing="0" borderFillIDRef="${BF.line}" noAdjust="0"><hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="283" right="283" top="283" bottom="283"/><hp:inMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/>${trs}</hp:tbl>`;
+    // 표를 붙인 문단(빈 줄): 표가 문단 위에 자리 잡고 이 빈 줄은 표 아래로 밀려 표 뒤 간격이 됩니다
+    const tablePara = `<hp:p id="${topId()}" paraPrIDRef="${PA.justify}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${CH.body}">${tbl}<hp:t/></hp:run>${lineseg([0], charHeight(CH.body), TEXT_WIDTH)}</hp:p>`;
     return `${t.caption ? top(t.caption, { paraPr: PA.left, charPr: CH.caption }) : ''}${tablePara}`;
   };
 
@@ -192,7 +253,7 @@ export function hwpxSectionXml(doc) {
     ...(doc.subtitle ? [top(doc.subtitle, { paraPr: PA.center, charPr: CH.cellSub })] : []),
     ...(doc.meta || []).map((m) => top(m, { paraPr: PA.center, charPr: CH.small })),
     top(''),
-    ...docBlocks(doc).map((b, i, arr) => (b.type === 'pagebreak' ? block(b) : `${i && arr[i - 1].type !== 'heading' && b.type !== 'heading' ? top('') : ''}${block(b)}`)),
+    ...docBlocks(doc).map((b, i, arr) => (b.type === 'pagebreak' ? block(b) : `${i && !['heading', 'table', 'stats', 'seatmap'].includes(arr[i - 1].type) && b.type !== 'heading' ? top('') : ''}${block(b)}`)),
   ].join('');
   return `${XML_HEAD}<hs:sec ${HWP_NS}>${body}</hs:sec>`;
 }

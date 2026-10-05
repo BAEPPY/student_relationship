@@ -115,8 +115,55 @@ describe('HWPX', () => {
     const xml = hwpxSectionXml({ title: 'A & B <C> "D"', meta: [], tables: [{ columns: [{ label: 'x', width: 1 }], rows: [['1 < 2 & 3']], header: true }], notes: [] });
     assert.ok(xml.includes('<hp:t>A &amp; B &lt;C&gt; &quot;D&quot;</hp:t>'));
     assert.ok(xml.includes('<hp:t>1 &lt; 2 &amp; 3</hp:t>'));
-    assert.ok(hwpxHeaderXml().includes('함초롬돋움'));
-    assert.ok(hwpxHeaderXml().includes('강원교육모두'));
+  });
+
+  test('글꼴은 한컴 윤고딕으로 통일: 보통 글자는 240, 굵은·큰 글자는 250', () => {
+    const header = hwpxHeaderXml();
+    const faces = Object.fromEntries([...header.matchAll(/<hh:font id="(\d+)" face="([^"]+)"/g)].slice(0, 5).map((m) => [m[1], m[2]]));
+    assert.equal(faces[0], '한컴 윤고딕 250');
+    assert.equal(faces[1], '한컴 윤고딕 240');
+    assert.equal((header.match(/<hh:fontface lang=/g) || []).length, 7, '언어마다 글꼴 목록');
+    for (const m of header.matchAll(/<hh:charPr id="(\d+)" height="(\d+)"[^>]*>([\s\S]*?)<\/hh:charPr>/g)) {
+      const ref = m[3].match(/<hh:fontRef hangul="(\d+)" latin="(\d+)" hanja="(\d+)" japanese="(\d+)" other="(\d+)" symbol="(\d+)" user="(\d+)"\/>/);
+      assert.ok(ref, `charPr ${m[1]} fontRef`);
+      const want = m[3].includes('<hh:bold/>') || Number(m[2]) >= 1500 ? '0' : '1';
+      assert.deepEqual(ref.slice(1), Array(7).fill(want), `charPr ${m[1]} → 윤고딕 ${want === '0' ? '250' : '240'}`);
+    }
+    assert.ok(!header.includes('강원교육모두'), '쓰지 않는 글꼴 이름이 남지 않음');
+  });
+
+  test('긴 글은 줄마다 lineseg 를 쓰고, 표는 글자처럼 취급하지 않으며 쪽 경계에서 나뉜다', () => {
+    const long = '서로 안 좋은 사이로 표시함 · 안 좋은 이유의 심각도 (놀리거나 험담해요, 무시하거나 따돌려요) · 공통 친구 2명 (같은 무리에서 자주 마주침)';
+    const xml = hwpxSectionXml({ title: '줄 나눔', blocks: [
+      { type: 'paragraph', text: long.repeat(3) },
+      { type: 'table', columns: [{ label: '학생', width: 0.3 }, { label: '주요 근거', width: 0.7 }], rows: [['김하늘 ↔ 조현우', long]], header: true },
+    ] });
+    // 본문 긴 문단: 줄마다 lineseg, textpos 는 커지고 vertpos 는 줄 높이(1000 × 1.6)씩
+    const bodyPara = xml.match(/<hp:p [^>]*><hp:run charPrIDRef="0"><hp:t>서로 안 좋은 사이로[^<]*<\/hp:t><\/hp:run><hp:linesegarray>(.*?)<\/hp:linesegarray>/);
+    assert.ok(bodyPara, '본문 문단');
+    const segs = [...bodyPara[1].matchAll(/textpos="(\d+)" vertpos="(\d+)"/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    assert.ok(segs.length >= 3, `줄 수 ${segs.length}`);
+    segs.forEach(([textpos, vertpos], i) => { if (i) { assert.ok(textpos > segs[i - 1][0]); assert.equal(vertpos, i * 1600); } });
+    assert.equal(segs[0][0], 0);
+    assert.ok(segs[segs.length - 1][0] < long.length * 3);
+    // 어절 단위로 나눔: 줄 시작은 띄어쓰기 바로 뒤
+    for (const [textpos] of segs.slice(1)) assert.equal(long.repeat(3)[textpos - 1], ' ', `줄 시작 ${textpos}`);
+    // 셀 안 긴 글도 여러 줄, 셀 높이는 줄 수에 맞게
+    const cell = xml.slice(xml.lastIndexOf('<hp:tc '), xml.lastIndexOf('</hp:tc>'));
+    const cellSegs = (cell.match(/<hp:lineseg /g) || []).length;
+    assert.ok(cellSegs >= 3, `셀 줄 수 ${cellSegs}`);
+    const cellHeight = Number(cell.match(/<hp:cellSz width="\d+" height="(\d+)"/)[1]);
+    assert.ok(cellHeight >= cellSegs * 2080, `셀 높이 ${cellHeight} ≥ ${cellSegs} 줄`);
+    // 표 속성: 글자처럼 취급 안 함, 쪽 경계에서 나눔, 제목 줄 반복, 자리 차지
+    assert.match(xml, /<hp:tbl [^>]*pageBreak="TABLE"[^>]*repeatHeader="1"/);
+    assert.match(xml, /<hp:pos treatAsChar="0" [^>]*vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT"/);
+    assert.ok(xml.includes('textWrap="TOP_AND_BOTTOM"'));
+    // 표를 붙인 문단은 보통 줄 높이(표 높이가 아님)
+    const anchor = xml.slice(xml.indexOf('</hp:tbl>'), xml.indexOf('</hp:tbl>') + 400);
+    assert.match(anchor, /<hp:t\/><\/hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000" /);
+    // 짧은 글은 lineseg 하나
+    const short = hwpxSectionXml({ title: '짧은 제목', blocks: [{ type: 'paragraph', text: '한 줄' }] });
+    assert.equal((short.match(/<hp:lineseg /g) || []).length, 3, '제목 · 빈 줄 · 문단');
   });
 });
 
