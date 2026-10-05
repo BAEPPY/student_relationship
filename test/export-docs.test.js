@@ -1,7 +1,7 @@
 // 배정표 내보내기(한글 HWPX · 워드 DOCX) 테스트: 만든 파일을 우리 파서로 다시 읽어 확인합니다.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { rolesDocument, makeHwpxDocument, makeDocxDocument, hwpxHeaderXml, hwpxSectionXml, docxDocumentXml, docBlocks, buildRolesHwpx } from '../server/export-docs.js';
+import { rolesDocument, makeHwpxDocument, makeDocxDocument, hwpxHeaderXml, hwpxSectionXml, docxDocumentXml, docBlocks, buildRolesHwpx, plainText } from '../server/export-docs.js';
 import { makeZip, crc32 } from '../server/zipwrite.js';
 import { readZip, extractDocument, documentToText } from '../server/docfiles.js';
 import { DEFAULT_ROLES, parseHistoryText } from '../server/roles.js';
@@ -270,6 +270,21 @@ describe('문서 블록 렌더링 (보고서용)', () => {
     for (const s of ['블록 문서', '부제목 줄', '1. 큰 제목', '• 둘째 항목', '작은 제목', '75% 제출', '김하늘', '(빈 자리)', '표 하나', '마지막 안내']) assert.ok(text.includes(s), `"${s}" 없음`);
     assert.equal(back.blocks.filter((b) => b.type === 'table').length, 3);
   });
+  test('파일에는 한글이 못 그리는 글자를 정리: 이모지 변형 선택자 제거, 그림 문자는 글로', () => {
+    const doc = { title: '받은 ❤️ · 보낸 ⚡', meta: [], blocks: [
+      { type: 'list', items: ['👓 앞자리 필요: 김하늘', '📝 김하늘: 칠판 글씨가 잘 안 보임', '⇢ 가까이 앉히기: 김하늘 · 이도윤', '↔ 떨어뜨리기: 박서연 · 최지우'] },
+      { type: 'table', columns: [{ label: '받은 ❤️', width: 0.5 }, { label: '받은 ⚡', width: 0.5 }], rows: [['3', '😀 5']], header: true },
+    ] };
+    for (const [kind, xml] of [['hwpx', hwpxSectionXml(doc)], ['docx', docxDocumentXml(doc)]]) {
+      assert.ok(!/[\uFE0E\uFE0F\u200D]/.test(xml), `${kind}: 변형 선택자 없음`);
+      assert.ok(!/[\uD800-\uDFFF]/.test(xml), `${kind}: 기본 평면 밖 그림 문자 없음`);
+      for (const t of ['받은 ❤ · 보낸 ⚡', '• 앞자리 필요: 김하늘', '• 김하늘: 칠판 글씨가 잘 안 보임', '• → 가까이 앉히기: 김하늘 · 이도윤', '• ↔ 떨어뜨리기: 박서연 · 최지우', '>받은 ❤<', '>5<']) assert.ok(xml.includes(t), `${kind}: ${t}`);
+    }
+    const preview = readZip(makeHwpxDocument(doc, { now: new Date('2026-10-05T03:00:00Z') })).get('Preview/PrvText.txt')().toString();
+    assert.ok(preview.startsWith('받은 ❤ · 보낸 ⚡') && !preview.includes('\uFE0F'));
+    assert.equal(plainText('  1 김하늘   2 이도윤  '), '1 김하늘   2 이도윤', '이름 사이 띄어쓰기는 그대로');
+  });
+
   test('예전 모델(tables · notes)도 블록으로 바뀐다', () => {
     const blocks = docBlocks({ title: 'x', tables: [{ columns: [{ label: 'a', width: 1 }], rows: [['1']], header: true }], notes: ['메모'] });
     assert.deepEqual(blocks.map((b) => b.type), ['table', 'paragraph']);

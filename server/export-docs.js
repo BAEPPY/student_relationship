@@ -3,8 +3,18 @@
 import { makeZip } from './zipwrite.js';
 import { HEADER_XML, SETTINGS_XML, VERSION_XML } from './hwpx-template.js';
 
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const paras = (cell) => (cell && typeof cell === 'object' && !Array.isArray(cell) ? String(cell.text ?? '') : String(cell ?? '')).split(/\r?\n/);
+// 문서 글꼴이 못 그리는 글자 정리: 이모지에 붙는 변형 선택자(U+FE0F 등)는 한글에서 네모로 보이고,
+// 기본 다국어 평면 밖의 그림 문자(👓 📝 …)는 글꼴에 없어 깨지므로 글로 바꾸거나 뺍니다. 화면(웹)에는 그대로 두고 파일에만 적용.
+const SYMBOL_TEXT = { '⇢': '→', '⇠': '←', '👓': '', '📝': '', '✅': '✓', '❌': '✕' };
+export function plainText(s) {
+  return String(s ?? '')
+    .replace(/[\uFE0E\uFE0F\u200D]/g, '')
+    .replace(/(\p{Extended_Pictographic}|[\u{10000}-\u{10FFFF}])( ?)/gu, (m, ch, sp) => { const r = SYMBOL_TEXT[ch] ?? (ch.codePointAt(0) > 0xffff ? '' : ch); return r ? r + sp : ''; })
+    .replace(/[\u2190-\u21FF]/g, (m) => SYMBOL_TEXT[m] ?? m)
+    .replace(/^ +| +$/g, '');
+}
+const esc = (s) => plainText(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const paras = (cell) => plainText(cell && typeof cell === 'object' && !Array.isArray(cell) ? cell.text : cell).split(/\r?\n/);
 const cellOpts = (cell) => (cell && typeof cell === 'object' && !Array.isArray(cell) ? cell : {});
 
 /**
@@ -188,7 +198,8 @@ export function hwpxSectionXml(doc) {
   // 줄 정보: 한글은 저장된 줄 나눔을 그대로 믿고 그리므로 줄마다 lineseg 를 하나씩 씁니다 (하나만 쓰면 긴 글이 겹쳐 보임)
   const lineseg = (starts, vertsize, width, vertpos = 0) => `<hp:linesegarray>${starts.map((textpos, i) => `<hp:lineseg textpos="${textpos}" vertpos="${vertpos + i * lineHeight(vertsize)}" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/>`).join('')}</hp:linesegarray>`;
   // 문단: 한글이 쓰는 속성 그대로. 셀 안 첫 문단은 id 2147483648, 그다음은 0 (한글 저장 파일과 같은 방식)
-  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0, pageBreak = 0, starts = null } = {}) => {
+  const p = (raw, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0, pageBreak = 0, starts = null } = {}) => {
+    const text = plainText(raw);
     const size = charHeight(charPr);
     return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="${pageBreak ? 1 : 0}" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(starts || wrapLines(text || '', width, size), size, width, vertpos)}</hp:p>`;
   };
@@ -276,7 +287,7 @@ export function makeHwpxDocument(doc, { now = new Date() } = {}) {
     if (b.type === 'list') return b.items || [];
     if (b.type === 'stats') return (b.items || []).map((it) => `${it.label}: ${it.value}`);
     return [b.text || ''];
-  })].filter(Boolean).join('\n').slice(0, 4000);
+  })].map(plainText).filter(Boolean).join('\n').slice(0, 4000);
   // 항목 순서와 압축 방식은 한글이 저장한 파일과 같게 (mimetype·version.xml 은 압축 없이)
   return makeZip([
     { name: 'mimetype', data: 'application/hwp+zip', store: true },
