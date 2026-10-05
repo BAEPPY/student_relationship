@@ -15,13 +15,18 @@ export function addMonths(date, months) {
   return d;
 }
 
-/** 회차의 마지막 활동 시각: 마감 시각, 없으면 가장 최근 제출, 없으면 시작 시각 */
+/** 회차의 마지막 활동 시각: 시작·마감, 응답 제출, 성향 설문·지원서 저장, 역할 배정·AI 분석 가운데 가장 늦은 시각 */
 export function roundLastActivity(round) {
   let latest = round.startedAt || null;
-  if (round.closedAt && (!latest || round.closedAt > latest)) latest = round.closedAt;
-  for (const sub of Object.values(round.submissions || {})) {
-    if (sub?.submittedAt && (!latest || sub.submittedAt > latest)) latest = sub.submittedAt;
-  }
+  const bump = (t) => { if (typeof t === 'string' && t && (!latest || t > latest)) latest = t; };
+  bump(round.closedAt);
+  for (const sub of Object.values(round.submissions || {})) bump(sub?.submittedAt);
+  for (const p of Object.values(round.profiles || {})) bump(p?.updatedAt);
+  for (const a of Object.values(round.applications || {})) bump(a?.updatedAt);
+  bump(round.roleAssignment?.createdAt);
+  bump(round.roleAssignment?.updatedAt);
+  bump(round.roleAssignment?.publishedAt);
+  bump(round.aiAnalysis?.createdAt);
   return latest;
 }
 
@@ -36,6 +41,7 @@ export function roomLastActivity(room) {
   for (const r of room.rounds || []) bump(roundLastActivity(r));
   bump(room.seating?.updatedAt);
   bump(room.teacherNotes?.updatedAt);
+  for (const h of room.roleHistory || []) bump(h?.updatedAt);
   return latest;
 }
 
@@ -52,7 +58,12 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
     const last = roundLastActivity(r);
     if (last && last < cutoff) removed.push(r); else keep.push(r);
   }
-  if (!removed.length) return { changed: false, deleteRoom: false, removed };
+  // 1인 1역 달별 기록도 같은 기간이 지나면 지웁니다. (저장 시각이 없는 옛 기록은 그대로 둠)
+  const history = room.roleHistory || [];
+  const keptHistory = history.filter((h) => !(h?.updatedAt && h.updatedAt < cutoff));
+  const historyChanged = keptHistory.length !== history.length;
+  if (historyChanged) room.roleHistory = keptHistory;
+  if (!removed.length) return { changed: historyChanged, deleteRoom: false, removed };
 
   const lastActivity = roomLastActivity(room);
   if (keep.length === 0 && lastActivity && lastActivity < cutoff) {

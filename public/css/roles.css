@@ -1,0 +1,153 @@
+/* 선생님 1인 1역 페이지 (public/js/roles.js 와 함께 작성). 변수와 .card/.btn/.badge/.table 은 style.css 를 그대로 씁니다. */
+
+/* ---------- 머리 카드 ---------- */
+.roles-flow { display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: center; font-size: 13.5px; color: var(--gray-700); margin: 8px 0 10px; }
+.roles-flow .step-pill { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 999px; padding: 4px 11px; white-space: nowrap; }
+.roles-flow .arrow { color: var(--gray-500); }
+.status-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.status-badges .badge { font-size: 13px; padding: 4px 11px; }
+.section-body { margin-top: 4px; }
+.section-body h3 { margin: 0 0 6px; font-size: 16px; }
+
+/* ---------- 역할 목록 편집 표 ---------- */
+.roles-table { min-width: 820px; }
+.roles-table td { vertical-align: top; }
+.roles-table input[type="text"], .roles-table input[type="number"], .roles-table textarea {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px;
+  font-family: inherit; font-size: 14px; background: #fff; transition: border-color .15s, box-shadow .15s;
+}
+.roles-table textarea { min-height: 58px; resize: vertical; line-height: 1.4; }
+.roles-table input:focus, .roles-table textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(108,92,231,.15); }
+.roles-table td.name-col { width: 190px; }
+.roles-table td.sub-col { width: 150px; }
+.roles-table td.slots-col { width: 76px; }
+.roles-table td.count-col { white-space: nowrap; font-size: 13px; color: var(--gray-700); }
+.count-pills { display: inline-flex; gap: 4px; }
+.count-pills span { display: inline-block; min-width: 24px; text-align: center; border-radius: 6px; background: var(--gray-100); border: 1px solid var(--gray-200); font-size: 12.5px; padding: 2px 5px; }
+.count-pills span.first { background: var(--blue-light); color: var(--blue-dark); border-color: #cfcaff; font-weight: 700; }
+
+/* ---------- 지난달 현황 ---------- */
+.history-list { list-style: none; padding: 0; margin: 0 0 14px; }
+.history-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
+.history-item:last-child { border-bottom: 0; }
+.history-item .grow { flex: 1; }
+.history-detail { width: 100%; font-size: 13px; color: var(--gray-700); display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 12px; padding: 4px 0 2px; }
+.roles-import { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; }
+.roles-import textarea {
+  width: 100%; min-height: 150px; padding: 10px 12px; border: 1.5px solid var(--gray-300); border-radius: 12px;
+  font-family: inherit; font-size: 14px; resize: vertical; background: #fff; line-height: 1.45;
+}
+.roles-import input[type="text"] { padding: 8px 12px; border: 1.5px solid var(--gray-300); border-radius: 10px; font-family: inherit; font-size: 15px; background: #fff; width: 170px; }
+.roles-import input:focus, .roles-import textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(108,92,231,.15); }
+.preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-top: 10px; }
+.preview-role { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 12px; padding: 10px 12px; }
+.preview-role .preview-head { display: flex; justify-content: space-between; gap: 6px; align-items: center; font-size: 14px; margin-bottom: 6px; }
+.preview-role select { font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--gray-300); background: #fff; max-width: 100%; font-family: inherit; }
+.chip.removable { display: inline-flex; align-items: center; gap: 6px; padding-right: 8px; }
+.chip.removable .x { border: 0; background: transparent; cursor: pointer; color: var(--gray-500); font-size: 13px; line-height: 1; padding: 0 2px; font-family: inherit; }
+.chip.removable .x:hover { color: #c0394a; }
+.unmatched-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--gray-700); }
+
+/* ---------- 지원 현황 ---------- */
+.apps-table { min-width: 760px; }
+.apps-table tr.missing td { background: #fff6f6; }
+.apps-table td.center { text-align: center; }
+.apps-table tr.detail-row td { background: var(--gray-100); padding: 10px 8px 14px; }
+.app-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.app-choice { background: #fff; border: 1px solid var(--gray-200); border-radius: 12px; padding: 10px 12px; font-size: 14px; }
+.app-choice .q { font-size: 12.5px; color: var(--gray-500); margin-top: 8px; }
+.app-choice .a { white-space: pre-wrap; line-height: 1.45; }
+.app-choice .a.empty { color: var(--gray-500); font-style: italic; }
+.profile-box { grid-column: 1 / -1; font-size: 14px; background: #fff; border: 1px solid var(--gray-200); border-radius: 12px; padding: 10px 12px; }
+.profile-box.ai-box { border-color: #cfcaff; background: #f9f8ff; }
+.criteria-box { background: #fffbea; border: 1px solid #f3e4a6; border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+.criteria-box ol { margin: 6px 0 0; padding-left: 20px; }
+.criteria-box li { margin: 2px 0; }
+.sincerity { font-size: 12.5px; color: var(--gray-700); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- 배정 보드 ---------- */
+.board-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.board-stats { margin: 10px 0; }
+.board-stats .stat { min-width: 96px; padding: 8px 12px; }
+.board-stats .stat .value { font-size: 18px; }
+.role-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.role-card { background: #fff; border: 1.5px solid var(--gray-200); border-radius: 14px; padding: 10px 12px; min-height: 96px; transition: border-color .12s, box-shadow .12s, background .12s; }
+.role-card.targetable { cursor: pointer; border-style: dashed; border-color: var(--blue); }
+.role-card.targetable:hover, .role-card.drop-over { background: var(--blue-light); border-color: var(--blue-dark); box-shadow: 0 0 0 3px rgba(108,92,231,.18); }
+.role-card.full.targetable { border-color: var(--gray-300); opacity: .7; cursor: not-allowed; }
+.role-card.full.targetable:hover { background: #fff; box-shadow: none; }
+.role-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; margin-bottom: 8px; }
+.role-head b { font-size: 14.5px; line-height: 1.3; }
+.role-head .sub { display: block; font-size: 12px; color: var(--gray-500); }
+.role-foot { font-size: 12px; margin-top: 8px; }
+.slots { display: flex; flex-direction: column; gap: 6px; }
+.slot.empty { border: 1.5px dashed var(--gray-300); border-radius: 10px; padding: 7px 10px; font-size: 13px; color: var(--gray-500); text-align: center; }
+.slot-wrap { display: flex; flex-direction: column; gap: 3px; }
+.slot-chip {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+  border: 1.5px solid var(--gray-300); background: var(--gray-100); border-radius: 10px; padding: 6px 8px 6px 10px;
+  font-size: 14px; font-family: inherit; cursor: grab; color: var(--text); transition: border-color .12s, box-shadow .12s;
+}
+.slot-chip:hover { border-color: var(--blue); background: #fff; }
+.slot-chip:active { cursor: grabbing; }
+.slot-chip.selected { border-color: var(--blue); background: var(--blue-light); box-shadow: 0 0 0 3px rgba(108,92,231,.2); }
+.slot-chip.violation { border-color: #ef5b6b; background: var(--red-light); box-shadow: 0 0 0 2px rgba(239,91,107,.22); }
+.slot-chip.violation.selected { box-shadow: 0 0 0 3px rgba(239,91,107,.35); }
+.slot-chip.dragging { opacity: .4; }
+.slot-chip .slot-name { flex: 1; font-weight: 600; }
+.slot-chip .vio-mark { color: #d63d4f; font-size: 13px; }
+.slot-chip .pick { font-size: 11px; border-radius: 6px; padding: 1px 5px; background: #fff; border: 1px solid var(--gray-300); color: var(--gray-700); white-space: nowrap; }
+.slot-chip .pick.p1 { background: var(--blue-light); color: var(--blue-dark); border-color: #cfcaff; }
+.slot-chip .pick.none { color: #a61b1b; border-color: #f0b7b7; background: #fff5f5; }
+.slot-chip .why { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--gray-300); background: #fff; font-size: 12px; cursor: pointer; line-height: 18px; text-align: center; color: var(--gray-700); flex: none; }
+.slot-chip .why:hover { background: var(--blue-light); border-color: var(--blue); }
+.explain { font-size: 12.5px; color: var(--gray-700); background: #fff; border-left: 3px solid var(--blue); padding: 4px 8px; border-radius: 0 8px 8px 0; line-height: 1.4; }
+.unassigned-bin { border: 1.5px dashed var(--gray-300); border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; background: var(--gray-100); transition: border-color .12s, background .12s; }
+.unassigned-bin.targetable { border-color: var(--blue); cursor: pointer; }
+.unassigned-bin.drop-over, .unassigned-bin.targetable:hover { background: var(--blue-light); border-color: var(--blue-dark); }
+.unassigned-bin .chips { margin-top: 6px; }
+.unassigned-bin .slot-wrap { display: inline-flex; }
+.unassigned-bin .slot-chip { width: auto; display: inline-flex; background: #fff; }
+.violations { margin: 4px 0 10px; padding-left: 18px; font-size: 13.5px; color: #a61b1b; }
+.warnings { margin: 4px 0 10px; padding-left: 18px; font-size: 13.5px; color: #7a4f00; }
+.truncated-note { font-size: 13px; color: #7a4f00; margin: 2px 0 10px; }
+.profile-box .truncated-note { margin: 6px 0 0; color: var(--gray-700); }
+.unassigned-bin .bin-head { margin-bottom: 2px; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(0,0,0,.15); border-top-color: var(--blue); border-radius: 50%; animation: roles-spin .8s linear infinite; vertical-align: -3px; margin-right: 8px; }
+@keyframes roles-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+
+/* ---------- 내보내기 ---------- */
+.export-table td { font-size: 14px; }
+
+/* ---------- 모바일 ---------- */
+@media (max-width: 700px) {
+  .role-board { grid-template-columns: 1fr 1fr; }
+  .roles-import input[type="text"] { width: 100%; }
+  .board-toolbar .btn { flex: 1 1 auto; }
+  .board-toolbar > span[style] { display: none; }
+}
+@media (max-width: 480px) {
+  .role-board { grid-template-columns: 1fr; }
+  .roles-flow { font-size: 12.5px; }
+}
+
+/* ---------- 인쇄: 배정표만 ---------- */
+.print-head { margin-bottom: 10px; }
+@media print {
+  body { background: #fff; }
+  #app > .card { display: none; }
+  #app > .card.roles-board-card { display: block; box-shadow: none; padding: 0; margin: 0; }
+  .roles-board-card > .card-title { display: none !important; }   /* 카드 머리만 숨기고 "아직 배정 안 됨" 칸 제목은 남깁니다 */
+  .unassigned-bin .bin-head { margin-bottom: 4px; }
+  .roles-board-card .no-print { display: none !important; }
+  .roles-board-card h2 { font-size: 16px; }
+  .role-board { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .role-card { break-inside: avoid; page-break-inside: avoid; border-color: #999; border-radius: 8px; min-height: 0; }
+  .slot-chip { background: #fff; border-color: #aaa; box-shadow: none; cursor: default; padding: 4px 8px; }
+  .slot-chip .why, .slot-chip .pick, .slot-chip .vio-mark { display: none; }
+  .explain { display: none; }
+  .unassigned-bin { border-color: #999; background: #fff; }
+  .unassigned-bin.targetable, .role-card.targetable { border-style: solid; opacity: 1; }
+  .role-head .badge { border: 1px solid #ccc; background: #fff; color: #333; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

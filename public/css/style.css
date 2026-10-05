@@ -476,3 +476,71 @@ body.kid .link-box input { border-radius: 16px; }
 .min-row { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .min-row .min-label { display: inline-block; min-width: 110px; font-weight: 600; }
 .min-row input[type="number"] { width: 72px; padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 15px; }
+
+/* ---- 1인 1역 · AI 분석 ---- */
+/* 선생님 대시보드 전용 블록입니다. style.css 를 같이 읽는 학생 페이지(.trait-chip 버튼 등)에
+   새어 나가지 않도록 모든 규칙을 대시보드 컨테이너(.ai-panel, .roles-info, #students-card) 아래로 한정합니다. */
+.btn.green { background: #2eaa6e; border-color: #2eaa6e; color: #fff; box-shadow: 0 4px 12px rgba(46,170,110,.25); }
+.btn.green:hover { background: #268f5c; }
+.role-link-wrap { display: inline-flex; align-items: center; gap: 6px; }
+
+/* AI 분석 카드 (#ai-card.ai-panel) */
+.ai-panel .ai-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.ai-panel .ai-privacy { font-size: 13px; }
+.ai-panel .ai-running { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--blue-dark); font-weight: 600; }
+.ai-panel .ai-running .spin { width: 16px; height: 16px; border: 2.5px solid var(--blue-light); border-top-color: var(--blue); border-radius: 50%; display: inline-block; animation: ai-spin .9s linear infinite; }
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ai-panel .ai-running .spin { animation: none; } }
+.ai-panel .ai-meta { font-size: 13px; margin-bottom: 8px; }
+.ai-panel .ai-truncated { color: #9a4b00; font-weight: 600; }
+.ai-panel .ai-summary { background: linear-gradient(135deg, #f3f0ff, #fff4e8); border: 1px solid #e4dcff; border-radius: 14px; padding: 12px 16px; margin-bottom: 14px; }
+.ai-panel .ai-summary-label { font-size: 12.5px; font-weight: 700; color: var(--blue-dark); margin-bottom: 4px; }
+.ai-panel .ai-summary p { margin: 0; white-space: pre-wrap; }
+.ai-panel .ai-pair { border: 1px solid var(--gray-200); border-left: 4px solid var(--gray-300); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; background: #fff; }
+.ai-panel .ai-pair.high { border-left-color: #ef5b6b; }
+.ai-panel .ai-pair.medium { border-left-color: #f2a33a; }
+.ai-panel .ai-pair.low { border-left-color: #2ecc71; }
+.ai-panel .ai-pair-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.ai-panel .ai-pair-head .names { font-weight: 700; font-size: 15px; color: inherit; text-decoration: none; }
+.ai-panel .ai-pair-head .names:hover { color: var(--blue-dark); }
+.ai-panel .conflict-type { font-size: 12.5px; color: var(--gray-700); background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 999px; padding: 2px 9px; }
+.ai-panel .ai-text { margin: 0 0 8px; font-size: 14px; white-space: pre-wrap; }
+.ai-panel .ai-advice { background: #fff8ea; border: 1px solid #ffe4b8; border-radius: 10px; padding: 8px 12px; font-size: 13.5px; color: #5c3d00; white-space: pre-wrap; }
+.ai-panel .ai-advice-label { font-weight: 700; margin-bottom: 2px; }
+.ai-panel .ai-student { border: 1px solid var(--gray-200); border-radius: 12px; background: #fff; margin-bottom: 8px; }
+.ai-panel .ai-student summary { cursor: pointer; padding: 10px 14px; list-style: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-panel .ai-student summary::-webkit-details-marker { display: none; }
+.ai-panel .ai-student summary::before { content: '▸'; color: var(--gray-500); transition: transform .15s; }
+.ai-panel .ai-student[open] summary::before { transform: rotate(90deg); }
+.ai-panel .ai-student summary .muted { font-size: 13px; }
+.ai-panel .ai-student-body { padding: 10px 14px 12px; font-size: 14px; border-top: 1px dashed var(--gray-200); }
+.ai-panel .ai-student-body p { margin: 0 0 8px; white-space: pre-wrap; }
+.ai-panel .ai-line { margin-bottom: 6px; }
+
+/* 성향 · 역할 칩 (학생 패널 .roles-info, AI 카드 .ai-student-body). 학생 페이지 .trait-chip 과는 별개 클래스 */
+.roles-info .profile-chips, .roles-info .role-chips, .ai-panel .role-chips { gap: 6px; margin: 4px 0 8px; }
+.roles-info .profile-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; background: var(--blue-light); color: var(--blue-dark); border: 1px solid #d8d3ff; }
+.roles-info .profile-chip.partner { background: #fff0e0; color: #9a4b00; border-color: #ffd7ad; }
+.roles-info .role-chip, .ai-panel .role-chip { display: inline-flex; align-items: baseline; gap: 2px; padding: 4px 10px; border-radius: 10px; font-size: 13px; background: #fff6e8; border: 1px solid #ffe0b8; color: #6b3f00; max-width: 100%; }
+.ai-panel .role-chip .reason { color: var(--gray-700); font-weight: 400; }
+
+/* 학생 표: 성향 · 지원서 제출 표시 */
+#students-card .status-icons { display: flex; gap: 4px; flex-wrap: wrap; }
+#students-card .status-icon { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: help; }
+#students-card .status-icon.done { background: #e3f4e6; color: #1e6b32; }
+#students-card .status-icon.todo { background: var(--gray-100); color: var(--gray-500); border: 1px dashed var(--gray-300); }
+
+/* 학생 패널: 성향 · 1인 1역 블록 */
+.roles-info { background: #fff; border: 1px solid var(--gray-200); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; font-size: 14px; }
+.roles-info .roles-info-title { font-weight: 700; margin-bottom: 4px; }
+.roles-info .label { font-weight: 600; color: var(--gray-500); font-size: 13px; margin-top: 8px; }
+.roles-info .quote { background: var(--gray-100); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; margin: 4px 0 6px; white-space: pre-wrap; }
+.roles-info .app-choices { margin: 4px 0 6px; padding-left: 0; list-style: none; }
+.roles-info .app-choices li { padding: 6px 0; border-bottom: 1px dashed var(--gray-200); }
+.roles-info .app-choices li:last-child { border-bottom: 0; }
+.roles-info .rank { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--gray-200); color: var(--gray-700); margin-right: 6px; vertical-align: middle; }
+.roles-info .rank.r1 { background: #ffd54f; color: #5c3d00; }
+.roles-info .app-reason { font-size: 13.5px; margin-top: 2px; white-space: pre-wrap; }
+.roles-info .app-help { font-size: 12.5px; margin-top: 2px; }
+.roles-info .assigned-role { margin-top: 2px; }
+.roles-info .ai-mini { background: #f3f0ff; border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 13.5px; }

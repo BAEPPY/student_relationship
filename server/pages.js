@@ -130,6 +130,7 @@ export const student = `<!doctype html>
   <title>내 친구 관계 지도</title>
   <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/student-steps.css">
 </head>
 <body class="kid">
   <header class="kid-header">
@@ -218,6 +219,33 @@ export const seats = `<!doctype html>
     <div class="card" id="loading">불러오는 중…</div>
   </main>
   <script type="module" src="/js/seats.js"></script>
+</body>
+</html>
+`;
+
+export const roles = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>1인 1역 · 학생 관계 마인드맵</title>
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/roles.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="badge blue">1인 1역</span>
+      <span class="spacer"></span>
+      <a class="btn small" id="back-link" href="#">선생님 페이지로</a>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/roles.js"></script>
 </body>
 </html>
 `;

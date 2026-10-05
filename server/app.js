@@ -9,7 +9,11 @@ import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
 import { analyzeHistory } from './history.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, RETENTION_MONTHS } from './retention.js';
+import { DEFAULT_ROLES, TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateApplication, applicantCounts } from './roles.js';
+import { assignRoles, repairAssignment } from './assign.js';
+import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles } from './ai.js';
 import * as pages from './pages.js';
+import { findStudents } from '../public/js/notes-parser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -88,7 +92,10 @@ function newRoom(name, names, minGood, minBad) {
   };
 }
 
-export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null, storageKind = 'file' } = {}) {
+// aiClient: 테스트에서 가짜 Claude 클라이언트를 넣을 때만 사용합니다. 평소에는 ANTHROPIC_API_KEY 로 켭니다.
+export function createApp({ store = new FileStore(null), baseUrl = process.env.BASE_URL || '', storageNotice = null, storageKind = 'file', aiClient = null } = {}) {
+  const aiOn = () => Boolean(aiClient) || aiEnabled();
+  const makeAi = () => createAiClient(aiClient ? { client: aiClient } : undefined);
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
@@ -213,6 +220,26 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       seating: room.seating || null,
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
       retention: retentionView(room),
+      ...rolesView(room, round),
+    };
+  }
+
+  // 1인 1역 관련 정보 (선생님 화면용)
+  function rolesView(room, round) {
+    const roles = roomRoles(room);
+    const prev = previousRoleIds(room, round);
+    return {
+      roles,
+      roleHistory: room.roleHistory || [],
+      previousRoles: prev,                       // { month, byStudent: { sid: [roleId] } }
+      applications: round.applications || {},    // { sid: { choices, updatedAt } }
+      profiles: round.profiles || {},            // { sid: { traits, partnerTraits, partnerText, updatedAt } }
+      applicantCounts: applicantCounts(roles, round.applications || {}),
+      roleAssignment: round.roleAssignment || null,
+      aiAnalysis: round.aiAnalysis || null,
+      ai: { enabled: aiOn(), model: process.env.AI_MODEL || DEFAULT_MODEL },
+      traits: TRAITS,
+      selectionCriteria: SELECTION_CRITERIA,
     };
   }
 
@@ -223,14 +250,33 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const relations = {};
     for (const c of classmates) if (mine[c.id]) relations[c.id] = mine[c.id];
     const mins = effectiveMins(room, classmates.length);
+    const roles = roomRoles(room);
+    const prev = previousRoleIds(room, round);
+    const excludedRoleIds = prev.byStudent[student.id] || [];
+    const assignment = round.roleAssignment;
+    let assignedRole = null;
+    if (assignment?.published) {
+      for (const [roleId, sids] of Object.entries(assignment.assignments || {})) {
+        if ((sids || []).includes(student.id)) assignedRole = roles.find((r) => r.id === roleId) || null;
+      }
+    }
     return {
-      room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad },
+      room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad, rolesEnabled: roles.length > 0 },
       round: roundView(round),
       me: { id: student.id, name: student.name },
       classmates,
       relations,
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
       catalog: REASON_CATALOG,
+      // 1인 1역 · 성향
+      roles,
+      excludedRoleIds,
+      previousRoleMonth: prev.month,
+      profile: round.profiles?.[student.id] || null,
+      application: round.applications?.[student.id] || null,
+      assignedRole,
+      traits: TRAITS,
+      selectionCriteria: SELECTION_CRITERIA,
     };
   }
 
@@ -240,6 +286,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/t/:adminToken', page(pages.teacher));
   app.get('/t/:adminToken/print', page(pages.print));
   app.get('/t/:adminToken/seats', page(pages.seats));
+  app.get('/t/:adminToken/roles', page(pages.roles));
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
@@ -391,7 +438,16 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         const name = cleanName(body.name);
         if (!name || name.length > LIMITS.roundName) throw bad('회차 이름이 올바르지 않아요.');
         if (room.rounds.some((r) => r.id !== round.id && r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}`);
+        const oldName = round.name;
         round.name = name;
+        // 이 회차에서 공개한 배정 기록도 같은 이름을 따라갑니다.
+        const history = room.roleHistory || [];
+        const mine = history.find((h) => h.roundId === round.id || (h.source === 'published' && h.month === oldName));
+        if (mine) {
+          mine.roundId = round.id;
+          mine.month = name;
+          room.roleHistory = history.filter((h) => h === mine || h.month !== name);
+        }
       }
       if (typeof body.closed === 'boolean') {
         if (!body.closed && round.id !== currentRound(room).id) throw bad('지난 회차는 다시 열 수 없어요. 새 회차를 시작해 주세요.');
@@ -451,6 +507,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         delete round.relations[student.id];
         delete round.submissions[student.id];
         for (const targets of Object.values(round.relations)) delete targets[student.id];
+        delete round.profiles?.[student.id];
+        delete round.applications?.[student.id];
+        if (round.roleAssignment) {
+          const ra = round.roleAssignment;
+          for (const [rid, list] of Object.entries(ra.assignments || {})) ra.assignments[rid] = (list || []).filter((x) => x !== student.id);
+          if (ra.explanations) delete ra.explanations[student.id];
+          ra.unassigned = (ra.unassigned || []).filter((x) => x !== student.id);
+        }
+        if (round.aiAnalysis) scrubAiAnalysis(round.aiAnalysis, student);
+      }
+      for (const h of room.roleHistory || []) {
+        for (const [rid, list] of Object.entries(h.assignments || {})) h.assignments[rid] = (list || []).filter((x) => x !== student.id);
       }
       if (room.teacherNotes) {
         delete room.teacherNotes.students?.[student.id];
@@ -557,10 +625,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const rounds = room.rounds.map((r) => {
       const rr = roundRoom(room, r);
       const stats = computeStats(rr);
-      return { ...roundView(r), relations: listRelations(rr), analysis: analyzeConflicts(rr, stats) };
+      return { ...roundView(r), relations: listRelations(rr), analysis: analyzeConflicts(rr, stats), profiles: r.profiles || {}, applications: r.applications || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: r.aiAnalysis || null };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
@@ -626,6 +694,294 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
 
+  // 학생: 나의 성향 · 짝 희망 (①②③)
+  app.put('/api/student/:token/profile', async (req, res) => {
+    const { room: found, student: me } = await requireStudent(req);
+    const profile = validateProfile(req.body || {});
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    // 특정 친구 이름은 적을 수 없음 (③ 특정인 X)
+    if (profile.partnerText) {
+      const { sids } = findStudents(profile.partnerText, found.students.filter((s) => s.id !== me.id));
+      if (sids.length) {
+        const names = sids.map((id) => found.students.find((s) => s.id === id)?.name).filter(Boolean).join(', ');
+        throw bad(`특정 친구의 이름(${names})은 적을 수 없어요. 어떤 성격의 짝이 좋은지 적어 주세요.`);
+      }
+    }
+    const room = await mutateRoom(found, (room) => {
+      const student = room.students.find((s) => s.id === me.id && s.token === me.token);
+      if (!student) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
+      const round = currentRound(room);
+      if (roundId && roundId !== round.id) throw new HttpError(409, '선생님이 새 조사를 시작했어요. 화면을 새로고침한 뒤 다시 표시해 주세요.');
+      if (round.closedAt) throw new HttpError(403, '선생님이 이번 조사를 마감했어요. 더 이상 수정할 수 없어요.');
+      round.profiles ||= {};
+      round.profiles[student.id] = { ...profile, updatedAt: new Date().toISOString() };
+    });
+    res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
+  });
+
+  // 학생: 1인 1역 지원서
+  app.put('/api/student/:token/application', async (req, res) => {
+    const { room: found, student: me } = await requireStudent(req);
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    const room = await mutateRoom(found, (room) => {
+      const student = room.students.find((s) => s.id === me.id && s.token === me.token);
+      if (!student) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
+      const round = currentRound(room);
+      if (roundId && roundId !== round.id) throw new HttpError(409, '선생님이 새 조사를 시작했어요. 화면을 새로고침한 뒤 다시 표시해 주세요.');
+      if (round.closedAt) throw new HttpError(403, '선생님이 이번 조사를 마감했어요. 더 이상 수정할 수 없어요.');
+      const roles = roomRoles(room);
+      if (!roles.length) throw bad('아직 선생님이 역할을 정하지 않았어요.');
+      const excluded = previousRoleIds(room, round).byStudent[student.id] || [];
+      const application = validateApplication(req.body || {}, roles, excluded);
+      round.applications ||= {};
+      round.applications[student.id] = { ...application, updatedAt: new Date().toISOString() };
+    });
+    res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
+  });
+
+  // ---------- 선생님: 1인 1역 ----------
+  app.put('/api/teacher/:adminToken/roles', async (req, res) => {
+    const found = await requireRoom(req);
+    const roles = normalizeRoles(req.body?.roles);
+    const room = await mutateRoom(found, (room) => {
+      room.roles = roles;
+      reconcileRoles(room);
+    });
+    res.json(teacherView(req, room, req.query.round ? String(req.query.round) : null));
+  });
+
+  app.post('/api/teacher/:adminToken/roles/default', async (req, res) => {
+    const found = await requireRoom(req);
+    const room = await mutateRoom(found, (room) => { room.roles = structuredClone(DEFAULT_ROLES); });
+    res.json(teacherView(req, room));
+  });
+
+  // 지난달 현황 텍스트 미리보기 (저장하지 않음)
+  app.post('/api/teacher/:adminToken/roles/history/parse', async (req, res) => {
+    const room = await requireRoom(req);
+    const roles = roomRoles(room);
+    if (!roles.length) throw bad('먼저 역할 목록을 만들어 주세요.');
+    const text = String(req.body?.text ?? '');
+    if (text.length > 20000) throw bad('내용이 너무 길어요.');
+    res.json(parseHistoryText(text, room.students, roles));
+  });
+
+  // 지난달(또는 어떤 달) 배정 기록 저장/수정
+  app.put('/api/teacher/:adminToken/roles/history', async (req, res) => {
+    const found = await requireRoom(req);
+    const month = cleanName(req.body?.month);
+    if (!month || month.length > LIMITS.roundName) throw bad('달 이름을 입력해 주세요. (예: 2026년 9월)');
+    const room = await mutateRoom(found, (room) => {
+      const roleIds = new Set(roomRoles(room).map((r) => r.id));
+      const studentIds = new Set(room.students.map((s) => s.id));
+      const assignments = {};
+      const seen = new Set();
+      for (const [roleId, sids] of Object.entries(req.body?.assignments || {})) {
+        if (!roleIds.has(roleId)) throw bad('없는 역할이 포함되어 있어요.');
+        const list = [];
+        for (const sid of Array.isArray(sids) ? sids : []) {
+          if (!studentIds.has(sid)) throw bad('없는 학생이 포함되어 있어요.');
+          if (seen.has(sid)) throw bad('한 학생이 두 역할에 들어 있어요.');
+          seen.add(sid);
+          list.push(sid);
+        }
+        if (list.length) assignments[roleId] = list;
+      }
+      room.roleHistory ||= [];
+      const entry = { month, assignments, source: String(req.body?.source || 'import'), updatedAt: new Date().toISOString() };
+      const idx = room.roleHistory.findIndex((h) => h.month === month);
+      if (idx >= 0) room.roleHistory[idx] = entry; else room.roleHistory.push(entry);
+      if (room.roleHistory.length > 36) room.roleHistory = room.roleHistory.slice(-36);
+    });
+    res.json(teacherView(req, room, req.query.round ? String(req.query.round) : null));
+  });
+
+  app.delete('/api/teacher/:adminToken/roles/history/:month', async (req, res) => {
+    const found = await requireRoom(req);
+    const month = String(req.params.month);
+    const room = await mutateRoom(found, (room) => { room.roleHistory = (room.roleHistory || []).filter((h) => h.month !== month); });
+    res.json(teacherView(req, room));
+  });
+
+  // 자동 배정 (rules: 규칙 기반, ai: Claude API) → 회차에 초안으로 저장
+  app.post('/api/teacher/:adminToken/roles/assign', async (req, res) => {
+    const found = await requireRoom(req);
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    const round = roundId ? requireRound(found, roundId) : currentRound(found);
+    const roles = roomRoles(found);
+    if (!roles.length) throw bad('먼저 역할 목록을 만들어 주세요.');
+    const method = req.body?.method === 'ai' ? 'ai' : 'rules';
+    const inputs = assignmentInputs(found, round);
+    let result;
+    let notes = '';
+    let truncated = false;
+    if (method === 'ai') {
+      if (!aiOn()) throw bad('AI 배정을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.');
+      const ai = makeAi();
+      const aiResult = await aiAssignRoles({ ai, ...inputs, profiles: round.profiles || {} });
+      result = repairAssignment({ assignments: aiResult.assignments, explanations: aiResult.explanations, ...inputs });
+      notes = aiResult.notes || '';
+      truncated = Boolean(aiResult.truncated);
+    } else {
+      result = assignRoles({ ...inputs, seed: Number(req.body?.seed) || 1 });
+    }
+    const room = await mutateRoom(found, (room) => {
+      const r = requireRound(room, round.id);
+      r.roleAssignment = {
+        assignments: result.assignments,
+        explanations: result.explanations || {},
+        warnings: result.warnings || [],
+        unassigned: result.unassigned || [],
+        stats: result.stats || null,
+        method,
+        notes,
+        truncated,
+        createdAt: new Date().toISOString(),
+        published: false,
+        publishedAt: null,
+      };
+    });
+    res.json(teacherView(req, room, round.id));
+  });
+
+  // 배정 수정 / 확정(공개). 공개하면 그 달 기록(roleHistory)에도 저장되어 다음 달 금지 규칙에 쓰입니다.
+  app.put('/api/teacher/:adminToken/roles/assignment', async (req, res) => {
+    const found = await requireRoom(req);
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    const round = roundId ? requireRound(found, roundId) : currentRound(found);
+    const room = await mutateRoom(found, (room) => {
+      const r = requireRound(room, round.id);
+      const roleMap = new Map(roomRoles(room).map((x) => [x.id, x]));
+      const studentIds = new Set(room.students.map((s) => s.id));
+      const assignments = {};
+      const seen = new Set();
+      for (const [roleId, sids] of Object.entries(req.body?.assignments || {})) {
+        const role = roleMap.get(roleId);
+        if (!role) throw bad('없는 역할이 포함되어 있어요.');
+        const list = [];
+        for (const sid of Array.isArray(sids) ? sids : []) {
+          if (!studentIds.has(sid)) throw bad('없는 학생이 포함되어 있어요.');
+          if (seen.has(sid)) throw bad('한 학생이 두 역할에 들어 있어요.');
+          seen.add(sid);
+          list.push(sid);
+        }
+        if (list.length > role.slots) throw bad(`${role.name}의 인원(${role.slots}명)을 넘었어요. (지금 ${list.length}명)`);
+        assignments[roleId] = list;
+      }
+      const prev = r.roleAssignment || {};
+      const published = Boolean(req.body?.published);
+      r.roleAssignment = {
+        ...prev,
+        assignments,
+        explanations: typeof req.body?.explanations === 'object' && req.body.explanations ? req.body.explanations : (prev.explanations || {}),
+        unassigned: room.students.map((s) => s.id).filter((id) => !seen.has(id)),
+        method: prev.method || 'manual',
+        createdAt: prev.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        published,
+        publishedAt: published ? (prev.publishedAt || new Date().toISOString()) : null,
+      };
+      if (published) {
+        room.roleHistory ||= [];
+        const entry = { roundId: r.id, month: r.name, assignments, source: 'published', updatedAt: new Date().toISOString() };
+        const idx = room.roleHistory.findIndex((h) => h.roundId === r.id || h.month === r.name);
+        if (idx >= 0) room.roleHistory[idx] = entry; else room.roleHistory.push(entry);
+        // 같은 회차의 옛 기록(이름이 바뀌기 전 등)은 하나만 남깁니다.
+        room.roleHistory = room.roleHistory.filter((h) => h === entry || (h.roundId !== r.id && h.month !== r.name));
+      }
+    });
+    res.json(teacherView(req, room, round.id));
+  });
+
+  // AI 관계·역할 분석 → 회차에 저장
+  app.post('/api/teacher/:adminToken/ai/analyze', async (req, res) => {
+    const found = await requireRoom(req);
+    if (!aiOn()) throw bad('AI 분석을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.');
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    const round = roundId ? requireRound(found, roundId) : currentRound(found);
+    const rr = roundRoom(found, round);
+    const stats = computeStats(rr);
+    const analysis = analyzeConflicts(rr, stats);
+    const ai = makeAi();
+    const result = await aiAnalyzeRelationships({
+      ai,
+      students: found.students.map((s) => ({ id: s.id, name: s.name })),
+      relations: listRelations(rr),
+      pairs: analysis.pairs,
+      teacherNotes: found.teacherNotes || { students: {}, rules: [] },
+      profiles: round.profiles || {},
+      applications: round.applications || {},
+      roles: roomRoles(found),
+      previousRoles: previousRoleIds(found, round),
+    });
+    const room = await mutateRoom(found, (room) => {
+      const r = requireRound(room, round.id);
+      r.aiAnalysis = { ...result, createdAt: new Date().toISOString(), model: ai?.model || null };
+    });
+    res.json(teacherView(req, room, round.id));
+  });
+
+  /** 삭제된 학생의 흔적을 AI 분석 결과에서 지웁니다. 자유 서술에 남은 이름은 '(삭제된 학생)'으로 바꿉니다. */
+  function scrubAiAnalysis(a, student) {
+    a.pairs = (a.pairs || []).filter((p) => p.a !== student.id && p.b !== student.id);
+    a.students = (a.students || []).filter((s) => s.id !== student.id);
+    const name = String(student.name || '').trim();
+    if (name.length < 2) return;
+    const wipe = (t) => (typeof t === 'string' ? t.split(name).join('(삭제된 학생)') : t);
+    a.summary = wipe(a.summary);
+    for (const p of a.pairs) { p.analysis = wipe(p.analysis); p.advice = wipe(p.advice); p.conflictType = wipe(p.conflictType); }
+    for (const s of a.students) {
+      s.summary = wipe(s.summary); s.strengths = wipe(s.strengths); s.watch = wipe(s.watch);
+      for (const f of s.roleFit || []) f.reason = wipe(f.reason);
+    }
+  }
+
+  /** 역할 목록이 바뀐 뒤: 지워진 역할에 배정돼 있던 학생은 미배정으로 돌리고 경고를 남깁니다. 정원이 줄어든 역할도 알립니다. */
+  function reconcileRoles(room) {
+    const roleMap = new Map(roomRoles(room).map((r) => [r.id, r]));
+    for (const round of room.rounds || []) {
+      const ra = round.roleAssignment;
+      if (!ra?.assignments) continue;
+      const warnings = (ra.warnings || []).filter((w) => !w.startsWith('역할 목록이 바뀌어'));
+      const dropped = [];
+      for (const [rid, list] of Object.entries(ra.assignments)) {
+        const role = roleMap.get(rid);
+        if (!role) {
+          dropped.push(...(list || []));
+          delete ra.assignments[rid];
+          continue;
+        }
+        if ((list || []).length > role.slots) warnings.push(`역할 목록이 바뀌어 ‘${role.name}’ 인원(${role.slots}명)보다 많은 ${list.length}명이 배정돼 있어요. 배정을 고쳐 주세요.`);
+      }
+      if (dropped.length) {
+        for (const sid of dropped) { if (ra.explanations) delete ra.explanations[sid]; }
+        const placed = new Set(Object.values(ra.assignments).flat());
+        ra.unassigned = (room.students || []).map((s) => s.id).filter((id) => !placed.has(id));
+        const names = dropped.map((sid) => room.students.find((s) => s.id === sid)?.name).filter(Boolean).join(', ');
+        warnings.push(`역할 목록이 바뀌어 ${dropped.length}명(${names})의 역할이 없어졌어요. 빈자리에 다시 배정해 주세요.${ra.published ? ' 공개된 배정이라 학생 화면에도 역할이 사라졌어요.' : ''}`);
+      }
+      ra.warnings = warnings;
+      if (dropped.length && ra.published) {
+        const entry = (room.roleHistory || []).find((h) => h.roundId === round.id || h.month === round.name);
+        if (entry) entry.assignments = structuredClone(ra.assignments);
+      }
+    }
+  }
+
+  function assignmentInputs(room, round) {
+    const rr = roundRoom(room, round);
+    const apart = (room.teacherNotes?.rules || []).filter((r) => r.type === 'apart').map((r) => [r.a, r.b]);
+    return {
+      students: room.students.map((s) => ({ id: s.id, name: s.name })),
+      roles: roomRoles(room).map((r) => ({ id: r.id, name: r.name, slots: r.slots, description: r.description })),
+      applications: round.applications || {},
+      excluded: previousRoleIds(room, round).byStudent,
+      relations: listRelations(rr).map((r) => ({ from: r.from, to: r.to, type: r.type })),
+      apartPairs: apart,
+      previousRoles: previousRoleIds(room, round),
+    };
+  }
+
   // ---------- fallbacks ----------
   app.use('/api', (req, res) => res.status(404).json({ error: '없는 주소예요.' }));
   app.use((req, res) => res.status(404).type('html').send(pages.notFound));
@@ -634,7 +990,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.use((err, req, res, next) => {
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) console.error(err);
-    const message = status >= 500 ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
+    const message = status >= 500 && !err.expose ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
     if (req.path.startsWith('/api')) res.status(status).json({ error: message });
     else res.status(status).type('text/plain').send(message);
   });

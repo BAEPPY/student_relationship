@@ -7,12 +7,17 @@ const app = document.getElementById('app');
 
 let state = null;
 let graph = null;
-let ui = { filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null, roundId: null, showAllHistory: false };
+let ui = { filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null, roundId: null, showAllHistory: false, aiRunning: false, aiOpen: new Set() };
 let popoverEl = null;
 let pollTimer = null;
 
 const LEVEL_LABEL = { high: '높음', medium: '주의', low: '낮음' };
+const RISK_ORDER = { high: 0, medium: 1, low: 2 };
 const nameOf = (id) => state?.stats[id]?.name || '?';
+const rolesPageUrl = () => `/t/${encodeURIComponent(adminToken)}/roles?round=${encodeURIComponent(state.round.id)}`;
+// 역할 목록에서 지워진 역할은 roles.js 와 같은 표기로 보여줍니다
+const roleNameOf = (roleId) => (state?.roles || []).find((r) => r.id === roleId)?.name || '(지워진 역할)';
+const scrollToGraph = () => document.getElementById('graph-container')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
 // ---------- 데이터 ----------
 async function load({ silent = false } = {}) {
@@ -55,6 +60,7 @@ function renderAll() {
   graph.setSelectedEdge(ui.selectedEdge);
   renderSidePanel();
   renderAnalysis();
+  renderAiPanel();
   renderHistory();
   renderStudents();
   document.title = `${state.room.name} · ${state.round.name} · 선생님 페이지`;
@@ -81,6 +87,7 @@ function buildSkeleton() {
       el('p', { class: 'muted', style: { marginTop: '8px' }, text: '화살표를 누르면 이유를 볼 수 있어요. 학생을 누르면 그 학생의 관계만 강조돼요. 빈 곳을 끌면 이동, 마우스 휠로 확대/축소, 학생 상자는 끌어서 옮길 수 있어요. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
     ]),
     el('section', { class: 'card', id: 'analysis-card' }),
+    el('section', { class: 'card ai-panel', id: 'ai-card' }),
     el('section', { class: 'card', id: 'history-card' }),
     el('section', { class: 'card', id: 'students-card' }),
     el('section', { class: 'card', id: 'danger-card' }),
@@ -137,6 +144,9 @@ function renderHeader() {
   const pct = students.length ? Math.round((analysis.submittedCount / students.length) * 100) : 0;
   const isCurrent = round.id === state.currentRoundId;
   const soon = new Set((state.retention?.expiring || []).map((x) => x.id));
+  const hasRoles = (state.roles || []).length > 0;
+  const appCount = students.filter((s) => (state.applications?.[s.id]?.choices || []).length > 0).length;
+  const assignment = state.roleAssignment;
   const roundSelect = el('select', { class: 'select' }, rounds.map((r) => el('option', {
     value: r.id, selected: r.id === round.id ? true : null,
     text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}${soon.has(r.id) ? ` · ⚠️ ${fmtDay(r.expiresAt)} 삭제 예정` : ''}`,
@@ -151,6 +161,13 @@ function renderHeader() {
       el('div', { class: 'btn-row' }, [
         el('a', { class: 'btn primary', href: `/t/${encodeURIComponent(adminToken)}/print`, target: '_blank', text: '학생 QR 카드 인쇄' }),
         el('a', { class: 'btn orange', href: `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(round.id)}`, text: '자리 배정' }),
+        el('span', { class: 'role-link-wrap' }, [
+          el('a', { class: 'btn green', id: 'roles-link', href: rolesPageUrl(), text: '1인 1역' }),
+          hasRoles ? el('span', {
+            class: `badge ${students.length && appCount >= students.length ? 'green' : 'blue'}`, id: 'application-count',
+            title: `${round.name} 1인 1역 지원서를 낸 학생 수`, text: `지원서 ${appCount}/${students.length}`,
+          }) : null,
+        ]),
         el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
         el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }),
         el('button', { type: 'button', class: 'btn', text: '새로고침', onClick: () => load() }),
@@ -162,6 +179,9 @@ function renderHeader() {
       isCurrent
         ? el('span', { class: `badge ${round.open ? 'green' : 'gray'}`, text: round.open ? '학생이 지금 답하는 회차' : '마감됨' })
         : el('span', { class: 'badge warn', text: '지난 회차 (읽기 전용)' }),
+      assignment?.published
+        ? el('span', { class: 'badge green', id: 'roles-published-badge', title: `${fmtDate(assignment.publishedAt)} 공개 · 학생 페이지에 자기 역할이 보여요`, text: '1인 1역 공개됨' })
+        : (assignment ? el('span', { class: 'badge gray', id: 'roles-draft-badge', title: '배정 초안이 있지만 아직 학생에게 공개하지 않았어요', text: '1인 1역 초안' }) : null),
       el('span', { style: { flex: 1 } }),
       isCurrent ? el('button', { type: 'button', class: `btn small ${round.open ? 'danger' : ''}`, text: round.open ? '이 회차 마감' : '마감 해제', onClick: () => {
         if (round.open && !confirm(`${round.name} 조사를 마감하면 학생들이 더 이상 수정할 수 없어요. 마감할까요?`)) return;
@@ -298,6 +318,7 @@ function renderSidePanel() {
       stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('준 ❤️', st.outGood.length), stat('준 ⚡', st.outBad.length),
     ]),
     teacherNoteBox(id),
+    rolesInfoBox(id),
     state.history.trend.length > 1 ? el('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '10px' }, text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
     section('나를 안 좋은 사이로 표시한 친구', st.inBad.map((f) => line(f, id))),
@@ -328,6 +349,70 @@ function renderSidePanel() {
   }
 }
 
+// 학생 패널: 성향 설문 · 1인 1역 지원서 · 배정 · AI 요약
+function rolesInfoBox(sid) {
+  const traitLabel = new Map((state.traits || []).map((t) => [t.id, t.label]));
+  const hasRoles = (state.roles || []).length > 0;
+  const profile = state.profiles?.[sid] || null;
+  const application = state.applications?.[sid] || null;
+  const choices = application?.choices || [];
+  const assignment = state.roleAssignment || null;
+  let assignedRoleId = null;
+  for (const [roleId, sids] of Object.entries(assignment?.assignments || {})) if ((sids || []).includes(sid)) assignedRoleId = roleId;
+  const prevMonth = state.previousRoles?.month || null;
+  const prevRoleIds = state.previousRoles?.byStudent?.[sid] || [];
+  const aiStudent = (state.aiAnalysis?.students || []).find((s) => s.id === sid) || null;
+  // 학생 페이지의 .trait-chip(버튼)과 이름이 겹치지 않도록 선생님 화면 전용 클래스를 씁니다
+  const chips = (ids, cls) => el('div', { class: 'chips profile-chips' }, ids.map((t) => el('span', { class: `profile-chip ${cls}`, text: traitLabel.get(t) || t })));
+  const label = (text) => el('div', { class: 'label', text });
+
+  const profileBlock = profile
+    ? [
+      label(`나의 성향 (${(profile.traits || []).length}) · ${fmtDate(profile.updatedAt)}`),
+      (profile.traits || []).length ? chips(profile.traits, '') : el('div', { class: 'muted', text: '고른 항목이 없어요.' }),
+      ...((profile.partnerTraits || []).length ? [label('짝에게 바라는 점'), chips(profile.partnerTraits, 'partner')] : []),
+      profile.partnerText ? el('div', { class: 'quote', text: `“${profile.partnerText}”` }) : null,
+    ]
+    : [el('div', { class: 'muted', text: '성향 설문을 아직 내지 않았어요.' })];
+
+  const applicationBlock = choices.length
+    ? [
+      label(`1인 1역 지원서 · ${fmtDate(application.updatedAt)}`),
+      el('ol', { class: 'app-choices' }, choices.map((c, i) => el('li', {}, [
+        el('span', { class: `rank r${i + 1}`, text: `${i + 1}지망` }),
+        el('b', { text: roleNameOf(c.roleId) }),
+        c.reason ? el('div', { class: 'app-reason', text: c.reason }) : null,
+        c.helpClass ? el('div', { class: 'muted app-help', text: `우리 반에: ${c.helpClass}` }) : null,
+        c.helpSelf ? el('div', { class: 'muted app-help', text: `나에게: ${c.helpSelf}` }) : null,
+      ]))),
+    ]
+    : [label('1인 1역 지원서'), el('div', { class: 'muted', text: hasRoles ? '지원서 없음' : '아직 역할 목록이 없어요. 1인 1역 페이지에서 역할을 만들면 학생이 지원할 수 있어요.' })];
+
+  const assignedBlock = assignedRoleId
+    ? el('div', { class: 'assigned-role' }, [
+      label('이번 달 배정'),
+      el('span', { class: 'role-chip', text: roleNameOf(assignedRoleId) }), ' ',
+      el('span', { class: `badge ${assignment.published ? 'green' : 'warn'}`, text: assignment.published ? '공개됨' : '초안 · 학생에게는 아직 안 보여요' }),
+      assignment.explanations?.[sid] ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '4px' }, text: assignment.explanations[sid] }) : null,
+    ])
+    : (assignment ? el('div', { class: 'muted', style: { marginTop: '6px' }, text: '이번 달 배정 초안에 아직 들어 있지 않아요.' }) : null);
+
+  return el('div', { class: 'roles-info', id: 'roles-info' }, [
+    el('div', { class: 'roles-info-title', text: '📝 성향 · 1인 1역' }),
+    ...profileBlock,
+    ...applicationBlock,
+    prevRoleIds.length ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '6px' }, text: `지난달${prevMonth ? `(${prevMonth})` : ''} 역할: ${prevRoleIds.map(roleNameOf).join(', ')} → 이번 달은 다른 역할을 맡아요.` }) : null,
+    assignedBlock,
+    aiStudent ? el('div', { class: 'ai-mini' }, [
+      el('div', { style: { fontWeight: 700, marginBottom: '2px' }, text: '🤖 AI 요약' }),
+      aiStudent.summary ? el('div', { text: aiStudent.summary }) : null,
+      aiStudent.watch ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '2px' }, text: `👀 ${aiStudent.watch}` }) : null,
+      (aiStudent.roleFit || []).length ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '2px' }, text: `추천 역할: ${aiStudent.roleFit.map((f) => roleNameOf(f.roleId)).join(', ')}` }) : null,
+    ]) : null,
+    el('div', { style: { marginTop: '8px' } }, [el('a', { class: 'btn small', href: rolesPageUrl(), text: '1인 1역 페이지에서 배정하기' })]),
+  ]);
+}
+
 // ---------- 갈등 분석 ----------
 function renderAnalysis() {
   const card = document.getElementById('analysis-card');
@@ -350,7 +435,7 @@ function renderAnalysis() {
         ...shown.map((p) => el('div', { class: `pair ${p.level}` }, [
           el('div', { class: 'pair-head' }, [
             el('div', { class: 'names' }, [
-              el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, style: { textDecoration: 'none', color: 'inherit' }, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); document.getElementById('graph-container').scrollIntoView({ behavior: 'smooth', block: 'center' }); } }),
+              el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, style: { textDecoration: 'none', color: 'inherit' }, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
               el('div', { class: 'arrow-mini', text: arrowText(p) }),
             ]),
             el('span', { class: `badge ${p.level}`, text: LEVEL_LABEL[p.level] }),
@@ -383,6 +468,133 @@ function renderAnalysis() {
   );
 }
 
+// ---------- AI 관계·역할 분석 ----------
+async function runAiAnalysis() {
+  if (ui.aiRunning) return;
+  ui.aiRunning = true;
+  renderAiPanel();
+  try {
+    const next = await api(`${base}/ai/analyze`, { method: 'POST', body: { roundId: state.round.id } });
+    ui.aiRunning = false;
+    if (next && next.room && ui.roundId !== next.round.id) {
+      // 기다리는 동안 다른 회차로 옮겨 갔으면 보고 있는 회차를 그대로 두고 조용히 새로 받습니다
+      toast(`${next.round.name} 분석을 마쳤어요.`);
+      renderAiPanel();
+      load({ silent: true });
+      return;
+    }
+    if (next && next.room) applyUpdate(next);
+    toast('AI 분석을 마쳤어요.');
+  } catch (err) {
+    ui.aiRunning = false;
+    toast(err.message, 5000);
+    renderAiPanel();
+  }
+}
+
+function renderAiPanel() {
+  const card = document.getElementById('ai-card');
+  const enabled = Boolean(state.ai?.enabled);
+  const a = state.aiAnalysis || null;
+  const levelOf = (lv) => (LEVEL_LABEL[lv] ? lv : 'low');
+  // 분석 뒤에 삭제된 학생이 섞여 있을 수 있으므로 지금 있는 학생만 남깁니다
+  const exists = (id) => Boolean(state.stats[id]);
+  const pairs = (a?.pairs || []).filter((p) => exists(p.a) && exists(p.b)).sort((x, y) => (RISK_ORDER[x.riskLevel] ?? 2) - (RISK_ORDER[y.riskLevel] ?? 2));
+  const byId = new Map((a?.students || []).filter((s) => exists(s.id)).map((s) => [s.id, s]));
+  const aiStudents = state.students.map((s) => ({ s, info: byId.get(s.id) })).filter((x) => x.info);
+  for (const id of [...ui.aiOpen]) if (!exists(id)) ui.aiOpen.delete(id);
+  const allOpen = aiStudents.length > 0 && aiStudents.every((x) => ui.aiOpen.has(x.s.id));
+
+  const controls = enabled
+    ? el('div', { class: 'ai-controls' }, [
+      el('button', { type: 'button', class: 'btn primary', id: 'ai-run-btn', disabled: ui.aiRunning ? true : null, text: a ? '다시 분석' : 'AI 분석 실행', onClick: runAiAnalysis }),
+      ui.aiRunning ? el('span', { class: 'ai-running', role: 'status', id: 'ai-running' }, [el('span', { class: 'spin', 'aria-hidden': 'true' }), 'AI가 읽는 중이에요… 30초~1분 정도 걸려요']) : null,
+      el('span', { class: 'muted ai-privacy', text: '🔒 학생 이름은 S1, S2 같은 가명으로 바꿔서 보내고, 결과만 저장해요.' }),
+    ])
+    : el('div', { class: 'alert info', id: 'ai-disabled', style: { marginBottom: a ? '12px' : 0 } }, [
+      el('div', { style: { fontWeight: 700 }, text: 'AI 분석은 아직 꺼져 있어요.' }),
+      el('div', { text: '서버 환경 변수 ANTHROPIC_API_KEY 를 설정하면 학생들의 관계·성향·지원서를 함께 읽고, 갈등 가능성과 어울리는 역할을 풀어서 설명해 줘요. 그 전까지는 위의 규칙 기반 갈등 분석을 사용해요.' }),
+      el('div', { style: { marginTop: '4px', fontSize: '13px' }, text: '설정 방법은 README 참고' }),
+    ]);
+
+  const pairEl = (p) => {
+    const lv = levelOf(p.riskLevel);
+    return el('div', { class: `ai-pair ${lv}` }, [
+      el('div', { class: 'ai-pair-head' }, [
+        el('a', { href: '#', class: 'names', text: `${nameOf(p.a)} ↔ ${nameOf(p.b)}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
+        el('span', { class: `badge ${lv}`, text: LEVEL_LABEL[lv] }),
+        p.conflictType ? el('span', { class: 'conflict-type', text: p.conflictType }) : null,
+      ]),
+      p.analysis ? el('p', { class: 'ai-text', text: p.analysis }) : el('p', { class: 'ai-text muted', text: '설명이 비어 있어요.' }),
+      p.advice ? el('div', { class: 'ai-advice' }, [el('div', { class: 'ai-advice-label', text: '💡 이렇게 해 보세요' }), el('div', { text: p.advice })]) : null,
+    ]);
+  };
+
+  const studentEl = ({ s, info }) => {
+    const fit = info.roleFit || [];
+    const empty = !info.summary && !info.strengths && !info.watch && !fit.length;
+    return el('details', {
+      class: 'ai-student', open: ui.aiOpen.has(s.id) ? true : null,
+      onToggle: (e) => { if (e.target.open) ui.aiOpen.add(s.id); else ui.aiOpen.delete(s.id); },
+    }, [
+      el('summary', {}, [
+        el('b', { text: s.name }),
+        fit.length ? el('span', { class: 'muted', text: `추천 역할: ${fit.slice(0, 2).map((f) => roleNameOf(f.roleId)).join(', ')}` }) : null,
+      ]),
+      el('div', { class: 'ai-student-body' }, [
+        info.summary ? el('p', { text: info.summary }) : null,
+        info.strengths ? el('div', { class: 'ai-line' }, [el('b', { text: '💪 강점: ' }), info.strengths]) : null,
+        info.watch ? el('div', { class: 'ai-line' }, [el('b', { text: '👀 살펴볼 점: ' }), info.watch]) : null,
+        fit.length ? el('div', { class: 'chips role-chips' }, fit.map((f) => el('span', { class: 'role-chip', title: f.reason || '' }, [
+          el('b', { text: roleNameOf(f.roleId) }),
+          f.reason ? el('span', { class: 'reason', text: ` — ${f.reason}` }) : null,
+        ]))) : null,
+        empty ? el('p', { class: 'muted', text: '이 학생에 대한 내용이 비어 있어요.' }) : null,
+        el('a', { href: '#', class: 'muted', style: { fontSize: '12px' }, text: '관계도에서 보기', onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } }),
+      ]),
+    ]);
+  };
+
+  const results = a ? [
+    el('div', { class: 'ai-meta muted', id: 'ai-meta' }, [
+      `분석 ${fmtDate(a.createdAt)}${a.model ? ` · 모델 ${a.model}` : ''} · ${state.round.name} 회차`,
+      a.truncated ? el('span', { class: 'ai-truncated', id: 'ai-truncated', text: ' · ⚠️ 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' }) : null,
+    ]),
+    el('div', { class: 'ai-summary' }, [
+      el('div', { class: 'ai-summary-label', text: '학급 전체 요약' }),
+      el('p', { text: a.summary || '요약이 비어 있어요.' }),
+    ]),
+    el('div', { class: 'grid-2' }, [
+      el('div', {}, [
+        el('h3', { text: `주의가 필요한 관계 (${pairs.length})` }),
+        pairs.length ? el('div', { id: 'ai-pairs' }, pairs.map(pairEl)) : el('p', { class: 'muted', text: 'AI가 특별히 주의할 관계를 찾지 못했어요.' }),
+      ]),
+      el('div', {}, [
+        el('div', { class: 'card-title', style: { marginBottom: '4px' } }, [
+          el('h3', { style: { margin: 0 }, text: `학생별 분석 (${aiStudents.length})` }),
+          aiStudents.length ? el('button', {
+            type: 'button', class: 'btn small', id: 'ai-toggle-all', text: allOpen ? '모두 접기' : '모두 펼치기',
+            onClick: () => { ui.aiOpen = allOpen ? new Set() : new Set(aiStudents.map((x) => x.s.id)); renderAiPanel(); },
+          }) : null,
+        ]),
+        aiStudents.length ? el('div', { id: 'ai-students' }, aiStudents.map(studentEl)) : el('p', { class: 'muted', text: '학생별 내용이 없어요.' }),
+      ]),
+    ]),
+    el('p', { class: 'muted', style: { marginTop: '10px', marginBottom: 0 }, text: 'AI 분석은 참고용이에요. 학생을 판단하는 근거가 아니라 먼저 살펴볼 관계와 어울리는 역할을 찾는 도구로 써 주세요. 학생이 답을 고치면 "다시 분석"으로 새로 받을 수 있어요.' }),
+  ] : [
+    enabled ? el('p', { class: 'muted', style: { marginBottom: 0 }, text: '아직 분석 결과가 없어요. "AI 분석 실행"을 누르면 이번 회차의 관계도, 성향 설문, 1인 1역 지원서, 교사 메모를 함께 읽고 학급 요약·주의할 관계·학생별 역할 추천을 만들어요.' }) : null,
+  ];
+
+  setChildren(card,
+    el('div', { class: 'card-title' }, [
+      el('h2', { text: '🤖 AI 관계·역할 분석' }),
+      el('span', { class: 'muted', text: enabled ? (a ? `마지막 분석 ${fmtDate(a.createdAt)}` : '아직 분석 전') : '꺼져 있음' }),
+    ]),
+    controls,
+    ...results,
+  );
+}
+
 // ---------- 회차별 변화 분석 ----------
 function renderHistory() {
   const card = document.getElementById('history-card');
@@ -412,7 +624,7 @@ function renderHistory() {
 
   const pairList = (items, empty) => items.length
     ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, items.map((p) => el('li', {}, [
-      el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); document.getElementById('graph-container').scrollIntoView({ behavior: 'smooth', block: 'center' }); } }),
+      el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
       p.probability !== null ? el('span', { class: `badge ${p.probability >= 70 ? 'high' : p.probability >= 40 ? 'medium' : 'low'}`, style: { marginLeft: '6px' }, text: `${p.probability}%` }) : null,
     ])))
     : el('p', { class: 'muted', style: { margin: '4px 0 10px' }, text: empty });
@@ -463,14 +675,37 @@ function renderHistory() {
 }
 
 // ---------- 학생 관리 ----------
+// 학생별 성향 설문 · 지원서 제출 표시 (지원서는 역할 목록이 있을 때만)
+function statusIcons(sid) {
+  const profile = state.profiles?.[sid] || null;
+  const application = state.applications?.[sid] || null;
+  const firstChoice = application?.choices?.[0]?.roleId;
+  const icons = [
+    el('span', {
+      class: `status-icon ${profile ? 'done' : 'todo'}`, 'data-kind': 'profile',
+      title: profile ? `성향 설문 제출 · ${fmtDate(profile.updatedAt)}` : '성향 설문을 아직 내지 않았어요',
+      text: profile ? '성향 ✓' : '성향 –',
+    }),
+  ];
+  if ((state.roles || []).length) {
+    icons.push(el('span', {
+      class: `status-icon ${application ? 'done' : 'todo'}`, 'data-kind': 'application',
+      title: application ? `1인 1역 지원서 제출 · ${fmtDate(application.updatedAt)}${firstChoice ? ` · 1지망 ${roleNameOf(firstChoice)}` : ''}` : '1인 1역 지원서를 아직 내지 않았어요',
+      text: application ? '지원서 ✓' : '지원서 –',
+    }));
+  }
+  return el('div', { class: 'status-icons' }, icons);
+}
+
 function renderStudents() {
   const card = document.getElementById('students-card');
   const { students, stats, room } = state;
   const rows = students.map((s) => {
     const st = stats[s.id];
     return el('tr', {}, [
-      el('td', {}, [el('a', { href: '#', text: s.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); document.getElementById('graph-container').scrollIntoView({ behavior: 'smooth', block: 'center' }); } })]),
+      el('td', {}, [el('a', { href: '#', text: s.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } })]),
       el('td', {}, [el('span', { class: `badge ${s.submitted ? 'green' : 'gray'}`, text: s.submitted ? '제출' : '미제출' }), s.submitted ? el('div', { class: 'muted', style: { fontSize: '12px' }, text: fmtDate(s.submittedAt) }) : null]),
+      el('td', {}, [statusIcons(s.id)]),
       el('td', { class: 'num', text: st.inGood.length }),
       el('td', { class: 'num', text: st.inBad.length }),
       el('td', { class: 'num', text: st.outGood.length }),
@@ -503,7 +738,7 @@ function renderStudents() {
   setChildren(card,
     el('div', { class: 'card-title' }, [el('h2', { text: '학생 관리' }), el('span', { class: 'muted', text: `${students.length}명` })]),
     el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
-      el('thead', {}, [el('tr', {}, ['이름', '제출', '받은 ❤️', '받은 ⚡', '준 ❤️', '준 ⚡', ''].map((h) => el('th', { text: h })))]),
+      el('thead', {}, [el('tr', {}, ['이름', '제출', '성향 · 지원서', '받은 ❤️', '받은 ⚡', '준 ❤️', '준 ⚡', ''].map((h) => el('th', { text: h })))]),
       el('tbody', {}, rows),
     ])]),
     el('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
