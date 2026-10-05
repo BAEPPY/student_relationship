@@ -14,6 +14,7 @@ import { assignRoles, repairAssignment } from './assign.js';
 import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles } from './ai.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
+import { extractDocument, documentToText, extractRoles, DOC_LIMITS } from './docfiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -766,6 +767,28 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(parseHistoryText(text, room.students, roles));
   });
 
+  // 파일 업로드(한글·워드·텍스트) → 본문을 읽어 지난달 현황 미리보기 (저장하지 않음)
+  const rawFile = express.raw({ type: () => true, limit: DOC_LIMITS.file });
+  const uploadedName = (req) => { try { return decodeURIComponent(req.get('x-file-name') || ''); } catch { return ''; } };
+  app.post('/api/teacher/:adminToken/roles/history/upload', rawFile, async (req, res) => {
+    const room = await requireRoom(req);
+    const roles = roomRoles(room);
+    if (!roles.length) throw bad('먼저 역할 목록을 만들어 주세요.');
+    const doc = extractDocument(req.body, uploadedName(req));
+    const text = documentToText(doc).slice(0, 20000);
+    const tables = doc.blocks.filter((b) => b.type === 'table').length;
+    res.json({ format: doc.format, tables, text, ...parseHistoryText(text, room.students, roles) });
+  });
+
+  // 파일 업로드 → 역할 목록 미리보기 (저장하지 않음; 선생님이 편집기에서 확인한 뒤 저장)
+  app.post('/api/teacher/:adminToken/roles/upload', rawFile, async (req, res) => {
+    const room = await requireRoom(req);
+    const doc = extractDocument(req.body, uploadedName(req));
+    const knownNames = [...DEFAULT_ROLES, ...roomRoles(room)].map((r) => r.name);
+    const tables = doc.blocks.filter((b) => b.type === 'table').length;
+    res.json({ format: doc.format, tables, ...extractRoles(doc, { knownNames }) });
+  });
+
   // 지난달(또는 어떤 달) 배정 기록 저장/수정
   app.put('/api/teacher/:adminToken/roles/history', async (req, res) => {
     const found = await requireRoom(req);
@@ -990,7 +1013,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.use((err, req, res, next) => {
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) console.error(err);
-    const message = status >= 500 && !err.expose ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
+    let message = status >= 500 && !err.expose ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
+    if (err.type === 'entity.too.large') message = '보낸 내용이 너무 커요. (파일은 6MB 까지)';
     if (req.path.startsWith('/api')) res.status(status).json({ error: message });
     else res.status(status).type('text/plain').send(message);
   });

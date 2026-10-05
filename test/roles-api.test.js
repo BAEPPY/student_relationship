@@ -6,6 +6,7 @@ import { FileStore } from '../server/store.js';
 import { PgStore } from '../server/pgstore.js';
 import { FakePool } from './fake-pg.js';
 import { DEFAULT_ROLES } from '../server/roles.js';
+import { makeHwpx, makeHwp } from './helpers/docgen.js';
 
 const STORES = [
   ['FileStore', async () => new FileStore(null)],
@@ -616,6 +617,53 @@ for (const [label, makeStore] of STORES) describe(`1인 1역 API (${label})`, ()
     assert.equal(r.status, 200, r.text);
     const weird = r.json.roles.find((x) => x.name === '이상한 역할');
     assert.ok(weird && weird.id !== '__proto__');
+  });
+
+  test('파일 올리기: 한글 파일의 표를 읽어 지난달 현황 미리보기와 역할 목록을 만든다', async () => {
+    const { t, students } = await setupRoom();
+    const [a, b, c] = students;
+    async function upload(path, buf, name) {
+      const res = await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(name) }, body: buf });
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* not json */ }
+      return { status: res.status, json, text };
+    }
+    // 지난달 현황 (hwpx)
+    const history = makeHwpx([{ type: 'p', text: '9월 현황' }, { type: 'table', rows: [['역할명', '번호', '8~9월의 역할'], [['빗자루의 마법사', '해리포터'], '1', `8 ${a.name} 24 ${b.name}`], [['오늘의 아나운서'], '2', `20 ${c.name}`]] }]);
+    let r = await upload(`/api/teacher/${t}/roles/history/upload`, history, '9월 현황.hwpx');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.format, 'hwpx');
+    assert.equal(r.json.tables, 1);
+    assert.match(r.json.text, /빗자루의 마법사 해리포터 \| 1 \| 8 /);
+    assert.deepEqual(r.json.assignments.broom, [a.id, b.id]);
+    assert.deepEqual(r.json.assignments.announcer, [c.id]);
+    assert.equal((await teacher(t)).json.roleHistory.length, 0, '미리보기는 저장하지 않음');
+    // 같은 내용의 hwp(5.0) 파일
+    r = await upload(`/api/teacher/${t}/roles/history/upload`, makeHwp([{ type: 'table', rows: [['역할명', '학생'], [['칭찬 수집가'], `9 ${a.name}`]] }]), '현황.hwp');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.format, 'hwp');
+    assert.deepEqual(r.json.assignments.praise, [a.id]);
+    // 역할 목록 (hwpx 표) → 편집기용 미리보기만 (저장 안 함)
+    const roleDoc = makeHwpx([{ type: 'table', rows: [['역할명', '해야할 일'], [['칠판 지우기', '(2명)'], '수업이 끝나면 칠판을 깨끗이 지워요.'], [['도서관 사서', '선생님', '(2명)'], '우리 반 책을 정리해요.']] }]);
+    r = await upload(`/api/teacher/${t}/roles/upload`, roleDoc, '역할.hwpx');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.source, 'table');
+    assert.deepEqual(r.json.roles.map((x) => [x.name, x.slots]), [['칠판 지우기', 2], ['도서관 사서 선생님', 2]], '기본 역할과 같은 이름은 이어 붙임');
+    assert.equal((await teacher(t)).json.roles.length, 15, '역할 목록은 바뀌지 않음');
+    // 잘못된 파일·큰 파일
+    r = await upload(`/api/teacher/${t}/roles/upload`, Buffer.from('%PDF-1.4'), 'a.pdf');
+    expectError(r, 400, /PDF/);
+    r = await upload(`/api/teacher/${t}/roles/history/upload`, Buffer.alloc(0), 'empty.txt');
+    expectError(r, 400, /비어/);
+    r = await upload(`/api/teacher/${t}/roles/upload`, Buffer.alloc(6 * 1024 * 1024 + 1, 0x20), 'big.txt');
+    assert.equal(r.status, 413);
+    assert.match(r.json.error, /너무 커요/);
+    // 역할이 없는 교실에서는 현황 올리기 거부
+    const other = await setupRoom({ roles: false, name: '빈반' });
+    r = await upload(`/api/teacher/${other.t}/roles/history/upload`, history, 'x.hwpx');
+    expectError(r, 400, /역할 목록/);
+    assert.equal((await upload('/api/teacher/nope/roles/upload', history, 'x.hwpx')).status, 404);
   });
 
   test('JSON 내보내기에 역할 목록·달별 기록·회차별 설문·지원서·배정이 들어간다', async () => {

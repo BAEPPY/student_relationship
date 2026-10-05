@@ -20,7 +20,7 @@ let state = null;                 // 교사 API 응답 (teacherView)
 let badPairs = new Set();         // 'a|b' (정렬) — 안 좋은 사이 표시가 있는 쌍
 const ui = {
   open: { roles: true, history: true, apps: true, board: true, export: true },
-  roles: { draft: [], dirty: false },
+  roles: { draft: [], dirty: false, notice: null, busy: false },
   history: { month: null, text: '', preview: null, expanded: new Set(), busy: false },
   apps: { expanded: new Set(), criteriaOpen: false },
   board: { assignments: {}, explanations: {}, dirty: false, selected: null, dragging: null, explain: new Set(), busy: null, seed: 1 },
@@ -188,13 +188,82 @@ function renderOnboarding() {
     el('p', { class: 'muted', text: '1인 1역을 시작하려면 먼저 역할 목록이 필요해요. 기본 역할 15개(26자리)를 불러온 뒤 우리 반에 맞게 고치거나, 아래 표에서 직접 만들 수 있어요. 역할이 있어야 학생 지원서 화면이 열려요.' }),
     el('div', { class: 'btn-row' }, [
       el('button', { type: 'button', class: 'btn primary', text: '기본 역할 15개 불러오기', onClick: loadDefaultRoles }),
+      el('button', { type: 'button', class: 'btn', text: '📄 파일에서 역할 불러오기', title: `${FILE_HINT} 파일의 역할 표를 읽어요`, onClick: importRolesFile }),
       el('button', { type: 'button', class: 'btn', text: '직접 만들기', onClick: () => { if (!ui.roles.draft.length) ui.roles.draft.push(newRoleRow()); ui.roles.dirty = true; ui.open.roles = true; renderAll(); } }),
     ]),
   ]);
 }
 
+// ---------- 파일 올리기 (한글·워드·텍스트) ----------
+const FILE_ACCEPT = '.hwp,.hwpx,.docx,.txt,.csv';
+const FILE_HINT = '한글(.hwp, .hwpx) · 워드(.docx) · 텍스트(.txt)';
+
+/** 파일 선택 창을 열고 고른 파일을 돌려줍니다 (취소하면 null). */
+function pickFile(accept = FILE_ACCEPT) {
+  return new Promise((resolve) => {
+    const inp = el('input', { type: 'file', accept, style: { display: 'none' } });
+    inp.addEventListener('change', () => { resolve(inp.files?.[0] || null); inp.remove(); });
+    inp.addEventListener('cancel', () => { resolve(null); inp.remove(); });
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
+/** 파일을 그대로 올리고 JSON 응답을 돌려줍니다. 파일 내용은 서버 메모리에서만 읽고 저장하지 않아요. */
+async function uploadFile(url, file) {
+  if (file.size > 6 * 1024 * 1024) throw new Error('파일이 너무 커요. (최대 6MB)');
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }, body: file });
+  let data = null;
+  try { data = await res.json(); } catch { /* 본문 없음 */ }
+  if (!res.ok) throw new Error(data?.error || `파일을 읽지 못했어요 (${res.status})`);
+  return data;
+}
+
+const compactName = (s) => String(s || '').replace(/[\s()（）\[\]·,.:：\-_'"‘’“”]/g, '').toLowerCase();
+
 // ---------- 2. 역할 목록 ----------
 const newRoleRow = () => ({ id: null, name: '', subtitle: '', slots: 1, description: '' });
+
+/** 파일에서 역할 목록을 읽어 편집기에 넣습니다. 저장은 선생님이 확인한 뒤 "역할 저장하기"로 합니다. */
+async function importRolesFile() {
+  const file = await pickFile();
+  if (!file) return;
+  ui.roles.busy = true;
+  ui.roles.notice = null;
+  renderAll();
+  try {
+    const result = await uploadFile(`${base}/roles/upload`, file);
+    const found = result.roles || [];
+    if (!found.length) {
+      ui.roles.notice = { kind: 'warn', text: `"${file.name}"에서 역할 목록을 찾지 못했어요. ${(result.warnings || []).join(' ')} 표(역할 이름 · 설명)가 있는 문서를 올리거나, 아래 표에 직접 적어 주세요.` };
+    } else {
+      const draft = ui.roles.draft;
+      let replace = true;
+      if (draft.some((r) => r.name.trim())) {
+        replace = confirm(`파일에서 역할 ${found.length}개를 읽었어요.\n[확인] 지금 목록을 파일 내용으로 바꾸기\n[취소] 지금 목록 뒤에 덧붙이기`);
+      }
+      // 같은 이름의 역할은 id 를 이어받아 지원서·지난달 기록과 연결이 끊기지 않게 합니다.
+      const known = new Map([...state.roles, ...draft].filter((r) => r.id).map((r) => [compactName(r.name), r.id]));
+      const rows = found.map((r) => ({ id: known.get(compactName(r.name)) || null, name: r.name, subtitle: r.subtitle || '', slots: r.slots || 1, description: r.description || '' }));
+      if (replace) ui.roles.draft = rows;
+      else {
+        const have = new Set(draft.map((r) => compactName(r.name)));
+        ui.roles.draft = [...draft, ...rows.filter((r) => !have.has(compactName(r.name)))];
+      }
+      ui.roles.dirty = true;
+      const bits = [`"${file.name}"에서 역할 ${found.length}개를 읽어 ${replace ? '목록을 바꿨어요' : '뒤에 덧붙였어요'}. 이름·부제·인원·설명을 확인한 뒤 "역할 저장하기"를 눌러야 저장돼요.`];
+      if (result.source === 'paragraphs') bits.push('표가 없어 "(2명)" 같은 제목 줄을 기준으로 나눴어요.');
+      bits.push(...(result.warnings || []));
+      ui.roles.notice = { kind: 'info', text: bits.join(' ') };
+      toast(`역할 ${found.length}개를 읽었어요. 확인한 뒤 저장해 주세요.`, 3500);
+    }
+  } catch (err) {
+    ui.roles.notice = { kind: 'error', text: err.message };
+    toast(err.message, 4000);
+  }
+  ui.roles.busy = false;
+  renderAll();
+}
 
 function markRolesDirty() {
   if (ui.roles.dirty) return;
@@ -266,10 +335,12 @@ function renderRoles() {
       el('thead', {}, [el('tr', {}, [el('th', { text: '역할 이름' }), el('th', { text: '부제' }), el('th', { text: '인원' }), el('th', { text: '설명' }), el('th', { text: '지원 (1·2·3지망)' }), el('th', { text: '' })])]),
       el('tbody', {}, rows.length ? rows : [el('tr', {}, [el('td', { colspan: 6, class: 'muted', text: '역할이 없어요. "역할 추가"를 눌러 만들어 주세요.' })])]),
     ])]),
+    ui.roles.notice ? el('div', { class: `alert ${ui.roles.notice.kind === 'error' ? 'error' : ui.roles.notice.kind}`, style: { marginTop: '10px', marginBottom: 0 }, text: ui.roles.notice.text }) : null,
     el('div', { class: 'btn-row', style: { marginTop: '10px' } }, [
       el('button', { type: 'button', class: 'btn', text: '역할 추가', onClick: () => { draft.push(newRoleRow()); ui.roles.dirty = true; renderAll(); } }),
       el('button', { type: 'button', id: 'roles-save-btn', class: `btn ${ui.roles.dirty ? 'orange' : 'primary'}`, text: ui.roles.dirty ? '역할 저장하기 *' : '역할 저장하기', onClick: saveRoles }),
       el('button', { type: 'button', class: 'btn', text: '기본 역할 15개 불러오기', onClick: loadDefaultRoles }),
+      el('button', { type: 'button', id: 'roles-file-btn', class: 'btn', text: ui.roles.busy ? '파일 읽는 중…' : '📄 파일에서 역할 불러오기', disabled: ui.roles.busy ? true : null, title: `${FILE_HINT} 파일의 역할 표를 읽어요`, onClick: importRolesFile }),
       el('span', { class: 'muted', text: `역할 ${draft.length}개 · ${totalSlots}자리 · 학생 ${state.students.length}명` }),
     ]),
     totalSlots && totalSlots < state.students.length ? el('div', { class: 'alert warn', style: { marginTop: '10px', marginBottom: 0 }, text: `자리(${totalSlots})가 학생 수(${state.students.length})보다 적어요. 인원을 늘리거나 역할을 더 만들어 주세요.` }) : null,
@@ -289,6 +360,26 @@ async function previewHistory() {
     const n = Object.values(assignments).flat().length;
     toast(n ? `${n}명을 찾았어요. 확인한 뒤 저장해 주세요.` : '학생 이름을 찾지 못했어요. 반 명단과 같은 이름으로 적어 주세요.', 3500);
   } catch (err) { toast(err.message, 4000); }
+  ui.history.busy = false;
+  renderAll();
+}
+
+/** 파일(한글·워드·텍스트)을 올려 본문을 붙여넣기 칸에 넣고 바로 미리보기를 만듭니다. */
+async function importHistoryFile() {
+  const file = await pickFile();
+  if (!file) return;
+  ui.history.busy = true;
+  renderAll();
+  try {
+    const result = await uploadFile(`${base}/roles/history/upload`, file);
+    ui.history.text = result.text || '';
+    const assignments = {};
+    for (const r of state.roles) assignments[r.id] = [...(result.assignments?.[r.id] || [])];
+    ui.history.preview = { assignments, unmatched: result.unmatched || [] };
+    const n = Object.values(assignments).flat().length;
+    if (!ui.history.text.trim()) toast(`"${file.name}"에서 읽을 수 있는 글을 찾지 못했어요.`, 4000);
+    else toast(n ? `"${file.name}"에서 ${n}명을 찾았어요. 확인한 뒤 저장해 주세요.` : '파일은 읽었지만 반 명단과 같은 이름을 찾지 못했어요. 아래 글을 고친 뒤 미리보기를 눌러 주세요.', 4500);
+  } catch (err) { toast(err.message, 4500); }
   ui.history.busy = false;
   renderAll();
 }
@@ -388,8 +479,9 @@ function renderHistory() {
       input('textarea', { placeholder, rows: 8 }, ui.history.text, (v) => { ui.history.text = v; }),
       el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
         el('button', { type: 'button', class: 'btn primary', text: ui.history.busy ? '읽는 중…' : '미리보기', disabled: ui.history.busy ? true : null, onClick: previewHistory }),
+        el('button', { type: 'button', id: 'history-file-btn', class: 'btn', text: '📄 파일 올리기', disabled: ui.history.busy ? true : null, title: `${FILE_HINT} 파일의 표를 읽어 여기에 넣어요`, onClick: importHistoryFile }),
         ui.history.text ? el('button', { type: 'button', class: 'btn', text: '지우기', onClick: () => { ui.history.text = ''; ui.history.preview = null; renderAll(); } }) : null,
-        el('span', { class: 'muted', text: '역할은 이름이 들어 있는 줄로, 학생은 반 명단 이름으로 찾아요.' }),
+        el('span', { class: 'muted', text: `역할은 이름이 들어 있는 줄로, 학생은 반 명단 이름으로 찾아요. ${FILE_HINT} 파일을 올리면 표를 읽어 자동으로 채워요.` }),
       ]),
       previewEl,
     ]),
