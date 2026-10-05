@@ -45,6 +45,11 @@ export const index = `<!doctype html>
           <label for="students">학생 이름 (한 줄에 한 명)</label>
           <textarea id="students" placeholder="김하늘&#10;이도윤&#10;박서연&#10;..." required></textarea>
           <div class="help">쉼표로 구분해서 적어도 돼요. 같은 이름이 있으면 구분할 수 있게 적어 주세요 (예: 김민준A, 김민준B). <span id="student-count"></span></div>
+          <div class="btn-row" style="margin-top:8px">
+            <button type="button" class="btn small" id="roster-file-btn">📄 명단 파일 올리기</button>
+            <span class="muted">한글(.hwp, .hwpx) · 워드(.docx) · 텍스트(.txt) — 번호·이름 표나 한 줄에 한 명씩 적힌 파일에서 이름을 읽어 와요. 파일은 저장하지 않아요.</span>
+          </div>
+          <div id="roster-notice" class="alert warn hidden" style="margin-top:8px;margin-bottom:0"></div>
         </div>
         <div class="field">
           <label>학생 한 명이 꼭 표시해야 하는 친구 수</label>

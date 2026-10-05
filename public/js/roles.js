@@ -21,6 +21,7 @@ let badPairs = new Set();         // 'a|b' (정렬) — 안 좋은 사이 표시
 const ui = {
   open: { roles: true, history: true, apps: true, board: true, export: true },
   roles: { draft: [], dirty: false, notice: null, busy: false },
+  export: { reasons: false },
   history: { month: null, text: '', preview: null, expanded: new Set(), busy: false },
   apps: { expanded: new Set(), criteriaOpen: false },
   board: { assignments: {}, explanations: {}, dirty: false, selected: null, dragging: null, explain: new Set(), busy: null, seed: 1 },
@@ -878,6 +879,15 @@ function exportText() {
   return lines.join('\n');
 }
 
+/** 배정표 파일 주소 (보는 회차 기준) */
+function exportUrl(kind) {
+  const params = new URLSearchParams();
+  if (state?.round?.id) params.set('round', state.round.id);
+  if (ui.export.reasons) params.set('reasons', '1');
+  return `${base}/roles/export.${kind}?${params.toString()}`;
+}
+const exportFileName = (kind) => `1인1역_${(state?.round?.name || '배정표').replace(/[\\/:*?"<>|]+/g, ' ').trim()}.${kind}`;
+
 function renderExport() {
   const text = exportText();
   const body = () => [
@@ -894,8 +904,20 @@ function renderExport() {
       el('button', { type: 'button', class: 'btn', text: '인쇄', onClick: () => { ui.open.board = true; renderAll(); window.print(); } }),
       ui.board.dirty ? el('span', { class: 'muted', text: '저장하지 않은 수정 내용도 포함돼요.' }) : null,
     ]),
+    el('div', { class: 'export-files' }, [
+      el('h3', { text: '파일로 내려받기' }),
+      el('p', { class: 'muted', text: '서버에 저장된 배정으로 배정표 문서를 만들어요. 역할명 · 인원 · 담당 학생(번호 이름) 표가 들어가고, 다음 달 "지난달 현황 가져오기"에 그대로 올릴 수 있어요.' + (ui.board.dirty ? ' 지금 수정 중인 내용은 "초안 저장"을 누른 뒤에 반영돼요.' : '') }),
+      el('div', { class: 'btn-row' }, [
+        el('a', { class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-hwpx', href: exportUrl('hwpx'), download: exportFileName('hwpx'), text: '📄 한글 파일 (.hwpx)', title: '한글 2014 이상에서 열려요', onClick: (e) => { if (!state.roleAssignment) { e.preventDefault(); toast('먼저 배정을 저장해 주세요.'); } } }),
+        el('a', { class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-docx', href: exportUrl('docx'), download: exportFileName('docx'), text: '📄 워드 파일 (.docx)', title: '워드·한글 모두 열려요', onClick: (e) => { if (!state.roleAssignment) { e.preventDefault(); toast('먼저 배정을 저장해 주세요.'); } } }),
+        el('label', { class: 'check', style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, [
+          el('input', { type: 'checkbox', id: 'export-reasons', checked: ui.export.reasons ? true : null, onChange: (e) => { ui.export.reasons = e.target.checked; renderAll(); } }),
+          '학생별 배정 이유 표도 넣기 (선생님 참고용)',
+        ]),
+      ]),
+    ]),
   ];
-  return sectionCard('export', '결과 내보내기', '복사하거나 인쇄해요', body, { id: 'export-card', cls: 'no-print' });
+  return sectionCard('export', '결과 내보내기', '복사하거나 인쇄하고, 한글·워드 파일로 내려받아요', body, { id: 'export-card', cls: 'no-print' });
 }
 
 // ---------- 시작 ----------

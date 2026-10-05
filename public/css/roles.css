@@ -151,3 +151,8 @@
   .unassigned-bin.targetable, .role-card.targetable { border-style: solid; opacity: 1; }
   .role-head .badge { border: 1px solid #ccc; background: #fff; color: #333; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* 결과 내보내기: 파일 내려받기 */
+.export-files { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--gray-300); }
+.export-files h3 { margin: 0 0 4px; font-size: 15px; }
+.export-files .btn.disabled { opacity: .5; cursor: not-allowed; }

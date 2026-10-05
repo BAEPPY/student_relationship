@@ -50,6 +50,61 @@ async function action(promise, okMessage) {
   }
 }
 
+// ---------- 명단 파일 올리기 (한글·워드·텍스트) ----------
+const FILE_ACCEPT = '.hwp,.hwpx,.docx,.txt,.csv';
+const FILE_HINT = '한글(.hwp, .hwpx) · 워드(.docx) · 텍스트(.txt)';
+
+/** 파일 선택 창을 열고 고른 파일을 돌려줍니다 (취소하면 null). */
+function pickFile(accept = FILE_ACCEPT) {
+  return new Promise((resolve) => {
+    const inp = el('input', { type: 'file', accept, style: { display: 'none' } });
+    inp.addEventListener('change', () => { resolve(inp.files?.[0] || null); inp.remove(); });
+    inp.addEventListener('cancel', () => { resolve(null); inp.remove(); });
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
+/** 파일을 그대로 올리고 JSON 응답을 돌려줍니다. 파일 내용은 서버 메모리에서만 읽고 저장하지 않아요. */
+async function uploadFile(url, file) {
+  if (file.size > 6 * 1024 * 1024) throw new Error('파일이 너무 커요. (최대 6MB)');
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }, body: file });
+  let data = null;
+  try { data = await res.json(); } catch { /* 본문 없음 */ }
+  if (!res.ok) throw new Error(data?.error || `파일을 읽지 못했어요 (${res.status})`);
+  return data;
+}
+
+/** 명단 파일에서 이름을 읽어, 아직 없는 학생만 확인을 거쳐 한 번에 추가합니다. */
+async function importRosterFile(btn) {
+  const file = await pickFile();
+  if (!file) return;
+  if (btn) btn.disabled = true;
+  try {
+    const result = await uploadFile('/api/roster/parse', file);
+    const found = Array.isArray(result.names) ? result.names : [];
+    const warn = (result.warnings || []).join('\n');
+    if (!found.length) return toast(warn || `"${file.name}"에서 이름을 찾지 못했어요.`, 5000);
+    const have = new Set(state.students.map((s) => s.name));
+    const fresh = found.filter((n) => !have.has(n));
+    const present = found.length - fresh.length;
+    if (!fresh.length) return toast(`파일에서 읽은 ${found.length}명이 모두 이미 교실에 있어요.`, 4000);
+    const lines = [`파일에서 ${found.length}명을 읽었어요. 새로 추가할 학생 ${fresh.length}명:`, fresh.join(', ')];
+    if (present) lines.push(`(이미 있는 ${present}명은 건너뜀)`);
+    if (warn) lines.push('', warn);
+    lines.push('', '추가할까요?');
+    if (!confirm(lines.join('\n'))) return;
+    const { added, skipped, ...view } = await api(`${base}/students/bulk`, { method: 'POST', body: { names: fresh } });
+    if (view.room) applyUpdate(view);
+    const n = Array.isArray(added) ? added.length : fresh.length;
+    toast(n ? `학생 ${n}명을 추가했어요. QR 카드를 인쇄해 주세요.` : `읽은 이름이 모두 이미 있어요. (건너뜀 ${skipped?.length ?? 0}명)`, 4500);
+  } catch (err) {
+    toast(err.message, 4500);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ---------- 전체 렌더 ----------
 function renderAll() {
   if (!document.getElementById('graph-container')) buildSkeleton();
@@ -748,7 +803,12 @@ function renderStudents() {
           e.preventDefault();
           if (!addInput.value.trim()) return;
           action(api(`${base}/students`, { method: 'POST', body: { name: addInput.value } }), '학생을 추가했어요. QR 카드를 인쇄해 주세요.');
-        } }, [addInput, el('button', { type: 'submit', class: 'btn primary', text: '추가' })]),
+        } }, [
+          addInput,
+          el('button', { type: 'submit', class: 'btn primary', text: '추가' }),
+          el('button', { type: 'button', class: 'btn', id: 'roster-file-btn', text: '📄 명단 파일로 추가', onClick: (e) => importRosterFile(e.currentTarget) }),
+        ]),
+        el('p', { class: 'muted', style: { marginTop: '6px' }, text: `${FILE_HINT} 명단 파일에서 이름을 읽어 와요. 이미 있는 이름은 건너뛰고, 추가하기 전에 목록을 확인해요.` }),
       ]),
       el('div', {}, [
         el('h3', { text: '꼭 표시해야 하는 인원' }),

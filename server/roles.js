@@ -153,6 +153,8 @@ export function parseHistoryText(text, students, roles) {
     return best;
   };
   for (const line of lines) {
+    // "아직 배정 안 됨: 6 강서준" 같은 미배정 줄의 이름은 어느 역할에도 넣지 않습니다.
+    if (/미배정|배정\s*안\s*됨|배정되지\s*않/.test(line)) { currentRole = null; continue; }
     const role = roleByLine(line);
     if (role) currentRole = role;
     const { sids } = findStudents(line, students);

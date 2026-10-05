@@ -24,6 +24,24 @@ let pasteText = '';
 let parsed = null;              // { items: [{...item, checked}], unmatched }
 let staleNotice = false;        // 저장 뒤에 학생 응답이 바뀌었는지
 
+// 자리표 보는 방향 (화면·인쇄 전용, 좌석 id와 배정 데이터는 그대로)
+//  - student: 학생 시점, 칠판(교탁)이 위
+//  - teacher: 교탁에서 학생들을 바라본 모습 = 180도 회전 (분단·열·줄 모두 뒤집고 교탁은 아래)
+//  - flipV:   줄만 뒤집어 교탁을 아래에 (분단·열 순서는 그대로)
+const SEAT_VIEWS = {
+  student: { label: '학생 시점 · 칠판이 위', printLabel: '', flipRows: false, flipCols: false },
+  teacher: { label: '교사 시점 · 교탁에서 본 모습 (위아래·좌우 뒤집음)', printLabel: '교사 시점(교탁에서 본 모습)', flipRows: true, flipCols: true },
+  flipV: { label: '위아래만 뒤집기 (교탁이 아래)', printLabel: '위아래만 뒤집음', flipRows: true, flipCols: false },
+};
+const SEAT_VIEW_KEY = `relmap.seatView.${adminToken}`;
+function loadSeatView() {
+  try { const v = localStorage.getItem(SEAT_VIEW_KEY); return SEAT_VIEWS[v] ? v : 'student'; } catch { return 'student'; }
+}
+function saveSeatView(v) {
+  try { localStorage.setItem(SEAT_VIEW_KEY, v); } catch { /* 저장 못 해도 보는 데는 지장 없음 */ }
+}
+let seatView = loadSeatView();   // 'student' | 'teacher' | 'flipV'
+
 const nameOf = (id) => data.stats[id]?.name || '?';
 const RULE_LABEL = { apart: '떨어뜨리기', together: '가까이 앉히기' };
 const FRONT_ROWS = 2;            // 앞자리로 인정하는 줄 수
@@ -215,6 +233,10 @@ function render() {
     el('option', { value: 'apart', text: '친한 친구: 떨어뜨리기', selected: options.friends === 'apart' ? true : null }),
   ]);
   friendsSelect.addEventListener('change', () => { options.friends = friendsSelect.value; dirty = true; render(); });
+  // 보는 방향: 저장 데이터와 무관한 표시 설정이라 dirty 로 만들지 않고 브라우저에만 기억해요
+  const viewSelect = el('select', { class: 'select seat-view-select', title: '자리표 보는 방향', 'aria-label': '자리표 보는 방향' },
+    Object.entries(SEAT_VIEWS).map(([value, v]) => el('option', { value, text: v.label, selected: seatView === value ? true : null })));
+  viewSelect.addEventListener('change', () => { seatView = SEAT_VIEWS[viewSelect.value] ? viewSelect.value : 'student'; saveSeatView(seatView); render(); });
 
   const header = el('section', { class: 'card no-print' }, [
     el('div', { class: 'card-title' }, [
@@ -224,6 +246,7 @@ function render() {
         el('button', { type: 'button', class: 'btn', text: '다른 배치', onClick: () => autoAssign() }),
         el('button', { type: 'button', class: 'btn', text: '모두 비우기', onClick: () => { if (!confirm('고정한 자리를 포함해 모두 비울까요?')) return; seats = {}; pinned = new Set(); dirty = true; render(); } }),
         el('button', { type: 'button', class: `btn ${dirty ? 'orange' : ''}`, text: dirty ? '저장하기 *' : '저장됨', onClick: save }),
+        viewSelect,
         el('button', { type: 'button', class: 'btn', text: '인쇄', onClick: () => window.print() }),
       ]),
     ]),
@@ -239,6 +262,7 @@ function render() {
       friendsSelect,
     ]),
     el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요, 📝 메모 있음.' }),
+    el('p', { class: 'muted seat-view-hint', style: { marginTop: '4px', marginBottom: 0 }, text: '자리표는 "인쇄" 옆에서 보는 방향을 고를 수 있어요. 교사 시점은 교탁에서 학생들을 바라본 모습이라 위아래와 좌우가 모두 뒤집혀요. 방향은 화면과 인쇄에만 적용되고 배정 자체는 바뀌지 않아요.' }),
     staleNotice ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, [
       el('span', { style: { flex: 1 }, text: '자리를 저장한 뒤에 학생 응답이 새로 들어왔어요. 아래 경고 목록은 최신 응답 기준이에요. 고정한 자리는 그대로 두고 다시 배정할 수 있어요.' }),
       el('button', { type: 'button', class: 'btn small primary', text: '최신 응답으로 다시 배정', onClick: () => autoAssign('최신 응답을 반영해 다시 배정했어요. 확인 후 저장해 주세요.') }),
@@ -246,16 +270,25 @@ function render() {
     ]) : null,
   ]);
 
-  // 좌석표
-  const blocksEl = el('div', { class: 'seat-blocks' }, layout.blocks.map((b, bi) => {
+  // 좌석표 — 보는 방향에 따라 DOM 에 넣는 순서만 바꿔요 (CSS 로 뒤집으면 글자까지 거울상이 되니까)
+  const view = SEAT_VIEWS[seatView] || SEAT_VIEWS.student;
+  const order = (n, reversed) => { const idx = Array.from({ length: n }, (_, i) => i); return reversed ? idx.reverse() : idx; };
+  const blocksEl = el('div', { class: 'seat-blocks' }, order(layout.blocks.length, view.flipCols).map((bi) => {
+    const b = layout.blocks[bi];
     const grid = el('div', { class: 'seat-block', style: { gridTemplateColumns: `repeat(${b.cols}, 1fr)` } });
-    for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) grid.append(seatCard(`b${bi}-r${r}-c${c}`, ev));
+    for (const r of order(b.rows, view.flipRows)) for (const c of order(b.cols, view.flipCols)) grid.append(seatCard(`b${bi}-r${r}-c${c}`, ev));
     return grid;
   }));
-  const chart = el('section', { class: 'card seat-chart' }, [
-    el('div', { class: 'print-only', style: { fontWeight: 700, fontSize: '18px', marginBottom: '8px' }, text: `${data.room.name} 자리표` }),
-    el('div', { class: 'podium', text: '교탁' }),
+  // 교탁: 학생 시점은 위, 줄을 뒤집은 시점(교사 시점·위아래만 뒤집기)은 아래
+  const podium = el('div', { class: `podium${view.flipRows ? ' below' : ''}`, text: '교탁' });
+  const chart = el('section', { class: 'card seat-chart', dataset: { view: seatView } }, [
+    el('div', { class: 'print-only', style: { fontWeight: 700, fontSize: '18px', marginBottom: '8px' } }, [
+      `${data.room.name} 자리표`,
+      view.printLabel ? el('span', { class: 'print-view-label', text: ` · ${view.printLabel}` }) : null,
+    ]),
+    view.flipRows ? null : podium,
     blocksEl,
+    view.flipRows ? podium : null,
   ]);
 
   // 요약 & 주의
@@ -304,7 +337,7 @@ function seatCard(seatId, ev) {
   const sid = seats[seatId];
   const n = sid ? notes[sid] : null;
   const cls = ['seat', sid ? '' : 'empty', selected === seatId ? 'selected' : '', ev.conflictSeats.has(seatId) ? 'conflict' : '', pinned.has(seatId) ? 'pinned' : ''].filter(Boolean).join(' ');
-  return el('button', { type: 'button', class: cls, title: n?.memo ? `${nameOf(sid)}: ${n.memo}` : null, onClick: () => onSeatClick(seatId) }, [
+  return el('button', { type: 'button', class: cls, dataset: { seat: seatId }, title: n?.memo ? `${nameOf(sid)}: ${n.memo}` : null, onClick: () => onSeatClick(seatId) }, [
     el('span', { class: 'seat-name', text: sid ? nameOf(sid) : '빈 자리' }),
     n && (n.front || n.memo) ? el('span', { class: 'seat-marks', text: `${n.front ? '👓' : ''}${n.memo ? '📝' : ''}` }) : null,
     sid ? el('span', { class: 'pin no-print', text: pinned.has(seatId) ? '📌' : '📍', title: pinned.has(seatId) ? '고정 해제' : '이 자리 고정', onClick: (e) => { e.stopPropagation(); pinned.has(seatId) ? pinned.delete(seatId) : pinned.add(seatId); dirty = true; render(); } }) : null,

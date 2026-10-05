@@ -1,7 +1,7 @@
 // 문서 파일 읽기(hwp · hwpx · docx · txt)와 역할 목록·지난달 현황 추출 테스트
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractDocument, documentToText, extractRoles, parseRoleNameCell, readZip, readCfb, decodeHwpText, parseXmlBlocks } from '../server/docfiles.js';
+import { extractDocument, documentToText, extractRoles, extractRoster, parseRoleNameCell, readZip, readCfb, decodeHwpText, parseXmlBlocks } from '../server/docfiles.js';
 import { DEFAULT_ROLES, parseHistoryText } from '../server/roles.js';
 import { makeZip, makeHwpx, makeDocx, makeHwp, hwpSectionRecords } from './helpers/docgen.js';
 
@@ -195,5 +195,95 @@ describe('지난달 현황 · 역할 목록 추출', () => {
     const r3 = extractRoles(extractDocument(makeHwpx([{ type: 'table', rows: [['역할', '설명'], ['칠판', '칠판을 지워요. 깨끗하게 매일 지워요 정말로'], ['화분', '물을 줘요. 아침마다 꼭 잊지 않고 줘요']] }]), 'x'));
     assert.deepEqual(r3.roles.map((x) => x.slots), [1, 1]);
     assert.match(r3.warnings[0], /인원을 찾지 못해/);
+  });
+});
+
+describe('학생 명단 추출', () => {
+  const ROSTER_TABLE = [
+    { type: 'p', text: '3학년 2반 명단' },
+    { type: 'table', rows: [
+      ['번호', '이름', '성별', '비고'],
+      ['1', '김하늘', '남', ''],
+      ['2', '이도윤', '남', '전학'],
+      ['3', '박서연', '여', ''],
+      ['4', '남궁민수', '남', ''],
+      ['5', '김민준A', '남', ''],
+      ['합계', '5명', '', ''],
+    ] },
+  ];
+  const roster = (buf, name = 'x') => extractRoster(extractDocument(buf, name));
+  const text = (s) => roster(Buffer.from(s, 'utf8'), 'names.txt');
+
+  test('번호·이름 열이 있는 표 (hwpx · hwp · docx): 머리글과 합계 줄은 건너뛰고 번호순으로', () => {
+    for (const [make, name] of [[makeHwpx, 'a.hwpx'], [makeHwp, 'a.hwp'], [makeDocx, 'a.docx']]) {
+      const r = roster(make(ROSTER_TABLE), name);
+      assert.equal(r.source, 'table', name);
+      assert.deepEqual(r.names, ['김하늘', '이도윤', '박서연', '남궁민수', '김민준A'], name);
+      assert.deepEqual(r.warnings, [], name);
+    }
+  });
+
+  test('두 블록(1~3 | 4~6)으로 나뉜 표는 번호순으로, 번호가 없으면 열 단위로 읽는다', () => {
+    const numbered = roster(makeHwpx([{ type: 'table', rows: [['번호', '이름', '번호', '이름'], ['1', '김하늘', '4', '최지우'], ['2', '이도윤', '5', '한지민'], ['3', '박서연', '6', '오세훈']] }]));
+    assert.deepEqual(numbered.names, ['김하늘', '이도윤', '박서연', '최지우', '한지민', '오세훈']);
+    const noHeader = roster(makeDocx([{ type: 'table', rows: [['1', '김하늘', '4', '최지우'], ['2', '이도윤', '5', '한지민'], ['3', '박서연', '6', '오세훈']] }]));
+    assert.deepEqual(noHeader.names, ['김하늘', '이도윤', '박서연', '최지우', '한지민', '오세훈']);
+    const plain = roster(makeHwpx([{ type: 'table', rows: [['이름', '이름'], ['김하늘', '최지우'], ['이도윤', '한지민'], ['박서연', '오세훈']] }]));
+    assert.deepEqual(plain.names, ['김하늘', '이도윤', '박서연', '최지우', '한지민', '오세훈']);
+    // 남/여 블록처럼 번호가 겹치면 번호로 섞지 않고 적힌 순서 그대로
+    const boysGirls = roster(makeHwpx([{ type: 'table', rows: [['번호', '남학생', '번호', '여학생'], ['1', '김하늘', '1', '박서연'], ['2', '이도윤', '2', '최지우']] }]));
+    assert.deepEqual(boysGirls.names, ['김하늘', '이도윤', '박서연', '최지우']);
+  });
+
+  test('칸 안에 번호가 함께 있는 표("3 김하늘", "김하늘(3)")와 한 칸에 적힌 목록, 띄어 쓴 이름', () => {
+    assert.deepEqual(roster(makeHwpx([{ type: 'table', rows: [['3 김하늘', '1 이도윤'], ['2 박서연', '4 최지우']] }])).names, ['이도윤', '박서연', '김하늘', '최지우']);
+    assert.deepEqual(roster(makeHwp([{ type: 'table', rows: [['김하늘(3)', '이도윤(1)'], ['박서연(2)', '최지우(4)']] }]), 'a.hwp').names, ['이도윤', '박서연', '김하늘', '최지우']);
+    assert.deepEqual(roster(makeHwpx([{ type: 'table', rows: [[['1. 김하늘', '2. 이도윤', '3. 박서연']]] }])).names, ['김하늘', '이도윤', '박서연']);
+    assert.deepEqual(roster(makeHwpx([{ type: 'table', rows: [['번호', '이 름'], ['1', '김 하 늘'], ['2', '이 도윤'], ['3', '남궁 민수']] }])).names, ['김하늘', '이도윤', '남궁민수']);
+    // 제목 줄 + 머리글 줄, 비고 열의 낱말은 이름이 아님
+    const titled = roster(makeDocx([{ type: 'table', rows: [['3학년 2반 명단'], ['번호', '이름', '비고'], ['1', '김하늘', '전학'], ['2', '이도윤', ''], ['3', '박서연', '전학']] }]));
+    assert.equal(titled.source, 'table');
+    assert.deepEqual(titled.names, ['김하늘', '이도윤', '박서연']);
+  });
+
+  test('표가 없으면 줄 단위: 번호 목록, 쉼표 목록, 한 줄에 여러 명, 문장 줄과 머리말은 무시', () => {
+    const r = text('우리 반 명단\n1. 김하늘\n2. 이도윤\n3) 박서연\n4 최지우\n');
+    assert.equal(r.source, 'lines');
+    assert.deepEqual(r.names, ['김하늘', '이도윤', '박서연', '최지우']);
+    assert.deepEqual(r.warnings, []);
+    assert.deepEqual(text('김하늘, 이도윤, 박서연 / 최지우 · 한지민').names, ['김하늘', '이도윤', '박서연', '최지우', '한지민']);
+    assert.deepEqual(text('김하늘 이도윤 박서연 최지우').names, ['김하늘', '이도윤', '박서연', '최지우']);
+    assert.deepEqual(text('1 김하늘    3 박서연\n2 이도윤    4 최지우').names, ['김하늘', '이도윤', '박서연', '최지우'], '두 단으로 적은 글은 번호순');
+    assert.deepEqual(text('① 김하늘\n② 이도윤\n③ 박서연').names, ['김하늘', '이도윤', '박서연']);
+    assert.deepEqual(text('1,김하늘,남\n2,이도윤,여').names, ['김하늘', '이도윤']);
+    const sentence = '우리 반 학생들은 서로 사이좋게 지내며 친구를 도와주는 마음이 깊고 늘 밝게 인사하는 어린이들이에요. 선생님도 그런 학생들이 자랑스러워요.';
+    assert.ok(sentence.length > 60);
+    assert.deepEqual(text(`${sentence}\n김하늘\n이도윤`).names, ['김하늘', '이도윤']);
+    assert.deepEqual(text('이름\n번호\n성별\n담임 홍길동\n김하늘\n이도윤 선생님\n박서연\n합계').names, ['김하늘', '박서연'], '머리말과 선생님 이름은 빼요');
+    assert.deepEqual(text('하늘은 맑고\n학생들이 뛰어요').names, [], '성씨로 시작해도 문장 속 낱말은 넣지 않아요');
+  });
+
+  test('같은 이름은 한 번만 넣고 알려 주며, 번호까지 같으면 조용히 합친다', () => {
+    const dup = text('김하늘\n이도윤\n김하늘');
+    assert.deepEqual(dup.names, ['김하늘', '이도윤']);
+    assert.match(dup.warnings[0], /같은 이름이 여러 번 있어 한 번만 넣었어요: 김하늘/);
+    assert.deepEqual(text('1. 김하늘\n2. 이도윤\n1. 김하늘').warnings, []);
+    assert.match(text('1. 김하늘\n2. 이도윤\n3. 김하늘').warnings[0], /같은 이름/);
+    const twice = roster(makeHwpx([ROSTER_TABLE[1], ROSTER_TABLE[1]]));
+    assert.deepEqual(twice.names, ['김하늘', '이도윤', '박서연', '남궁민수', '김민준A'], '같은 표가 두 번 있어도 한 번만');
+    assert.deepEqual(twice.warnings, []);
+  });
+
+  test('이름이 하나도 없으면 안내, 성씨가 아닌 낱말이 많으면 확인 안내, 80명을 넘으면 앞의 80명만', () => {
+    const none = text('안녕하세요\n반갑습니다');
+    assert.deepEqual(none, { names: [], source: null, warnings: ['명단을 찾지 못했어요. 번호와 이름이 있는 표나, 한 줄에 한 명씩 적힌 파일을 올려 주세요.'] });
+    assert.equal(roster(makeHwpx([{ type: 'table', rows: [['', ''], ['', '']] }])).source, null);
+    const odd = text('1. 바나나\n2. 포도알\n3. 딸기');
+    assert.deepEqual(odd.names, ['바나나', '포도알', '딸기']);
+    assert.deepEqual(odd.warnings, ['이름이 아닌 낱말이 섞였을 수 있어요. 목록을 확인해 주세요.']);
+    const many = roster(makeHwpx([{ type: 'table', rows: [['번호', '이름'], ...Array.from({ length: 85 }, (_, i) => [String(i + 1), `김하${String.fromCharCode(0xac00 + i)}`])] }]));
+    assert.equal(many.names.length, 80);
+    assert.equal(many.names[0], '김하가');
+    assert.match(many.warnings[0], /80명만 넣었어요.*85명/);
   });
 });

@@ -14,7 +14,8 @@ import { assignRoles, repairAssignment } from './assign.js';
 import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles } from './ai.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
-import { extractDocument, documentToText, extractRoles, DOC_LIMITS } from './docfiles.js';
+import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
+import { buildRolesHwpx, buildRolesDocx } from './export-docs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -303,6 +304,17 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/api/maintenance/purge', purgeHandler);
   app.post('/api/maintenance/purge', purgeHandler);
 
+  // ---------- 파일 올리기 공통 ----------
+  const rawFile = express.raw({ type: () => true, limit: DOC_LIMITS.file });
+  const uploadedName = (req) => { try { return decodeURIComponent(req.get('x-file-name') || ''); } catch { return ''; } };
+
+  // 학생 명단 파일(한글·워드·텍스트) → 이름 목록 (저장하지 않음; 교실 만들기 화면과 선생님 페이지에서 사용)
+  app.post('/api/roster/parse', rawFile, async (req, res) => {
+    const doc = extractDocument(req.body, uploadedName(req));
+    const result = extractRoster(doc);
+    res.json({ format: doc.format, ...result });
+  });
+
   // ---------- room creation ----------
   app.post('/api/rooms', async (req, res) => {
     const name = cleanName(req.body?.name);
@@ -482,6 +494,23 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       for (const n of names) room.students.push(makeStudent(n));
     });
     res.status(201).json(teacherView(req, room));
+  });
+
+  // 여러 명 한 번에 추가 (명단 파일에서 읽은 이름 등). 이미 있는 이름은 건너뜁니다.
+  app.post('/api/teacher/:adminToken/students/bulk', async (req, res) => {
+    const found = await requireRoom(req);
+    const names = parseStudentNames(req.body?.names ?? req.body?.students);
+    if (names.length === 0) throw bad('학생 이름을 입력해 주세요.');
+    let added = [];
+    let skipped = [];
+    const room = await mutateRoom(found, (room) => {
+      const have = new Set(room.students.map((s) => s.name));
+      added = names.filter((n) => !have.has(n));
+      skipped = names.filter((n) => have.has(n));
+      if (room.students.length + added.length > LIMITS.students) throw bad(`학생은 최대 ${LIMITS.students}명까지 등록할 수 있어요. (지금 ${room.students.length}명 + ${added.length}명)`);
+      for (const n of added) room.students.push(makeStudent(n));
+    });
+    res.status(added.length ? 201 : 200).json({ ...teacherView(req, room), added, skipped });
   });
 
   app.patch('/api/teacher/:adminToken/students/:studentId', async (req, res) => {
@@ -768,8 +797,6 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   });
 
   // 파일 업로드(한글·워드·텍스트) → 본문을 읽어 지난달 현황 미리보기 (저장하지 않음)
-  const rawFile = express.raw({ type: () => true, limit: DOC_LIMITS.file });
-  const uploadedName = (req) => { try { return decodeURIComponent(req.get('x-file-name') || ''); } catch { return ''; } };
   app.post('/api/teacher/:adminToken/roles/history/upload', rawFile, async (req, res) => {
     const room = await requireRoom(req);
     const roles = roomRoles(room);
@@ -788,6 +815,24 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const tables = doc.blocks.filter((b) => b.type === 'table').length;
     res.json({ format: doc.format, tables, ...extractRoles(doc, { knownNames }) });
   });
+
+  // 배정표 내보내기: 한글(hwpx) · 워드(docx). 공개 여부와 상관없이 지금 저장된 배정으로 만듭니다.
+  const exportRoles = (kind) => async (req, res) => {
+    const room = await requireRoom(req);
+    const round = req.query.round ? requireRound(room, String(req.query.round)) : currentRound(room);
+    const assignment = round.roleAssignment;
+    if (!assignment?.assignments) throw bad('아직 배정이 없어요. 먼저 자동 배정이나 직접 배정을 한 뒤 저장해 주세요.');
+    const input = { room, round, roles: roomRoles(room), students: room.students, assignment, reasons: req.query.reasons === '1' };
+    const file = kind === 'hwpx' ? buildRolesHwpx(input) : buildRolesDocx(input);
+    const base = `1인1역_${round.name}`.replace(/[\\/:*?"<>|]+/g, ' ').trim();
+    const ascii = `roles_${round.name.replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '') || 'export'}`;
+    res.setHeader('Content-Type', kind === 'hwpx' ? 'application/hwp+zip' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    // 한글 이름은 filename* 로, 옛 브라우저용으로 영문 이름을 함께 보냅니다.
+    res.setHeader('Content-Disposition', `attachment; filename="${ascii}.${kind}"; filename*=UTF-8''${encodeURIComponent(base)}.${kind}`);
+    res.send(file);
+  };
+  app.get('/api/teacher/:adminToken/roles/export.hwpx', exportRoles('hwpx'));
+  app.get('/api/teacher/:adminToken/roles/export.docx', exportRoles('docx'));
 
   // 지난달(또는 어떤 달) 배정 기록 저장/수정
   app.put('/api/teacher/:adminToken/roles/history', async (req, res) => {

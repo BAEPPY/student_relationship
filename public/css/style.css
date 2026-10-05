@@ -321,6 +321,14 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .rule-item:last-child { border-bottom: 0; }
 #notes-card input[type="text"] { padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; }
 
+/* 자리표 보는 방향: 줄을 뒤집은 시점(교사 시점·위아래만 뒤집기)은 교탁을 분단 아래에 그려요. 뒤집기는 JS 가 DOM 순서로 처리해서 글자는 그대로예요 */
+.podium.below { margin: 18px auto 0; }
+/* 뒤집은 시점에서는 블록 높이가 달라도 앞줄(r0)이 교탁 쪽에 나란히 오도록 좌석을 칸 아래쪽에 붙여요 (학생 시점은 칸 위쪽) */
+.seat-chart[data-view="teacher"] .seat-block > .seat, .seat-chart[data-view="flipV"] .seat-block > .seat { align-self: end; }
+.seat-view-select { max-width: 100%; }
+.print-view-label { font-weight: 500; color: var(--gray-700); }
+@media print { .seat-chart { break-inside: avoid; page-break-inside: avoid; } }
+
 /* 붙여넣기 자동 분류 */
 .paste-panel { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; }
 .paste-panel textarea { font-family: inherit; resize: vertical; background: #fff; }

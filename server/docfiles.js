@@ -608,3 +608,234 @@ export function extractRoles(doc, { knownNames = [] } = {}) {
 }
 
 export const DOC_LIMITS = LIMITS;
+
+// ---------- 활용: 학생 명단 ----------
+// 번호·이름이 있는 표나 한 줄에 한 명씩 적힌 글에서 학생 이름을 뽑습니다. 성씨 목록은 "이름처럼 보이는지"를 가늠하는 보조 신호일 뿐이라,
+// 번호가 붙은 낱말은 성씨와 상관없이 이름으로 봅니다. 결과는 화면에서 선생님이 확인한 뒤 쓰도록 되어 있어요.
+
+const ROSTER_MAX = 80;
+// 흔한 성씨 (한 글자 약 150개 + 두 글자)
+const SURNAMES = new Set('김이박최정강조윤장임한오서신권황안송류전홍고문양손배백허유남심노하곽성차주우구나민진지엄채원천방공현함변염여추도소석선설마길연위표명기반라왕금옥육인맹제모탁국어은편용예봉경사부가복목태형피두감호음빈동온시범좌팽승간상갈단견당화창옹순종풍대엽궁평초돈운내점묵영만뇌판야매뢰빙묘섭난애삼비후해림로'.split(''));
+const TWO_SURNAMES = new Set(['남궁', '황보', '선우', '제갈', '독고', '사공', '서문', '동방']);
+// 머리말·구분 낱말: 이름 모양이어도 학생 이름으로 보지 않습니다.
+const ROSTER_STOP = new Set([
+  '이름', '성명', '번호', '학생', '남', '여', '성별', '비고', '학년', '반', '명단', '학급', '합계', '담임', '선생님', '출석', '결석', '연락처', '전화', '주소', '생년월일', '계', '총',
+  '남자', '여자', '남학생', '여학생', '학생명', '학생이름', '순번', '연번', '학번', '구분', '인원', '총원', '재적', '모둠', '날짜', '확인', '서명', '교사', '교장', '교감', '학교',
+  '전학', '전입', '전출', '한글', '한자', '영문', '역할', '담당', '반장', '부반장', '회장', '부회장', '전체', '오늘', '우리', '명부', '출석부', '소속', '직책', '학년도', '생일',
+  '전화번호', '휴대폰', '보호자', '학부모', '비고란', '특이사항', '점수', '평균', '합격', '교시', '수업', '시간', '과목',
+]);
+// 이 낱말 바로 앞뒤의 이름은 선생님 이름이므로 뺍니다.
+const TEACHER_MARK = new Set(['담임', '부담임', '선생님', '교사', '교장', '교감']);
+const NAME_SHAPE = /^[가-힣]{2,4}[A-Za-z]?$/;          // 한글 2~4자 + 구분용 영문 한 글자(김민준A)
+const ROSTER_WORD = /\d+|[가-힣]+[A-Za-z]?|[A-Za-z]+|[^\s\d가-힣A-Za-z]/g;
+const NUM_MARK = /^[.)）\]:：\-~,，、/·•‧∙ㆍ;；|]$/;   // "1." "1)" "1," 처럼 번호 뒤에 오는 표시·구분자 (번호를 유지)
+const ROSTER_NAME_HEADER = /이름|성명|^학생$|^name$/i;
+const ROSTER_OTHER_HEADER = /비고|성별|연락|전화|주소|생년|생일|특이|사항|메모|모둠|역할|담당|학년|학급|날짜|확인|서명|점수|평균|출석|결석|보호자|학부모/;
+const ROSTER_HEADER_WORD = /이름|성명|번호|성별|비고|학번|순번|연번|구분|학생|명단|명부|학년|학급|출석|연락|전화|주소|생년|^no\.?$|name/i;
+const ROSTER_NUMBER_HEADER = /번호|^번$|^no\.?$|순번|연번|학번|순서/i;
+const LINE_SEP = /[,，、/·•‧∙ㆍ;；|\t]+|\s{2,}/;
+
+/** 성씨 길이(0: 성씨가 아님, 1: 한 글자 성씨, 2: 두 글자 성씨) */
+const surnameOf = (syl) => (TWO_SURNAMES.has(syl.slice(0, 2)) ? 2 : SURNAMES.has(syl[0]) ? 1 : 0);
+
+/** 동그라미 숫자(①)·전각 숫자·특수 공백을 보통 글자로 바꿉니다. */
+function normalizeRosterText(text) {
+  return String(text ?? '')
+    .replace(/[①-⒛]/g, (c) => ` ${((c.charCodeAt(0) - 0x2460) % 20) + 1} `)
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 48))
+    .replace(/[ 　]/g, ' ');
+}
+
+/** "김 하 늘", "김 하늘", "3 김 하 늘" 처럼 띄어 쓴 이름을 붙입니다. (칸·줄 전체가 그런 꼴일 때만) */
+function collapseSpacedName(text) {
+  const m = /^\s*(?:(\d{1,3})\s*[.)번]?\s*)?((?:[가-힣]+\s+)+[가-힣]+)([A-Za-z]?)\s*$/.exec(text);
+  if (!m) return text;
+  const parts = m[2].split(/\s+/);
+  const joined = parts.join('');
+  if (joined.length < 2 || joined.length > 4) return text;
+  const ok = parts.every((p) => p.length === 1) || (parts.length === 2 && (SURNAMES.has(parts[0]) || TWO_SURNAMES.has(parts[0])));
+  if (!ok) return text;
+  return `${m[1] ? `${m[1]} ` : ''}${joined}${m[3]}`;
+}
+
+/**
+ * 글에서 (번호, 이름) 후보를 차례로 뽑습니다. "3 김하늘", "3. 김하늘", "3번 김하늘", "김하늘(3)", "김하늘" 을 알아봅니다.
+ * 이름 모양(한글 2~4자)이면서 머리말이 아닌 낱말만 후보가 되고, 성씨로 시작하는지는 surname / strict 로 알려 줍니다.
+ */
+function scanEntries(text) {
+  const words = normalizeRosterText(text).match(ROSTER_WORD) || [];
+  const out = [];
+  let pending = null;    // 바로 앞에 나온 번호
+  let skipNext = false;  // "담임" 뒤의 이름은 학생이 아님
+  let lastEntryAt = -1;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (/^\d+$/.test(w)) { pending = w.length <= 3 ? Number(w) : null; continue; }
+    if (NUM_MARK.test(w)) continue;
+    if (!/^[가-힣]+[A-Za-z]?$/.test(w)) { pending = null; continue; }   // 영문·그 밖의 기호
+    const syl = w.replace(/[A-Za-z]$/, '');
+    if (syl === '번') continue;
+    if (TEACHER_MARK.has(syl)) {
+      skipNext = true;
+      pending = null;
+      if (lastEntryAt >= 0 && lastEntryAt === i - 1 && out[out.length - 1].num === null) out.pop();
+      continue;
+    }
+    if (!NAME_SHAPE.test(w) || ROSTER_STOP.has(syl)) { pending = null; continue; }
+    let num = pending;
+    pending = null;
+    // 이름 뒤에 "(3)" / "(3번)"
+    if (num === null && /^[(（]$/.test(words[i + 1] || '') && /^\d{1,3}$/.test(words[i + 2] || '')) {
+      let j = i + 3;
+      if (words[j] === '번') j++;
+      if (/^[)）]$/.test(words[j] || '')) { num = Number(words[i + 2]); i = j; }
+    }
+    if (skipNext) { skipNext = false; continue; }
+    const s = surnameOf(syl);
+    out.push({ num, name: w, surname: s > 0, strict: s === 2 || (s === 1 && syl.length <= 3) });
+    lastEntryAt = i;
+  }
+  return out;
+}
+
+/** 표 한 칸의 이름들. 번호가 붙은 이름이 있으면 그것만, 없으면 첫 이름만 씁니다. 왼쪽 번호 열(rowNum)이 있으면 그 번호를 우선합니다. */
+function cellEntries(text, rowNum) {
+  const entries = scanEntries(collapseSpacedName(normalizeRosterText(text)));
+  if (!entries.length) return [];
+  const numbered = entries.filter((e) => e.num !== null);
+  const kept = numbered.length ? numbered : [entries[0]];
+  if (rowNum !== null && kept.length === 1) kept[0].num = rowNum;
+  return kept;
+}
+
+function looksLikeHeaderRow(cells) {
+  const texts = cells.map((c) => c.trim()).filter(Boolean);
+  if (!texts.length) return true;
+  const headerWord = texts.some((t) => ROSTER_HEADER_WORD.test(t.replace(/\s+/g, '')));
+  const hasName = texts.some((t) => cellEntries(t, null).some((e) => e.num !== null || e.strict));
+  return headerWord && !hasName;
+}
+
+/** 표에서 이름 열을 찾아 (번호, 이름)을 열 단위로 모읍니다. 이름 열이 없으면 빈 배열. */
+function rosterFromTable(table) {
+  const rows = table.rows.map((r) => (Array.isArray(r) ? r : []).map((c) => cellText(c)));
+  const cols = Math.max(0, ...rows.map((r) => r.length));
+  if (!cols) return [];
+  let start = 0;
+  while (start < rows.length && start < 3 && looksLikeHeaderRow(rows[start])) start++;
+  const headerRow = start > 0 ? rows[start - 1] : [];
+  const headers = headerRow.filter((c) => c.trim()).length >= 2 ? headerRow.map((h) => h.replace(/\s+/g, '')) : [];
+  const data = rows.slice(start).filter((r) => r.some((c) => c.trim()));
+  if (!data.length) return [];
+  const numVal = (s) => { const m = /^\s*(\d{1,3})\s*번?\s*$/.exec(normalizeRosterText(s)); return m ? Number(m[1]) : null; };
+
+  // 번호 열: 대부분 1~3자리 숫자이고 값이 거의 겹치지 않음 (머리글이 있으면 번호 계열이어야 함)
+  const numberCols = new Set();
+  for (let c = 0; c < cols; c++) {
+    const h = headers[c] || '';
+    if (h && !ROSTER_NUMBER_HEADER.test(h)) continue;
+    const vals = data.map((r) => numVal(r[c] ?? '')).filter((v) => v !== null);
+    const nonEmpty = data.filter((r) => (r[c] ?? '').trim()).length;
+    if (vals.length >= 2 && vals.length >= nonEmpty * 0.6 && new Set(vals).size >= vals.length * 0.8) numberCols.add(c);
+  }
+  // 머리글에 "이름/성명" 이 있으면 그 열만, 없으면 내용으로 판단
+  const headerNameCols = headers.map((h, i) => (h && ROSTER_NAME_HEADER.test(h) ? i : -1)).filter((i) => i >= 0);
+  const out = [];
+  for (let c = 0; c < cols; c++) {
+    const h = headers[c] || '';
+    if (numberCols.has(c)) continue;
+    if (headerNameCols.length ? !headerNameCols.includes(c) : (h && ROSTER_OTHER_HEADER.test(h) && !ROSTER_NAME_HEADER.test(h))) continue;
+    const leftNum = c > 0 && numberCols.has(c - 1);
+    let nonEmpty = 0;
+    let nameLike = 0;
+    const entries = [];
+    for (const r of data) {
+      const text = r[c] ?? '';
+      if (!text.trim()) continue;
+      nonEmpty++;
+      const found = cellEntries(text, leftNum ? numVal(r[c - 1] ?? '') : null);
+      if (!found.length) continue;
+      if (found.some((e) => e.num !== null || e.surname)) nameLike++;
+      entries.push(...found);
+    }
+    if (nonEmpty && nameLike >= nonEmpty * 0.6 && entries.length >= 2) out.push(...entries);
+  }
+  return out;
+}
+
+const HANGUL_WORDS = /[가-힣]+[A-Za-z]?/g;
+
+/** 줄 단위 글에서 (번호, 이름)을 모읍니다. 번호가 붙은 이름은 항상, 번호 없는 이름은 성씨로 시작하고 그 토막(쉼표·빈칸으로 나눈 조각)이 목록 꼴일 때만 씁니다. */
+function rosterFromLines(lines) {
+  const out = [];
+  let carry = null;   // 번호만 있는 줄 → 다음 줄의 이름에 붙임
+  for (const raw of lines) {
+    const line = normalizeRosterText(raw).trim();
+    if (!line) continue;
+    const onlyNum = /^(\d{1,3})\s*[.)번]?$/.exec(line);
+    if (onlyNum) { carry = Number(onlyNum[1]); continue; }
+    if (line.length > 60 && !/\d/.test(line)) { carry = null; continue; }   // 숫자 없는 긴 줄은 문장
+    const chunks = line.split(LINE_SEP).map(collapseSpacedName).filter(Boolean);
+    const entries = scanEntries(chunks.join(' , '));   // 토막을 합쳐 읽어야 "1, 김하늘" 의 번호가 이어짐
+    if (carry !== null && entries.length && entries[0].num === null) entries[0].num = carry;
+    carry = null;
+    if (!entries.length) continue;
+    // 토막이 목록 꼴인지: 한글 낱말이 모두 이름(성씨로 시작하거나 번호가 붙은)·머리말·구분 낱말뿐이어야 함 ("하늘은 맑고" 같은 문장 조각을 거르기 위해)
+    const okNames = new Set(entries.filter((e) => e.num !== null || e.strict).map((e) => e.name));
+    const listWord = (w) => { const syl = w.replace(/[A-Za-z]$/, ''); return okNames.has(w) || ROSTER_STOP.has(syl) || TEACHER_MARK.has(syl) || syl === '번' || syl === '명'; };
+    const inList = new Set();
+    for (const chunk of chunks) {
+      const words = chunk.match(HANGUL_WORDS) || [];
+      if (words.every(listWord)) for (const w of words) inList.add(w);
+    }
+    for (const e of entries) if (e.num !== null || (e.strict && inList.has(e.name))) out.push(e);
+  }
+  return out;
+}
+
+function finishRoster(entries, source, warnings) {
+  // 같은 (번호, 이름)은 같은 학생이므로 조용히 하나로; 이름만 같으면 하나로 합치고 알려 줍니다 (동명이인이면 김민준A/B 처럼 구분해야 하므로)
+  const seenExact = new Set();
+  const seenName = new Set();
+  const dups = [];
+  const kept = [];
+  for (const e of entries) {
+    if (e.num !== null) {
+      const key = `${e.num}#${e.name}`;
+      if (seenExact.has(key)) continue;
+      seenExact.add(key);
+    }
+    if (seenName.has(e.name)) { if (!dups.includes(e.name)) dups.push(e.name); continue; }
+    seenName.add(e.name);
+    kept.push(e);
+  }
+  // 모두 번호가 있고 번호가 겹치지 않으면 번호순 (남/여 블록처럼 번호가 겹치면 적힌 순서 그대로)
+  if (kept.length && kept.every((e) => e.num !== null) && new Set(kept.map((e) => e.num)).size === kept.length) kept.sort((a, b) => a.num - b.num);
+  let names = kept.map((e) => e.name);
+  if (names.length > ROSTER_MAX) {
+    warnings.push(`학생은 최대 ${ROSTER_MAX}명까지 넣을 수 있어 앞의 ${ROSTER_MAX}명만 넣었어요. (파일에서 ${names.length}명을 찾았어요)`);
+    names = names.slice(0, ROSTER_MAX);
+  }
+  if (dups.length) warnings.push(`같은 이름이 여러 번 있어 한 번만 넣었어요: ${dups.join(', ')}`);
+  if (names.length && kept.filter((e) => e.surname).length < kept.length / 2) warnings.push('이름이 아닌 낱말이 섞였을 수 있어요. 목록을 확인해 주세요.');
+  return { names, source: names.length ? source : null, warnings };
+}
+
+/**
+ * 문서에서 학생 명단을 뽑습니다. 번호·이름 열이 있는 표를 우선 쓰고(표 여러 개면 모두, 문서 순서대로),
+ * 없으면 문단을 줄 단위로 읽습니다("1. 김하늘", "김하늘, 이도윤" …). 그래도 없으면 표 칸의 글을 줄로 읽습니다.
+ * @returns {{ names: string[], source: 'table'|'lines'|null, warnings: string[] }}
+ */
+export function extractRoster(doc) {
+  const warnings = [];
+  const blocks = Array.isArray(doc?.blocks) ? doc.blocks : [];
+  const tables = blocks.filter((b) => b.type === 'table' && Array.isArray(b.rows) && b.rows.length);
+  const tableEntries = tables.flatMap(rosterFromTable);
+  if (tableEntries.length) return finishRoster(tableEntries, 'table', warnings);
+  const paraLines = blocks.filter((b) => b.type === 'p').flatMap((b) => String(b.text ?? '').split(/\r?\n/));
+  let entries = rosterFromLines(paraLines);
+  if (!entries.length) entries = rosterFromLines(tables.flatMap((t) => t.rows.flatMap((r) => (Array.isArray(r) ? r : []).flatMap((c) => (Array.isArray(c) ? c : [String(c ?? '')])))));
+  if (entries.length) return finishRoster(entries, 'lines', warnings);
+  warnings.push('명단을 찾지 못했어요. 번호와 이름이 있는 표나, 한 줄에 한 명씩 적힌 파일을 올려 주세요.');
+  return { names: [], source: null, warnings };
+}
