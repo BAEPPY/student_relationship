@@ -281,7 +281,7 @@ export function makeHwpxDocument(doc, { now = new Date() } = {}) {
   return makeZip([
     { name: 'mimetype', data: 'application/hwp+zip', store: true },
     { name: 'version.xml', data: VERSION_XML, store: true },
-    { name: 'Contents/header.xml', data: HEADER_XML },
+    { name: 'Contents/header.xml', data: HWPX_HEADER },
     { name: 'Contents/section0.xml', data: hwpxSectionXml(doc) },
     { name: 'Preview/PrvText.txt', data: preview },
     { name: 'settings.xml', data: SETTINGS_XML },

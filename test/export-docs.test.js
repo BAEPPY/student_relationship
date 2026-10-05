@@ -68,6 +68,7 @@ describe('HWPX', () => {
     // 머리 부분은 한글이 저장한 실제 문서의 것을 그대로 씀
     for (const tag of ['hh:fontfaces itemCnt="7"', 'hh:borderFills itemCnt="3"', 'hh:charProperties itemCnt="20"', 'hh:paraProperties itemCnt="21"', 'hh:styles itemCnt="22"', 'hh:compatibleDocument', 'hh:trackchageConfig']) assert.ok(header.includes(tag), tag);
     assert.ok(header.includes('<hh:bold/>'), '굵은 글자 모양');
+    assert.ok(header.includes('face="한컴 윤고딕 240"') && header.includes('face="한컴 윤고딕 250"') && !header.includes('강원교육모두'), '패키지 안 머리 부분도 윤고딕으로 통일된 것');
     assert.ok(!/\b(user|lastsaveby)\b/.test(header.replace(/user="-?\d+"/g, '')), '머리 부분에 작성자 정보 없음');
     const section = zip.get('Contents/section0.xml')().toString();
     assert.ok(section.startsWith('<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec '));
