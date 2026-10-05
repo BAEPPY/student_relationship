@@ -4,20 +4,51 @@ import { RelationGraph } from './graph.js';
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
 const app = document.getElementById('app');
+// 대시보드 전용 글자 크기·간격(style.css 의 body.teacher 규칙). 껍데기(pages.js)에도 있지만 빠져도 동작하도록 한 번 더 붙여요.
+document.body.classList.add('teacher');
 
 let state = null;
 let graph = null;
-let ui = { filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null, roundId: null, showAllHistory: false, aiRunning: false, aiOpen: new Set() };
+let ui = {
+  filter: 'all', highlight: null, selectedEdge: null, showAllPairs: false, panelStudent: null, roundId: null, showAllHistory: false, aiRunning: false, aiOpen: new Set(),
+  // 아래는 화면 상태예요. 몇 초마다 다시 그려도(renderAll) 펼침/접힘이 그대로 남도록 여기에 둡니다.
+  openPairs: new Set(),   // 갈등 분석에서 '이유 보기'를 펼친 쌍 (`a|b`)
+  folds: new Set(),       // 펼쳐 둔 접이식 영역 이름 (history-trend, retention …)
+  openRows: new Set(),    // 학생 목록에서 관리 버튼을 펼친 학생
+  roundMenu: false,       // 회차 '⋯' 메뉴 열림
+  activeSection: 'summary-card',
+};
 let popoverEl = null;
 let pollTimer = null;
+let lastLoadedAt = null;
 
 const LEVEL_LABEL = { high: '높음', medium: '주의', low: '낮음' };
 const RISK_ORDER = { high: 0, medium: 1, low: 2 };
+// 구역 이동 줄(sticky nav)에 나오는 카드 순서
+const SECTIONS = [
+  ['summary-card', '요약'], ['graph-card', '관계도'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
+  ['history-card', '회차별 변화'], ['students-card', '학생 목록'], ['memo-card', '메모·규칙'],
+];
 const nameOf = (id) => state?.stats[id]?.name || '?';
 const rolesPageUrl = () => `/t/${encodeURIComponent(adminToken)}/roles?round=${encodeURIComponent(state.round.id)}`;
+const seatsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(state.round.id)}`;
+const printPageUrl = () => `/t/${encodeURIComponent(adminToken)}/print`;
 // 역할 목록에서 지워진 역할은 roles.js 와 같은 표기로 보여줍니다
 const roleNameOf = (roleId) => (state?.roles || []).find((r) => r.id === roleId)?.name || '(지워진 역할)';
 const scrollToGraph = () => document.getElementById('graph-container')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+/** 카드 id 로 부드럽게 이동합니다 (구역 이동 줄 높이만큼 scroll-margin 이 잡혀 있어요). */
+let jumpUntil = 0;
+function jumpTo(id) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  // 메뉴 강조는 먼저 바꾸고, 부드럽게 움직이는 동안은 스크롤 위치로 다시 고르지 않아요
+  // (움직이는 중에 이동 줄을 옆으로 밀면 크롬이 창 스크롤을 중간에 멈춰요)
+  setActiveNav(id);
+  jumpUntil = Date.now() + 1500;
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  try { history.replaceState(null, '', `#${id}`); } catch { /* 무시 */ }
+}
 
 // ---------- 데이터 ----------
 async function load({ silent = false } = {}) {
@@ -25,7 +56,8 @@ async function load({ silent = false } = {}) {
     state = await api(ui.roundId ? `${base}?round=${encodeURIComponent(ui.roundId)}` : base);
     ui.roundId = state.round.id;
     savedRooms.add({ name: state.room.name, adminToken, createdAt: state.room.createdAt });
-    document.getElementById('last-updated').textContent = `업데이트 ${fmtDate(new Date().toISOString())}`;
+    lastLoadedAt = new Date().toISOString();
+    document.getElementById('last-updated').textContent = `업데이트 ${fmtDate(lastLoadedAt)}`;
     renderAll();
   } catch (err) {
     if (!silent) {
@@ -37,6 +69,8 @@ async function load({ silent = false } = {}) {
 function applyUpdate(next) {
   state = next;
   ui.roundId = state.round.id;
+  lastLoadedAt = new Date().toISOString();
+  document.getElementById('last-updated').textContent = `업데이트 ${fmtDate(lastLoadedAt)}`;
   renderAll();
 }
 
@@ -109,6 +143,8 @@ async function importRosterFile(btn) {
 function renderAll() {
   if (!document.getElementById('graph-container')) buildSkeleton();
   renderHeader();
+  renderNav();
+  renderSummary();
   graph.setData({ students: state.students, relations: state.relations, stats: state.stats });
   graph.setFilter(ui.filter);
   graph.setHighlight(ui.highlight);
@@ -118,33 +154,57 @@ function renderAll() {
   renderAiPanel();
   renderHistory();
   renderStudents();
+  renderMemo();
+  renderDataCard();
+  measureNav();
+  updateActiveNav();
   document.title = `${state.room.name} · ${state.round.name} · 선생님 페이지`;
+}
+
+/** 카드 제목 줄: 제목 + 한 줄 설명(왼쪽), 상태 표시(오른쪽) */
+function cardTitle(title, desc, right = null) {
+  return el('div', { class: 'card-title' }, [
+    el('div', { class: 'card-heading' }, [el('h2', { text: title }), desc ? el('p', { class: 'card-desc', text: desc }) : null]),
+    right,
+  ]);
+}
+
+/** 접이식 영역. 펼침 상태는 ui.folds 에 남겨 다시 그려도 유지돼요. */
+function fold(key, title, hint, children) {
+  return el('details', {
+    class: 'fold', open: ui.folds.has(key) ? true : null,
+    onToggle: (e) => { if (e.target.open) ui.folds.add(key); else ui.folds.delete(key); },
+  }, [
+    el('summary', {}, [el('span', { class: 'fold-title', text: title }), hint ? el('span', { class: 'muted fold-hint', text: hint }) : null]),
+    el('div', { class: 'fold-body' }, children),
+  ]);
 }
 
 function buildSkeleton() {
   setChildren(app,
     el('section', { class: 'card', id: 'header-card' }),
-    el('section', { class: 'card' }, [
-      el('div', { class: 'card-title' }, [
-        el('h2', { text: '전체 관계도' }),
-        el('div', { class: 'legend' }, [
-          el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
-          el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
-          el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
-          el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
-        ]),
+    buildNav(),
+    el('section', { class: 'card', id: 'summary-card' }),
+    el('section', { class: 'card', id: 'graph-card' }, [
+      cardTitle('전체 관계도', '학생들이 표시한 좋은 사이(빨강)와 안 좋은 사이(검정)를 한 장에 모았어요. 연결이 많은 학생일수록 가운데에 있어요.'),
+      el('div', { class: 'legend' }, [
+        el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
+        el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
+        el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
+        el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
       ]),
       el('div', { class: 'graph-toolbar', id: 'graph-toolbar' }),
-      el('div', { class: 'grid-2', style: { gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)' } }, [
+      el('div', { class: 'grid-2 graph-grid' }, [
         el('div', { class: 'graph-wrap', id: 'graph-container' }),
         el('div', { class: 'side-panel', id: 'side-panel' }),
       ]),
-      el('p', { class: 'muted', style: { marginTop: '8px' }, text: '화살표를 누르면 이유를 볼 수 있어요. 학생을 누르면 그 학생의 관계만 강조돼요. 빈 곳을 끌면 이동, 마우스 휠로 확대/축소, 학생 상자는 끌어서 옮길 수 있어요. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
+      el('p', { class: 'muted graph-help', text: '화살표를 누르면 이유를 볼 수 있어요. 학생을 누르면 그 학생의 관계만 강조돼요. 빈 곳을 끌면 이동, 마우스 휠로 확대/축소, 학생 상자는 끌어서 옮길 수 있어요. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
     ]),
     el('section', { class: 'card', id: 'analysis-card' }),
     el('section', { class: 'card ai-panel', id: 'ai-card' }),
     el('section', { class: 'card', id: 'history-card' }),
     el('section', { class: 'card', id: 'students-card' }),
+    el('section', { class: 'card', id: 'memo-card' }),
     el('section', { class: 'card', id: 'danger-card' }),
   );
   const container = document.getElementById('graph-container');
@@ -156,7 +216,79 @@ function buildSkeleton() {
   renderToolbar();
   // 그래프 컨테이너가 화면에 보일 때 크기가 잡히므로 한 번 더 맞춤
   requestAnimationFrame(() => graph.fit());
-  window.addEventListener('resize', () => graph.fit());
+  window.addEventListener('resize', () => { graph.fit(); measureNav(); });
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('scrollend', () => { jumpUntil = 0; updateActiveNav(); });
+  // 회차 '⋯' 메뉴는 바깥을 누르면 닫혀요
+  document.addEventListener('click', (e) => {
+    const menu = document.getElementById('round-menu');
+    if (menu?.open && !menu.contains(e.target)) menu.open = false;
+  });
+  measureNav();
+  // 주소에 #카드 id 가 있으면 그 카드로 바로 이동
+  const hash = location.hash.slice(1);
+  if (SECTIONS.some(([id]) => id === hash)) requestAnimationFrame(() => jumpTo(hash));
+}
+
+// ---------- 구역 이동 줄 (sticky nav) ----------
+function buildNav() {
+  return el('nav', { class: 'section-nav', id: 'section-nav', 'aria-label': '페이지 안 이동' }, [
+    ...SECTIONS.map(([id, label]) => el('a', {
+      href: `#${id}`, class: `nav-link ${ui.activeSection === id ? 'active' : ''}`, dataset: { target: id }, text: label,
+      onClick: (e) => { e.preventDefault(); jumpTo(id); },
+    })),
+    el('span', { class: 'nav-sep', 'aria-hidden': 'true' }),
+    el('a', { class: 'btn small orange', id: 'nav-seats', href: '#', text: '자리 배정' }),
+    el('a', { class: 'btn small green', id: 'nav-roles', href: '#', text: '1인 1역' }),
+    el('a', { class: 'btn small', id: 'nav-print', href: '#', target: '_blank', text: 'QR 인쇄' }),
+  ]);
+}
+
+function renderNav() {
+  const set = (id, href) => { const a = document.getElementById(id); if (a) a.href = href; };
+  set('nav-seats', seatsPageUrl());
+  set('nav-roles', rolesPageUrl());
+  set('nav-print', printPageUrl());
+}
+
+/** 붙어 다니는 줄의 높이를 CSS 변수로 알려 줘요 (카드 scroll-margin, 학생 표 머리글 위치에 사용). */
+function measureNav() {
+  const nav = document.getElementById('section-nav');
+  if (nav) document.documentElement.style.setProperty('--nav-h', `${nav.offsetHeight + 8}px`);
+}
+
+let scrollRaf = 0;
+function onScroll() {
+  if (scrollRaf) return;
+  scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updateActiveNav(); });
+}
+
+/** 메뉴 항목을 강조하고, 좁은 화면에서는 그 항목이 보이도록 줄을 옆으로 밀어요 (바로 밀어요: 부드럽게 밀면 창 스크롤과 겹쳐요). */
+function setActiveNav(id) {
+  ui.activeSection = id;
+  const nav = document.getElementById('section-nav');
+  if (!nav) return;
+  let link = null;
+  for (const a of nav.querySelectorAll('.nav-link')) {
+    const on = a.dataset.target === id;
+    a.classList.toggle('active', on);
+    if (on) link = a;
+  }
+  if (link && nav.scrollWidth > nav.clientWidth) nav.scrollTo({ left: Math.max(0, link.offsetLeft - 24), behavior: 'auto' });
+}
+
+/** 스크롤 위치로 지금 보고 있는 카드를 골라 강조해요. */
+function updateActiveNav() {
+  const nav = document.getElementById('section-nav');
+  if (!nav || Date.now() < jumpUntil) return;
+  const line = nav.getBoundingClientRect().bottom + 24;
+  let active = SECTIONS[0][0];
+  for (const [id] of SECTIONS) {
+    const card = document.getElementById(id);
+    if (card && card.getBoundingClientRect().top <= line) active = id;
+  }
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) active = SECTIONS[SECTIONS.length - 1][0];
+  if (active !== ui.activeSection || !nav.querySelector('.nav-link.active')) setActiveNav(active);
 }
 
 function setHighlight(ids, panelStudent = null) {
@@ -165,18 +297,24 @@ function setHighlight(ids, panelStudent = null) {
   graph.setHighlight(ids);
   graph.setSelectedEdge(ui.selectedEdge);
   renderSidePanel();
+  markSelectedRow();
+}
+
+/** 학생 목록에서 지금 상세 패널에 열린 학생의 줄을 표시해요 (표를 다시 그리지 않고 class 만 바꿈). */
+function markSelectedRow() {
+  for (const tr of document.querySelectorAll('#students-card tbody tr[data-student]')) tr.classList.toggle('selected', tr.dataset.student === ui.panelStudent);
 }
 
 function renderToolbar() {
   const bar = document.getElementById('graph-toolbar');
   setChildren(bar,
-    ...[['all', '전체'], ['good', '좋은 사이만'], ['bad', '안 좋은 사이만']].map(([f, label]) => el('button', {
-      type: 'button', class: `btn small ${ui.filter === f ? 'primary' : ''}`, text: label,
+    el('div', { class: 'seg', role: 'group', 'aria-label': '보여 줄 화살표' }, [['all', '전체'], ['good', '좋은 사이만'], ['bad', '안 좋은 사이만']].map(([f, label]) => el('button', {
+      type: 'button', class: `btn small ${ui.filter === f ? 'primary' : ''}`, text: label, 'aria-pressed': ui.filter === f ? 'true' : 'false',
       onClick: () => { ui.filter = f; renderToolbar(); graph.setFilter(f); },
-    })),
-    el('span', { style: { flex: 1 } }),
-    el('button', { type: 'button', class: 'btn small', text: '－', title: '축소', onClick: () => graph.zoom(1.25) }),
-    el('button', { type: 'button', class: 'btn small', text: '＋', title: '확대', onClick: () => graph.zoom(0.8) }),
+    }))),
+    el('span', { class: 'spacer' }),
+    el('button', { type: 'button', class: 'btn small', text: '－', title: '축소', 'aria-label': '축소', onClick: () => graph.zoom(1.25) }),
+    el('button', { type: 'button', class: 'btn small', text: '＋', title: '확대', 'aria-label': '확대', onClick: () => graph.zoom(0.8) }),
     el('button', { type: 'button', class: 'btn small', text: '화면에 맞추기', onClick: () => graph.fit() }),
     el('button', { type: 'button', class: 'btn small', text: '배치 다시 계산', onClick: () => graph.resetLayout() }),
     el('button', { type: 'button', class: 'btn small', text: '강조 해제', onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight(null); } }),
@@ -193,29 +331,56 @@ function suggestRoundName() {
   return state.rounds.some((r) => r.name === base1) ? `${base0} (2)` : base1;
 }
 
+function closeRoundMenu() {
+  ui.roundMenu = false;
+  const menu = document.getElementById('round-menu');
+  if (menu) menu.open = false;
+}
+
 function renderHeader() {
-  const { room, analysis, students, round, rounds } = state;
+  const { room, students, round, rounds } = state;
   const card = document.getElementById('header-card');
-  const pct = students.length ? Math.round((analysis.submittedCount / students.length) * 100) : 0;
   const isCurrent = round.id === state.currentRoundId;
   const soon = new Set((state.retention?.expiring || []).map((x) => x.id));
   const hasRoles = (state.roles || []).length > 0;
   const appCount = students.filter((s) => (state.applications?.[s.id]?.choices || []).length > 0).length;
   const assignment = state.roleAssignment;
-  const roundSelect = el('select', { class: 'select' }, rounds.map((r) => el('option', {
+  const roundSelect = el('select', { class: 'select', 'aria-label': '보고 있는 회차' }, rounds.map((r) => el('option', {
     value: r.id, selected: r.id === round.id ? true : null,
     text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}${soon.has(r.id) ? ` · ⚠️ ${fmtDay(r.expiresAt)} 삭제 예정` : ''}`,
   })));
   roundSelect.addEventListener('change', () => { ui.roundId = roundSelect.value; closePopover(); ui.selectedEdge = null; ui.highlight = null; ui.panelStudent = null; load(); });
+
+  // 자주 쓰지 않는 회차 작업(마감 · 이름 바꾸기 · 삭제)은 '⋯' 메뉴에 모아 회차 선택이 잘 보이게 해요
+  const menuItem = (text, onClick, cls = '') => el('button', { type: 'button', class: `menu-item ${cls}`, text, onClick: () => { closeRoundMenu(); onClick(); } });
+  const roundMenu = el('details', { class: 'menu', id: 'round-menu', open: ui.roundMenu ? true : null, onToggle: (e) => { ui.roundMenu = e.target.open; } }, [
+    el('summary', { class: 'btn small menu-btn', title: '회차 관리: 마감 · 이름 바꾸기 · 회차 삭제' }, [el('span', { text: '회차 관리' }), el('span', { 'aria-hidden': 'true', text: '⋯' })]),
+    el('div', { class: 'menu-list' }, [
+      isCurrent ? menuItem(round.open ? '이 회차 마감' : '마감 해제', () => {
+        if (round.open && !confirm(`${round.name} 조사를 마감하면 학생들이 더 이상 수정할 수 없어요. 마감할까요?`)) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { closed: round.open } }), round.open ? '마감했어요.' : '마감을 해제했어요.');
+      }, round.open ? 'danger' : '') : null,
+      menuItem('이름 바꾸기', () => {
+        const name = prompt('회차 이름', round.name);
+        if (name === null || !name.trim() || name.trim() === round.name) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { name: name.trim() } }), '이름을 바꿨어요.');
+      }),
+      rounds.length > 1 ? menuItem('회차 삭제', () => {
+        if (!confirm(`${round.name} 회차와 그 응답을 모두 지울까요? 되돌릴 수 없어요.`)) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'DELETE' }), '회차를 지웠어요.');
+      }, 'danger') : null,
+    ]),
+  ]);
+
   setChildren(card,
-    el('div', { class: 'card-title' }, [
-      el('div', {}, [
+    el('div', { class: 'header-top' }, [
+      el('div', { class: 'header-title' }, [
         el('h1', { text: room.name }),
-        el('div', { class: 'muted', text: `만든 날짜 ${fmtDate(room.createdAt)} · 꼭 표시: 좋은 사이 ${room.minGood}명, 안 좋은 사이 ${room.minBad}명 · 회차 ${rounds.length}개` }),
+        el('p', { class: 'muted header-meta', text: `만든 날짜 ${fmtDate(room.createdAt)} · 꼭 표시: 좋은 사이 ${room.minGood}명, 안 좋은 사이 ${room.minBad}명 · 회차 ${rounds.length}개` }),
       ]),
-      el('div', { class: 'btn-row' }, [
-        el('a', { class: 'btn primary', href: `/t/${encodeURIComponent(adminToken)}/print`, target: '_blank', text: '학생 QR 카드 인쇄' }),
-        el('a', { class: 'btn orange', href: `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(round.id)}`, text: '자리 배정' }),
+      el('div', { class: 'btn-row header-actions' }, [
+        el('a', { class: 'btn primary', href: printPageUrl(), target: '_blank', text: '학생 QR 카드 인쇄' }),
+        el('a', { class: 'btn orange', href: seatsPageUrl(), text: '자리 배정' }),
         el('span', { class: 'role-link-wrap' }, [
           el('a', { class: 'btn green', id: 'roles-link', href: rolesPageUrl(), text: '1인 1역' }),
           hasRoles ? el('span', {
@@ -229,7 +394,7 @@ function renderHeader() {
       ]),
     ]),
     el('div', { class: 'round-bar' }, [
-      el('span', { style: { fontWeight: 700 }, text: '보고 있는 회차' }),
+      el('span', { class: 'round-label', text: '보고 있는 회차' }),
       roundSelect,
       isCurrent
         ? el('span', { class: `badge ${round.open ? 'green' : 'gray'}`, text: round.open ? '학생이 지금 답하는 회차' : '마감됨' })
@@ -237,35 +402,17 @@ function renderHeader() {
       assignment?.published
         ? el('span', { class: 'badge green', id: 'roles-published-badge', title: `${fmtDate(assignment.publishedAt)} 공개 · 학생 페이지에 자기 역할이 보여요`, text: '1인 1역 공개됨' })
         : (assignment ? el('span', { class: 'badge gray', id: 'roles-draft-badge', title: '배정 초안이 있지만 아직 학생에게 공개하지 않았어요', text: '1인 1역 초안' }) : null),
-      el('span', { style: { flex: 1 } }),
-      isCurrent ? el('button', { type: 'button', class: `btn small ${round.open ? 'danger' : ''}`, text: round.open ? '이 회차 마감' : '마감 해제', onClick: () => {
-        if (round.open && !confirm(`${round.name} 조사를 마감하면 학생들이 더 이상 수정할 수 없어요. 마감할까요?`)) return;
-        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { closed: round.open } }), round.open ? '마감했어요.' : '마감을 해제했어요.');
-      } }) : null,
+      el('span', { class: 'spacer' }),
       el('button', { type: 'button', class: 'btn small primary', text: '새 회차 시작', onClick: () => {
         const name = prompt('새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요.', suggestRoundName());
         if (name === null || !name.trim()) return;
         action(api(`${base}/rounds`, { method: 'POST', body: { name: name.trim() } }), `${name.trim()} 조사를 시작했어요.`);
       } }),
-      el('button', { type: 'button', class: 'btn small', text: '이름 바꾸기', onClick: () => {
-        const name = prompt('회차 이름', round.name);
-        if (name === null || !name.trim() || name.trim() === round.name) return;
-        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { name: name.trim() } }), '이름을 바꿨어요.');
-      } }),
-      rounds.length > 1 ? el('button', { type: 'button', class: 'btn small danger', text: '회차 삭제', onClick: () => {
-        if (!confirm(`${round.name} 회차와 그 응답을 모두 지울까요? 되돌릴 수 없어요.`)) return;
-        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'DELETE' }), '회차를 지웠어요.');
-      } }) : null,
+      roundMenu,
     ]),
-    el('div', { class: 'stat-row' }, [
-      stat('제출', `${analysis.submittedCount} / ${students.length}명`, `${pct}%`),
-      stat('좋은 사이 화살표', `${analysis.goodCount}개`, `서로 좋은 사이 ${analysis.mutualGood}쌍`),
-      stat('안 좋은 사이 화살표', `${analysis.badCount}개`, `서로 안 좋은 사이 ${analysis.mutualBad}쌍`),
-      stat('고립 위험', analysis.isolated.length ? analysis.isolated.join(', ') : '없음', '좋은 사이로 지목받지 못한 학생'),
-    ]),
-    isCurrent && !round.open ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0 }, text: `${round.name} 조사가 마감된 상태예요. 학생 페이지는 읽기 전용이에요. 다음 조사를 하려면 "새 회차 시작"을 누르세요.` }) : null,
-    retentionNotice(),
-    state.notice ? el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 }, text: `⚠️ ${state.notice}` }) : null,
+    isCurrent && !round.open ? el('div', { class: 'alert warn', text: `${round.name} 조사가 마감된 상태예요. 학생 페이지는 읽기 전용이에요. 다음 조사를 하려면 "새 회차 시작"을 누르세요.` }) : null,
+    retentionAlert(),
+    state.notice ? el('div', { class: 'alert error', text: `⚠️ ${state.notice}` }) : null,
   );
 }
 
@@ -275,32 +422,51 @@ function fmtDay(iso) {
   return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
-// 보관 정책: 14개월이 지난 회차는 자동 삭제. 미리 알리고 내보내기를 권함
-function retentionNotice() {
+// 보관 정책: 14개월이 지난 회차는 자동 삭제. 곧 지워질 회차가 있으면 머리 카드에서 바로 알리고 내보내기를 권해요
+function retentionAlert() {
   const r = state.retention;
-  if (!r) return null;
-  const exportBtns = el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
-    el('a', { class: 'btn small primary', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
-    el('a', { class: 'btn small', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+  if (!r || !r.expiring.length) return null;
+  return el('div', { class: 'alert error' }, [
+    el('div', { class: 'alert-title', text: '⚠️ 곧 삭제되는 회차가 있어요. 보관하려면 지금 내보내 두세요.' }),
+    el('ul', { class: 'alert-list' }, r.expiring.map((x) => el('li', { text: `${x.name} 회차 → ${fmtDay(x.expiresAt)}에 자동 삭제` }))),
+    el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+      el('a', { class: 'btn small primary', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
+      el('a', { class: 'btn small', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+    ]),
   ]);
-  const parts = [];
-  if (r.expiring.length) {
-    parts.push(el('div', { class: 'alert error', style: { marginTop: '12px', marginBottom: 0 } }, [
-      el('div', { style: { fontWeight: 700 }, text: `⚠️ 곧 삭제되는 회차가 있어요. 보관하려면 지금 내보내 두세요.` }),
-      el('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, r.expiring.map((x) => el('li', { text: `${x.name} 회차 → ${fmtDay(x.expiresAt)}에 자동 삭제` }))),
-      exportBtns,
-    ]));
-  }
-  const recent = (r.log || []).slice(-3).reverse();
-  parts.push(el('div', { class: 'muted', style: { marginTop: '10px', fontSize: '13px' } }, [
-    `🗓️ 보관 정책: 조사 응답은 마감 뒤 ${r.months}개월이 지나면 자동으로 삭제돼요. 교실 전체가 ${r.months}개월 동안 사용되지 않으면 교실도 삭제돼요. 오래 보관하려면 CSV/JSON으로 내보내 두세요.`,
-    recent.length ? el('div', { style: { marginTop: '4px' }, text: `최근 자동 삭제: ${recent.map((x) => `${x.name} (${fmtDay(x.deletedAt)}, 응답 ${x.submitted}명)`).join(' · ')}` }) : null,
-  ]));
-  return el('div', {}, parts);
 }
 
 function stat(label, value, sub) {
-  return el('div', { class: 'stat' }, [el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }), sub ? el('div', { class: 'muted', style: { fontSize: '12px' }, text: sub }) : null]);
+  return el('div', { class: 'stat' }, [el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }), sub ? el('div', { class: 'muted stat-sub', text: sub }) : null]);
+}
+
+// ---------- 오늘의 요약 ----------
+function renderSummary() {
+  const card = document.getElementById('summary-card');
+  const { analysis: a, students, round } = state;
+  const pct = students.length ? Math.round((a.submittedCount / students.length) * 100) : 0;
+  const badPairs = a.pairs.filter((p) => p.ab === 'bad' || p.ba === 'bad');
+  const high = badPairs.filter((p) => p.level === 'high').length;
+  const medium = badPairs.filter((p) => p.level === 'medium').length;
+  const tile = ({ cls = '', id = null, label, value, unit = '', sub = null, onClick = null, extra = null }) => el(onClick ? 'button' : 'div', {
+    type: onClick ? 'button' : null, class: `tile ${cls}`, id, title: onClick ? '누르면 갈등 가능성 분석으로 이동해요' : null, onClick,
+  }, [
+    el('div', { class: 'tile-label', text: label }),
+    el('div', { class: 'tile-value' }, [String(value), unit ? el('small', { text: unit }) : null]),
+    extra,
+    sub ? el('div', { class: 'tile-sub', text: sub }) : null,
+  ]);
+  setChildren(card,
+    cardTitle('오늘의 요약', `${round.name} 회차 · ${a.submittedCount}명 응답 기준이에요. 숫자를 누르면 자세한 카드로 이동해요.`,
+      lastLoadedAt ? el('span', { class: 'muted', text: `업데이트 ${fmtDate(lastLoadedAt)}` }) : null),
+    el('div', { class: 'summary-tiles' }, [
+      tile({ cls: 'submit', label: '제출', value: a.submittedCount, unit: ` / ${students.length}명`, sub: `${pct}% 제출했어요`, extra: el('div', { class: 'tile-bar', role: 'img', 'aria-label': `제출률 ${pct}%` }, [el('div', { style: { width: `${pct}%` } })]) }),
+      tile({ cls: 'good', label: '좋은 사이', value: a.goodCount, unit: '개', sub: `서로 좋은 사이 ${a.mutualGood}쌍` }),
+      tile({ cls: 'bad', label: '안 좋은 사이', value: a.badCount, unit: '개', sub: `서로 안 좋은 사이 ${a.mutualBad}쌍` }),
+      tile({ cls: `risk ${high ? 'high' : medium ? 'medium' : 'none'}`, id: 'conflict-tile', label: '주의가 필요한 관계', value: high + medium, unit: '쌍', sub: `높음 ${high} · 주의 ${medium}`, onClick: () => jumpTo('analysis-card') }),
+      tile({ cls: `isolated ${a.isolated.length ? 'high' : 'none'}`, id: 'isolated-tile', label: '고립 위험', value: a.isolated.length, unit: '명', sub: a.isolated.length ? a.isolated.join(', ') : (a.submittedCount >= 3 ? '좋은 사이로 지목받지 못한 학생이 없어요' : '응답이 3명 이상 모이면 계산해요'), onClick: () => jumpTo('analysis-card') }),
+    ]),
+  );
 }
 
 // ---------- 화살표 팝오버 ----------
@@ -313,7 +479,7 @@ function showEdgePopover(edge, pt) {
     el('div', { class: 'row' }, [el('b', { text: `${nameOf(edge.from)} → ${nameOf(edge.to)}` }), ' ', el('span', { class: `badge ${edge.type}`, text: `${TYPE_ICON[edge.type]} ${TYPE_LABEL[edge.type]}` })]),
     edge.tagLabels.length ? el('div', { class: 'chips row' }, edge.tagLabels.map((t) => el('span', { class: `chip selected ${edge.type === 'bad' ? 'bad-theme' : 'good-theme'}`, text: t, style: { padding: '4px 10px', fontSize: '13px' } }))) : null,
     edge.reason ? el('div', { class: 'reason-text', text: edge.reason }) : (!edge.tagLabels.length ? el('div', { class: 'muted', text: '적은 이유가 없어요.' }) : null),
-    el('div', { class: 'muted', style: { marginTop: '6px', fontSize: '12px' }, text: `수정 ${fmtDate(edge.updatedAt)}` }),
+    el('div', { class: 'muted', style: { marginTop: '6px', fontSize: '13px' }, text: `수정 ${fmtDate(edge.updatedAt)}` }),
     reverse
       ? el('div', { class: 'row', style: { marginTop: '8px', borderTop: '1px solid var(--gray-200)', paddingTop: '8px' } }, [
         el('span', { class: 'muted', text: '반대 방향: ' }),
@@ -321,7 +487,7 @@ function showEdgePopover(edge, pt) {
         el('span', { class: `badge ${reverse.type}`, text: `${TYPE_ICON[reverse.type]} ${TYPE_LABEL[reverse.type]}` }),
         el('button', { type: 'button', class: 'btn small', style: { marginLeft: '6px' }, text: '보기', onClick: () => { ui.selectedEdge = `${reverse.from}>${reverse.to}`; graph.setSelectedEdge(ui.selectedEdge); showEdgePopover(reverse, pt); } }),
       ])
-      : el('div', { class: 'muted', style: { marginTop: '8px', fontSize: '12px' }, text: `${nameOf(edge.to)}은(는) ${nameOf(edge.from)}을(를) 표시하지 않았어요.` }),
+      : el('div', { class: 'muted', style: { marginTop: '8px', fontSize: '13px' }, text: `${nameOf(edge.to)}은(는) ${nameOf(edge.from)}을(를) 표시하지 않았어요.` }),
   ]);
   container.append(box);
   popoverEl = box;
@@ -347,7 +513,7 @@ function renderSidePanel() {
     setChildren(panel,
       el('h3', { text: '학생을 선택하세요' }),
       el('p', { class: 'muted', text: '관계도에서 학생 상자를 누르거나 아래 이름을 누르면 그 학생의 관계와 이유를 자세히 볼 수 있어요.' }),
-      el('div', { class: 'muted', style: { fontWeight: 600, marginBottom: '4px' }, text: '연결이 많은 학생' }),
+      el('div', { class: 'section-label', text: '연결이 많은 학생' }),
       el('ul', {}, top.map((s) => el('li', {}, [el('a', { href: '#', text: `${s.name} (${state.stats[s.id].degree})`, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } })]))),
     );
     return;
@@ -363,24 +529,24 @@ function renderSidePanel() {
   };
   setChildren(panel,
     el('h3', {}, [el('span', { text: st.name }), el('button', { type: 'button', class: 'btn small', text: '닫기', onClick: () => setHighlight(null) })]),
-    el('div', { style: { marginBottom: '8px' } }, [
-      el('span', { class: `badge ${st.submitted ? 'green' : 'warn'}`, text: st.submitted ? `제출 ${fmtDate(st.submittedAt)}` : '미제출' }), ' ',
-      risk.flags.includes('isolated') ? el('span', { class: 'badge high', text: '고립 위험' }) : null, ' ',
-      risk.flags.includes('targeted') ? el('span', { class: 'badge high', text: '여러 명이 안 좋게 지목' }) : null, ' ',
+    el('div', { class: 'panel-badges' }, [
+      el('span', { class: `badge ${st.submitted ? 'green' : 'warn'}`, text: st.submitted ? `제출 ${fmtDate(st.submittedAt)}` : '미제출' }),
+      risk.flags.includes('isolated') ? el('span', { class: 'badge high', text: '고립 위험' }) : null,
+      risk.flags.includes('targeted') ? el('span', { class: 'badge high', text: '여러 명이 안 좋게 지목' }) : null,
       risk.flags.includes('many-conflicts') ? el('span', { class: 'badge warn', text: '안 좋은 사이 다수 표시' }) : null,
     ]),
-    el('div', { class: 'stat-row', style: { marginBottom: '10px' } }, [
-      stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('준 ❤️', st.outGood.length), stat('준 ⚡', st.outBad.length),
+    el('div', { class: 'stat-row', style: { marginBottom: '12px' } }, [
+      stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('보낸 ❤️', st.outGood.length), stat('보낸 ⚡', st.outBad.length),
     ]),
     teacherNoteBox(id),
     rolesInfoBox(id),
-    state.history.trend.length > 1 ? el('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '10px' }, text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
+    state.history.trend.length > 1 ? el('div', { class: 'muted trend-line', text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
     section('나를 안 좋은 사이로 표시한 친구', st.inBad.map((f) => line(f, id))),
     section('내가 좋은 사이로 표시한 친구', st.outGood.map((t) => line(id, t))),
     section('내가 안 좋은 사이로 표시한 친구', st.outBad.map((t) => line(id, t))),
     myPairs.length ? el('div', {}, [
-      el('div', { class: 'muted', style: { fontWeight: 600 }, text: '갈등 가능성' }),
+      el('div', { class: 'section-label', text: '갈등 가능성' }),
       el('ul', {}, myPairs.map((p) => el('li', {}, [
         el('a', { href: '#', text: `${nameOf(p.a === id ? p.b : p.a)}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], id); } }),
         ' ', el('span', { class: `badge ${p.level}`, text: `${p.probability}% · ${LEVEL_LABEL[p.level]}` }),
@@ -391,16 +557,16 @@ function renderSidePanel() {
     const n = state.teacherNotes?.students?.[sid];
     const myRules = (state.teacherNotes?.rules || []).filter((r) => r.a === sid || r.b === sid);
     if (!n && !myRules.length) return null;
-    return el('div', { class: 'alert info', style: { marginBottom: '10px' } }, [
-      el('div', { style: { fontWeight: 600 }, text: '교사 메모' }),
+    return el('div', { class: 'alert info note-box' }, [
+      el('div', { class: 'alert-title', text: '교사 메모' }),
       n?.front ? el('div', { text: '👓 앞자리 필요' }) : null,
       n?.memo ? el('div', { text: `📝 ${n.memo}` }) : null,
       ...myRules.map((r) => el('div', { text: `${r.type === 'apart' ? '↔ 떨어뜨리기' : '⇢ 가까이 앉히기'}: ${nameOf(r.a === sid ? r.b : r.a)}${r.note ? ` · ${r.note}` : ''}` })),
-      el('a', { href: `/t/${encodeURIComponent(adminToken)}/seats`, class: 'muted', style: { fontSize: '12px' }, text: '자리 배정 페이지에서 수정' }),
+      el('a', { href: seatsPageUrl(), class: 'muted note-link', text: '자리 배정 페이지에서 수정' }),
     ]);
   }
   function section(title, items) {
-    return el('div', {}, [el('div', { class: 'muted', style: { fontWeight: 600 }, text: `${title} (${items.length})` }), items.length ? el('ul', {}, items) : el('p', { class: 'muted', style: { marginLeft: '4px' }, text: '없음' })]);
+    return el('div', {}, [el('div', { class: 'section-label', text: `${title} (${items.length})` }), items.length ? el('ul', {}, items) : el('p', { class: 'muted', style: { marginLeft: '4px' }, text: '없음' })]);
   }
 }
 
@@ -448,7 +614,7 @@ function rolesInfoBox(sid) {
       label('이번 달 배정'),
       el('span', { class: 'role-chip', text: roleNameOf(assignedRoleId) }), ' ',
       el('span', { class: `badge ${assignment.published ? 'green' : 'warn'}`, text: assignment.published ? '공개됨' : '초안 · 학생에게는 아직 안 보여요' }),
-      assignment.explanations?.[sid] ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '4px' }, text: assignment.explanations[sid] }) : null,
+      assignment.explanations?.[sid] ? el('div', { class: 'muted', style: { marginTop: '4px' }, text: assignment.explanations[sid] }) : null,
     ])
     : (assignment ? el('div', { class: 'muted', style: { marginTop: '6px' }, text: '이번 달 배정 초안에 아직 들어 있지 않아요.' }) : null);
 
@@ -456,15 +622,15 @@ function rolesInfoBox(sid) {
     el('div', { class: 'roles-info-title', text: '📝 성향 · 1인 1역' }),
     ...profileBlock,
     ...applicationBlock,
-    prevRoleIds.length ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '6px' }, text: `지난달${prevMonth ? `(${prevMonth})` : ''} 역할: ${prevRoleIds.map(roleNameOf).join(', ')} → 이번 달은 다른 역할을 맡아요.` }) : null,
+    prevRoleIds.length ? el('div', { class: 'muted', style: { marginTop: '6px' }, text: `지난달${prevMonth ? `(${prevMonth})` : ''} 역할: ${prevRoleIds.map(roleNameOf).join(', ')} → 이번 달은 다른 역할을 맡아요.` }) : null,
     assignedBlock,
     aiStudent ? el('div', { class: 'ai-mini' }, [
-      el('div', { style: { fontWeight: 700, marginBottom: '2px' }, text: '🤖 AI 요약' }),
+      el('div', { class: 'ai-mini-title', text: '🤖 AI 요약' }),
       aiStudent.summary ? el('div', { text: aiStudent.summary }) : null,
-      aiStudent.watch ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '2px' }, text: `👀 ${aiStudent.watch}` }) : null,
-      (aiStudent.roleFit || []).length ? el('div', { class: 'muted', style: { fontSize: '13px', marginTop: '2px' }, text: `추천 역할: ${aiStudent.roleFit.map((f) => roleNameOf(f.roleId)).join(', ')}` }) : null,
+      aiStudent.watch ? el('div', { class: 'muted', style: { marginTop: '2px' }, text: `👀 ${aiStudent.watch}` }) : null,
+      (aiStudent.roleFit || []).length ? el('div', { class: 'muted', style: { marginTop: '2px' }, text: `추천 역할: ${aiStudent.roleFit.map((f) => roleNameOf(f.roleId)).join(', ')}` }) : null,
     ]) : null,
-    el('div', { style: { marginTop: '8px' } }, [el('a', { class: 'btn small', href: rolesPageUrl(), text: '1인 1역 페이지에서 배정하기' })]),
+    el('div', { style: { marginTop: '10px' } }, [el('a', { class: 'btn small', href: rolesPageUrl(), text: '1인 1역 페이지에서 배정하기' })]),
   ]);
 }
 
@@ -474,44 +640,67 @@ function renderAnalysis() {
   const a = state.analysis;
   const pairs = a.pairs.filter((p) => p.ab === 'bad' || p.ba === 'bad');
   const shown = ui.showAllPairs ? pairs : pairs.slice(0, 8);
+  const high = pairs.filter((p) => p.level === 'high').length;
+  const medium = pairs.filter((p) => p.level === 'medium').length;
   const arrowText = (p) => {
     const parts = [];
     if (p.ab !== 'none') parts.push(`${p.aName} ${TYPE_ICON[p.ab]}→ ${p.bName}`);
     if (p.ba !== 'none') parts.push(`${p.bName} ${TYPE_ICON[p.ba]}→ ${p.aName}`);
     return parts.join(' · ');
   };
+  // 한 줄 요약: 관계 모양(기본 요인) + 가장 크게 더해진 요인
+  const mainReason = (p) => {
+    const top = p.factors.filter((f) => f.delta > 0).sort((x, y) => y.delta - x.delta)[0];
+    return [p.factors[0]?.label, top && top !== p.factors[0] ? top.label : null].filter(Boolean).join(' · ');
+  };
+  const pairRow = (p) => {
+    const key = `${p.a}|${p.b}`;
+    const reason = mainReason(p);
+    return el('div', { class: `pair-row ${p.level}` }, [
+      el('div', { class: 'pair-main' }, [
+        el('a', { href: '#', class: 'pair-names', title: '관계도에서 두 학생만 보기', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
+        el('span', { class: `badge ${p.level}`, text: LEVEL_LABEL[p.level] }),
+        el('span', { class: 'pair-pct', text: `${p.probability}%` }),
+      ]),
+      el('div', { class: 'pair-bar', role: 'img', 'aria-label': `갈등 가능성 ${p.probability}%` }, [el('div', { style: { width: `${p.probability}%` } })]),
+      el('div', { class: 'pair-reason', title: reason, text: reason || '적힌 이유가 없어요.' }),
+      el('details', {
+        class: 'pair-more', open: ui.openPairs.has(key) ? true : null,
+        onToggle: (e) => { if (e.target.open) ui.openPairs.add(key); else ui.openPairs.delete(key); },
+      }, [
+        el('summary', {}, [el('span', { class: 'when-closed', text: '이유 보기 ▾' }), el('span', { class: 'when-open', text: '이유 접기 ▴' })]),
+        el('div', { class: 'pair-arrows', text: arrowText(p) }),
+        el('ul', { class: 'pair-factors' }, p.factors.map((f) => el('li', { text: f.delta ? `${f.label} (+${f.delta})` : f.label }))),
+      ]),
+    ]);
+  };
+  const glance = (title, items, empty) => [
+    el('div', { class: 'section-label', text: title }),
+    items.length ? el('ul', {}, items) : el('p', { class: 'muted', text: empty }),
+  ];
   setChildren(card,
-    el('div', { class: 'card-title' }, [el('h2', { text: '갈등 가능성 분석' }), el('span', { class: 'muted', text: `${a.submittedCount}명 응답 기준` })]),
-    el('div', { class: 'alert info', text: '학생들의 응답(관계 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부)을 바탕으로 앞으로 갈등이 생길 가능성을 추정한 참고용 수치예요. 학생을 판단하는 근거가 아니라, 먼저 관심을 기울일 관계를 찾는 도구로 활용해 주세요.' }),
-    el('div', { class: 'grid-2' }, [
+    cardTitle('갈등 가능성 분석', '안 좋은 사이로 표시된 관계마다 앞으로 갈등이 생길 가능성을 어림해요. 가능성이 높은 순서로 보여 주고, 이름을 누르면 관계도에서 두 학생만 강조돼요.',
+      el('span', { class: 'badge gray', text: `${a.submittedCount}명 응답 기준` })),
+    el('div', { class: 'alert info prose', text: '학생들의 응답(관계 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부)을 바탕으로 한 참고용 수치예요. 학생을 판단하는 근거가 아니라, 먼저 관심을 기울일 관계를 찾는 도구로 활용해 주세요.' }),
+    el('div', { class: 'grid-2 analysis-grid' }, [
       el('div', {}, [
-        el('h3', { text: '주의가 필요한 관계' }),
+        el('div', { class: 'sub-head' }, [
+          el('h3', { text: `주의가 필요한 관계 (${pairs.length})` }),
+          pairs.length ? el('span', { class: 'muted', text: `높음 ${high} · 주의 ${medium} · 낮음 ${pairs.length - high - medium}` }) : null,
+        ]),
         pairs.length === 0 ? el('p', { class: 'muted', text: '안 좋은 사이로 표시된 관계가 아직 없어요.' }) : null,
-        ...shown.map((p) => el('div', { class: `pair ${p.level}` }, [
-          el('div', { class: 'pair-head' }, [
-            el('div', { class: 'names' }, [
-              el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, style: { textDecoration: 'none', color: 'inherit' }, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
-              el('div', { class: 'arrow-mini', text: arrowText(p) }),
-            ]),
-            el('span', { class: `badge ${p.level}`, text: LEVEL_LABEL[p.level] }),
-            el('div', { class: 'pct', text: `${p.probability}%` }),
-          ]),
-          el('div', { class: 'pair-bar' }, [el('div', { style: { width: `${p.probability}%` } })]),
-          el('ul', {}, p.factors.map((f) => el('li', { text: f.delta ? `${f.label} (+${f.delta})` : f.label }))),
-        ])),
+        ...shown.map(pairRow),
         pairs.length > 8 ? el('button', { type: 'button', class: 'btn small', text: ui.showAllPairs ? '접기' : `${pairs.length - 8}개 더 보기`, onClick: () => { ui.showAllPairs = !ui.showAllPairs; renderAnalysis(); } }) : null,
       ]),
       el('div', {}, [
         el('h3', { text: '한눈에 보기' }),
-        el('div', { class: 'side-panel' }, [
-          el('div', { class: 'muted', style: { fontWeight: 600 }, text: '좋은 사이로 많이 지목된 학생' }),
-          a.mostLiked.length ? el('ul', {}, a.mostLiked.map((s) => el('li', { text: `${s.name} · ${s.count}명` }))) : el('p', { class: 'muted', text: '아직 없어요.' }),
-          el('div', { class: 'muted', style: { fontWeight: 600 }, text: '안 좋은 사이로 많이 지목된 학생' }),
-          a.mostDisliked.length ? el('ul', {}, a.mostDisliked.map((s) => el('li', { text: `${s.name} · ${s.count}명` }))) : el('p', { class: 'muted', text: '아직 없어요.' }),
-          el('div', { class: 'muted', style: { fontWeight: 600 }, text: '고립 위험 (좋은 사이로 지목받지 못함)' }),
-          a.isolated.length ? el('ul', {}, a.isolated.map((n) => el('li', { text: n }))) : el('p', { class: 'muted', text: a.submittedCount >= 3 ? '없어요.' : '응답이 3명 이상 모이면 계산해요.' }),
-          el('div', { class: 'muted', style: { fontWeight: 600 }, text: '계산 방식' }),
-          el('ul', { class: 'muted', style: { fontSize: '13px' } }, [
+        el('div', { class: 'side-panel glance' }, [
+          ...glance('좋은 사이로 많이 지목된 학생', a.mostLiked.map((s) => el('li', { text: `${s.name} · ${s.count}명` })), '아직 없어요.'),
+          ...glance('안 좋은 사이로 많이 지목된 학생', a.mostDisliked.map((s) => el('li', { text: `${s.name} · ${s.count}명` })), '아직 없어요.'),
+          ...glance('고립 위험 (좋은 사이로 지목받지 못함)', a.isolated.map((n) => el('li', { text: n })), a.submittedCount >= 3 ? '없어요.' : '응답이 3명 이상 모이면 계산해요.'),
+        ]),
+        fold('analysis-method', '계산 방식', null, [
+          el('ul', { class: 'method-list' }, [
             el('li', { text: '서로 안 좋은 사이 78% · 한쪽만 안 좋은 사이 48% · 한쪽은 좋고 한쪽은 안 좋음 40% 에서 시작' }),
             el('li', { text: '이유의 심각도(때리거나 괴롭힘, 따돌림, 험담, 싸움 등)에 따라 최대 +25' }),
             el('li', { text: '공통 친구가 많으면 +4/명 (최대 +12), 3명 이상에게 안 좋게 지목된 학생 +6, 고립 위험 학생 +5' }),
@@ -566,10 +755,10 @@ function renderAiPanel() {
       ui.aiRunning ? el('span', { class: 'ai-running', role: 'status', id: 'ai-running' }, [el('span', { class: 'spin', 'aria-hidden': 'true' }), 'AI가 읽는 중이에요… 30초~1분 정도 걸려요']) : null,
       el('span', { class: 'muted ai-privacy', text: '🔒 학생 이름은 S1, S2 같은 가명으로 바꿔서 보내고, 결과만 저장해요.' }),
     ])
-    : el('div', { class: 'alert info', id: 'ai-disabled', style: { marginBottom: a ? '12px' : 0 } }, [
-      el('div', { style: { fontWeight: 700 }, text: 'AI 분석은 아직 꺼져 있어요.' }),
+    : el('div', { class: 'alert info prose', id: 'ai-disabled', style: { marginBottom: a ? '12px' : 0 } }, [
+      el('div', { class: 'alert-title', text: 'AI 분석은 아직 꺼져 있어요.' }),
       el('div', { text: '서버 환경 변수 ANTHROPIC_API_KEY 를 설정하면 학생들의 관계·성향·지원서를 함께 읽고, 갈등 가능성과 어울리는 역할을 풀어서 설명해 줘요. 그 전까지는 위의 규칙 기반 갈등 분석을 사용해요.' }),
-      el('div', { style: { marginTop: '4px', fontSize: '13px' }, text: '설정 방법은 README 참고' }),
+      el('div', { style: { marginTop: '4px', fontSize: '14px' }, text: '설정 방법은 README 참고' }),
     ]);
 
   const pairEl = (p) => {
@@ -605,7 +794,7 @@ function renderAiPanel() {
           f.reason ? el('span', { class: 'reason', text: ` — ${f.reason}` }) : null,
         ]))) : null,
         empty ? el('p', { class: 'muted', text: '이 학생에 대한 내용이 비어 있어요.' }) : null,
-        el('a', { href: '#', class: 'muted', style: { fontSize: '12px' }, text: '관계도에서 보기', onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } }),
+        el('a', { href: '#', class: 'muted', style: { fontSize: '13.5px' }, text: '관계도에서 보기', onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } }),
       ]),
     ]);
   };
@@ -625,8 +814,8 @@ function renderAiPanel() {
         pairs.length ? el('div', { id: 'ai-pairs' }, pairs.map(pairEl)) : el('p', { class: 'muted', text: 'AI가 특별히 주의할 관계를 찾지 못했어요.' }),
       ]),
       el('div', {}, [
-        el('div', { class: 'card-title', style: { marginBottom: '4px' } }, [
-          el('h3', { style: { margin: 0 }, text: `학생별 분석 (${aiStudents.length})` }),
+        el('div', { class: 'sub-head' }, [
+          el('h3', { text: `학생별 분석 (${aiStudents.length})` }),
           aiStudents.length ? el('button', {
             type: 'button', class: 'btn small', id: 'ai-toggle-all', text: allOpen ? '모두 접기' : '모두 펼치기',
             onClick: () => { ui.aiOpen = allOpen ? new Set() : new Set(aiStudents.map((x) => x.s.id)); renderAiPanel(); },
@@ -635,16 +824,14 @@ function renderAiPanel() {
         aiStudents.length ? el('div', { id: 'ai-students' }, aiStudents.map(studentEl)) : el('p', { class: 'muted', text: '학생별 내용이 없어요.' }),
       ]),
     ]),
-    el('p', { class: 'muted', style: { marginTop: '10px', marginBottom: 0 }, text: 'AI 분석은 참고용이에요. 학생을 판단하는 근거가 아니라 먼저 살펴볼 관계와 어울리는 역할을 찾는 도구로 써 주세요. 학생이 답을 고치면 "다시 분석"으로 새로 받을 수 있어요.' }),
+    el('p', { class: 'muted', style: { marginTop: '12px', marginBottom: 0 }, text: 'AI 분석은 참고용이에요. 학생을 판단하는 근거가 아니라 먼저 살펴볼 관계와 어울리는 역할을 찾는 도구로 써 주세요. 학생이 답을 고치면 "다시 분석"으로 새로 받을 수 있어요.' }),
   ] : [
     enabled ? el('p', { class: 'muted', style: { marginBottom: 0 }, text: '아직 분석 결과가 없어요. "AI 분석 실행"을 누르면 이번 회차의 관계도, 성향 설문, 1인 1역 지원서, 교사 메모를 함께 읽고 학급 요약·주의할 관계·학생별 역할 추천을 만들어요.' }) : null,
   ];
 
   setChildren(card,
-    el('div', { class: 'card-title' }, [
-      el('h2', { text: '🤖 AI 관계·역할 분석' }),
-      el('span', { class: 'muted', text: enabled ? (a ? `마지막 분석 ${fmtDate(a.createdAt)}` : '아직 분석 전') : '꺼져 있음' }),
-    ]),
+    cardTitle('🤖 AI 관계·역할 분석', '관계도·성향 설문·1인 1역 지원서·교사 메모를 함께 읽고 학급 요약, 주의할 관계, 학생별 어울리는 역할을 풀어서 설명해요.',
+      el('span', { class: 'muted', text: enabled ? (a ? `마지막 분석 ${fmtDate(a.createdAt)}` : '아직 분석 전') : '꺼져 있음' })),
     controls,
     ...results,
   );
@@ -657,8 +844,8 @@ function renderHistory() {
   const short = (name) => name.replace(/^\d{4}년 /, '');
   if (!h || h.trend.length < 2) {
     setChildren(card,
-      el('div', { class: 'card-title' }, [el('h2', { text: '회차별 변화 분석' })]),
-      el('p', { class: 'muted', text: '회차가 2개 이상 되면 달마다 관계가 어떻게 변했는지 여기에서 비교할 수 있어요. 다음 달 조사는 위의 "새 회차 시작"으로 시작하세요.' }),
+      cardTitle('회차별 변화 분석', '회차가 2개 이상 되면 달마다 관계가 어떻게 변했는지 여기에서 비교할 수 있어요.'),
+      el('p', { class: 'muted', text: '다음 달 조사는 위의 "새 회차 시작"으로 시작하세요. 회차가 쌓이면 학급 추세, 새로 생긴·계속되는·해소된 갈등, 학생별 변화가 나타나요.' }),
     );
     return;
   }
@@ -668,8 +855,8 @@ function renderHistory() {
     el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '갈등 높음 쌍', '고립 위험'].map((t) => el('th', { text: t })))]),
     el('tbody', {}, h.trend.map((t, i) => {
       const prev = h.trend[i - 1];
-      const cell = (v, key) => el('td', { class: 'num' }, [String(v), prev ? el('span', { class: 'muted', style: { fontSize: '12px', marginLeft: '4px' }, text: arrow(v - prev[key]) }) : null]);
-      return el('tr', { style: t.id === state.round.id ? { background: 'var(--blue-light)' } : null }, [
+      const cell = (v, key) => el('td', { class: 'num' }, [String(v), prev ? el('span', { class: 'muted delta', text: arrow(v - prev[key]) }) : null]);
+      return el('tr', { class: t.id === state.round.id ? 'current' : null }, [
         el('td', {}, [el('a', { href: '#', text: t.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); ui.roundId = t.id; load(); } }), t.open ? el('span', { class: 'badge green', style: { marginLeft: '6px' }, text: '진행 중' }) : null]),
         el('td', { class: 'num', text: `${t.submitted}/${t.total}` }),
         cell(t.good, 'good'), cell(t.bad, 'bad'), cell(t.mutualBad, 'mutualBad'), cell(t.highRisk, 'highRisk'), cell(t.isolated, 'isolated'),
@@ -678,11 +865,11 @@ function renderHistory() {
   ])]);
 
   const pairList = (items, empty) => items.length
-    ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, items.map((p) => el('li', {}, [
+    ? el('ul', { class: 'change-list' }, items.map((p) => el('li', {}, [
       el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
       p.probability !== null ? el('span', { class: `badge ${p.probability >= 70 ? 'high' : p.probability >= 40 ? 'medium' : 'low'}`, style: { marginLeft: '6px' }, text: `${p.probability}%` }) : null,
     ])))
-    : el('p', { class: 'muted', style: { margin: '4px 0 10px' }, text: empty });
+    : el('p', { class: 'muted', style: { margin: '4px 0 12px' }, text: empty });
 
   const studentRows = h.students.map((s) => el('tr', {}, [
     el('td', {}, [el('a', { href: '#', text: s.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } })]),
@@ -694,42 +881,51 @@ function renderHistory() {
   const shownRows = ui.showAllHistory ? studentRows : studentRows.slice(0, 12);
 
   setChildren(card,
-    el('div', { class: 'card-title' }, [el('h2', { text: '회차별 변화 분석' }), el('span', { class: 'muted', text: `${c.prevName} → ${c.lastName} 비교` })]),
-    el('h3', { text: '학급 추세' }),
-    trendTable,
-    el('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
-      el('div', {}, [
-        el('h3', { text: `새로 생긴 갈등 (${c.newConflicts.length})` }),
-        pairList(c.newConflicts, '없어요.'),
-        el('h3', { text: `계속되는 갈등 (${c.persistent.length})` }),
-        pairList(c.persistent, '없어요.'),
-        el('h3', { text: `해소된 갈등 (${c.resolved.length})` }),
-        pairList(c.resolved, '없어요.'),
-      ]),
-      el('div', {}, [
-        el('h3', { text: '관심이 필요한 학생' }),
-        c.worsened.length ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, c.worsened.slice(0, 8).map((s) => el('li', {}, [
-          el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
-          el('span', { class: 'muted', text: ` · 받은 ⚡ ${arrow(s.inBadDelta)} · 받은 ❤️ ${arrow(s.inGoodDelta)}${s.newlyIsolated ? ' · 새로 고립 위험' : ''}` }),
-        ]))) : el('p', { class: 'muted', text: '나빠진 학생이 없어요.' }),
-        el('h3', { text: '좋아진 학생' }),
-        c.improved.length ? el('ul', { style: { paddingLeft: '18px', margin: '4px 0 10px' } }, c.improved.slice(0, 8).map((s) => el('li', {}, [
-          el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
-          el('span', { class: 'muted', text: ` · 받은 ❤️ ${arrow(s.inGoodDelta)} · 받은 ⚡ ${arrow(s.inBadDelta)}${s.recovered ? ' · 고립 위험 벗어남' : ''}` }),
-        ]))) : el('p', { class: 'muted', text: '아직 없어요.' }),
-      ]),
+    cardTitle('회차별 변화 분석', `${c.prevName} → ${c.lastName} 비교예요. 핵심 숫자는 바로 보이고, 자세한 표와 목록은 펼쳐서 볼 수 있어요.`),
+    el('div', { class: 'stat-row headline-stats' }, [
+      stat('새로 생긴 갈등', `${c.newConflicts.length}쌍`, '지난 회차에는 없던 안 좋은 사이'),
+      stat('계속되는 갈등', `${c.persistent.length}쌍`, '두 회차 모두 있는 안 좋은 사이'),
+      stat('해소된 갈등', `${c.resolved.length}쌍`, '이번 회차에 사라진 안 좋은 사이'),
+      stat('관심이 필요한 학생', `${c.worsened.length}명`, '받은 ⚡가 늘거나 ❤️가 줄어든 학생'),
+      stat('좋아진 학생', `${c.improved.length}명`, '받은 ❤️가 늘거나 ⚡가 줄어든 학생'),
     ]),
-    el('h3', { style: { marginTop: '10px' }, text: '학생별 받은 ❤️ / ⚡' }),
-    el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
-      el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), ...h.trend.map((t) => el('th', { text: short(t.name) }))])]),
-      el('tbody', {}, shownRows),
-    ])]),
-    studentRows.length > 12 ? el('button', { type: 'button', class: 'btn small', style: { marginTop: '8px' }, text: ui.showAllHistory ? '접기' : `${studentRows.length - 12}명 더 보기`, onClick: () => { ui.showAllHistory = !ui.showAllHistory; renderHistory(); } }) : null,
-    el('p', { class: 'muted', style: { marginTop: '10px', marginBottom: 0 }, text: '"새로 생긴 갈등"은 지난 회차에 없던 안 좋은 사이가 이번 회차에 생긴 쌍, "해소된 갈등"은 지난 회차에 있던 안 좋은 사이가 이번 회차에 사라진 쌍이에요. 응답이 없는 학생의 관계는 변화로 세지 않아요.' }),
+    fold('history-trend', '학급 추세 표', `${h.trend.length}개 회차`, [trendTable]),
+    fold('history-changes', '갈등·학생 변화 목록', `새로 생김 ${c.newConflicts.length} · 계속 ${c.persistent.length} · 해소 ${c.resolved.length}`, [
+      el('div', { class: 'grid-2' }, [
+        el('div', {}, [
+          el('h3', { text: `새로 생긴 갈등 (${c.newConflicts.length})` }),
+          pairList(c.newConflicts, '없어요.'),
+          el('h3', { text: `계속되는 갈등 (${c.persistent.length})` }),
+          pairList(c.persistent, '없어요.'),
+          el('h3', { text: `해소된 갈등 (${c.resolved.length})` }),
+          pairList(c.resolved, '없어요.'),
+        ]),
+        el('div', {}, [
+          el('h3', { text: '관심이 필요한 학생' }),
+          c.worsened.length ? el('ul', { class: 'change-list' }, c.worsened.slice(0, 8).map((s) => el('li', {}, [
+            el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
+            el('span', { class: 'muted', text: ` · 받은 ⚡ ${arrow(s.inBadDelta)} · 받은 ❤️ ${arrow(s.inGoodDelta)}${s.newlyIsolated ? ' · 새로 고립 위험' : ''}` }),
+          ]))) : el('p', { class: 'muted', text: '나빠진 학생이 없어요.' }),
+          el('h3', { text: '좋아진 학생' }),
+          c.improved.length ? el('ul', { class: 'change-list' }, c.improved.slice(0, 8).map((s) => el('li', {}, [
+            el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
+            el('span', { class: 'muted', text: ` · 받은 ❤️ ${arrow(s.inGoodDelta)} · 받은 ⚡ ${arrow(s.inBadDelta)}${s.recovered ? ' · 고립 위험 벗어남' : ''}` }),
+          ]))) : el('p', { class: 'muted', text: '아직 없어요.' }),
+        ]),
+      ]),
+      el('p', { class: 'muted prose', style: { marginTop: '12px', marginBottom: 0 }, text: '"새로 생긴 갈등"은 지난 회차에 없던 안 좋은 사이가 이번 회차에 생긴 쌍, "해소된 갈등"은 지난 회차에 있던 안 좋은 사이가 이번 회차에 사라진 쌍이에요. 응답이 없는 학생의 관계는 변화로 세지 않아요.' }),
+    ]),
+    fold('history-students', '학생별 받은 ❤️ / ⚡ 표', `${h.students.length}명 · ${h.trend.length}개 회차`, [
+      el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
+        el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), ...h.trend.map((t) => el('th', { text: short(t.name) }))])]),
+        el('tbody', {}, shownRows),
+      ])]),
+      studentRows.length > 12 ? el('button', { type: 'button', class: 'btn small', style: { marginTop: '10px' }, text: ui.showAllHistory ? '접기' : `${studentRows.length - 12}명 더 보기`, onClick: () => { ui.showAllHistory = !ui.showAllHistory; renderHistory(); } }) : null,
+    ]),
   );
 }
 
-// ---------- 학생 관리 ----------
+// ---------- 학생 목록 ----------
 // 학생별 성향 설문 · 지원서 제출 표시 (지원서는 역할 목록이 있을 때만)
 function statusIcons(sid) {
   const profile = state.profiles?.[sid] || null;
@@ -755,48 +951,62 @@ function statusIcons(sid) {
 function renderStudents() {
   const card = document.getElementById('students-card');
   const { students, stats, room } = state;
+  const num = (v) => el('td', { class: `num ${v ? '' : 'zero'}`, text: v });
   const rows = students.map((s) => {
     const st = stats[s.id];
-    return el('tr', {}, [
-      el('td', {}, [el('a', { href: '#', text: s.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } })]),
-      el('td', {}, [el('span', { class: `badge ${s.submitted ? 'green' : 'gray'}`, text: s.submitted ? '제출' : '미제출' }), s.submitted ? el('div', { class: 'muted', style: { fontSize: '12px' }, text: fmtDate(s.submittedAt) }) : null]),
+    const open = ui.openRows.has(s.id);
+    return el('tr', { dataset: { student: s.id }, class: ui.panelStudent === s.id ? 'selected' : null }, [
+      el('td', {}, [el('a', { href: '#', class: 'student-name', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } })]),
+      el('td', {}, [el('span', { class: `badge ${s.submitted ? 'green' : 'gray'}`, text: s.submitted ? '제출' : '미제출' }), s.submitted ? el('div', { class: 'submitted-at', text: fmtDate(s.submittedAt) }) : null]),
       el('td', {}, [statusIcons(s.id)]),
-      el('td', { class: 'num', text: st.inGood.length }),
-      el('td', { class: 'num', text: st.inBad.length }),
-      el('td', { class: 'num', text: st.outGood.length }),
-      el('td', { class: 'num', text: st.outBad.length }),
-      el('td', {}, [el('div', { class: 'btn-row' }, [
+      num(st.inGood.length), num(st.inBad.length), num(st.outGood.length), num(st.outBad.length),
+      el('td', { class: 'manage-col' }, [el('div', { class: 'btn-row manage' }, [
         el('button', { type: 'button', class: 'btn small', text: '링크 복사', onClick: () => copyText(s.url) }),
-        el('button', { type: 'button', class: 'btn small', text: '이름 바꾸기', onClick: () => {
+        open ? el('button', { type: 'button', class: 'btn small', text: '이름 바꾸기', onClick: () => {
           const name = prompt('새 이름을 입력하세요.', s.name);
           if (name === null || !name.trim() || name.trim() === s.name) return;
           action(api(`${base}/students/${encodeURIComponent(s.id)}`, { method: 'PATCH', body: { name } }), '이름을 바꿨어요.');
-        } }),
-        el('button', { type: 'button', class: 'btn small', text: '응답 초기화', onClick: () => {
+        } }) : null,
+        open ? el('button', { type: 'button', class: 'btn small', text: '응답 초기화', onClick: () => {
           if (!confirm(`${state.round.name} 회차에서 ${s.name} 학생이 표시한 관계를 모두 지울까요?`)) return;
           action(api(`${base}/students/${encodeURIComponent(s.id)}/reset`, { method: 'POST', body: { roundId: state.round.id } }), '응답을 초기화했어요.');
-        } }),
-        el('button', { type: 'button', class: 'btn small', text: '링크 재발급', onClick: () => {
+        } }) : null,
+        open ? el('button', { type: 'button', class: 'btn small', text: '링크 재발급', onClick: () => {
           if (!confirm(`${s.name} 학생의 링크(QR)를 새로 만들까요? 기존 QR은 더 이상 열리지 않아요.`)) return;
           action(api(`${base}/students/${encodeURIComponent(s.id)}/rotate`, { method: 'POST' }), '새 링크를 만들었어요. QR 카드를 다시 인쇄해 주세요.');
-        } }),
-        el('button', { type: 'button', class: 'btn small danger', text: '삭제', onClick: () => {
+        } }) : null,
+        open ? el('button', { type: 'button', class: 'btn small danger', text: '삭제', onClick: () => {
           if (!confirm(`${s.name} 학생을 교실에서 삭제할까요? 이 학생과 관련된 관계도 함께 지워져요.`)) return;
           action(api(`${base}/students/${encodeURIComponent(s.id)}`, { method: 'DELETE' }), '학생을 삭제했어요.');
-        } }),
+        } }) : null,
+        el('button', {
+          type: 'button', class: 'btn small ghost', text: open ? '접기' : '관리 ▾', 'aria-expanded': open ? 'true' : 'false',
+          title: open ? '관리 버튼 접기' : '이름 바꾸기 · 응답 초기화 · 링크 재발급 · 삭제',
+          onClick: () => { if (open) ui.openRows.delete(s.id); else ui.openRows.add(s.id); renderStudents(); },
+        }),
       ])]),
     ]);
   });
   const addInput = el('input', { type: 'text', placeholder: '추가할 학생 이름 (쉼표로 여러 명)', maxlength: 200 });
   const minGoodInput = el('input', { type: 'number', min: 0, max: 10, value: room.minGood, style: { width: '70px' } });
   const minBadInput = el('input', { type: 'number', min: 0, max: 10, value: room.minBad, style: { width: '70px' } });
+  const submitted = students.filter((s) => s.submitted).length;
   setChildren(card,
-    el('div', { class: 'card-title' }, [el('h2', { text: '학생 관리' }), el('span', { class: 'muted', text: `${students.length}명` })]),
-    el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
-      el('thead', {}, [el('tr', {}, ['이름', '제출', '성향 · 지원서', '받은 ❤️', '받은 ⚡', '준 ❤️', '준 ⚡', ''].map((h) => el('th', { text: h })))]),
+    cardTitle('학생 목록', '이름을 누르면 관계도와 상세 패널에서 그 학생을 볼 수 있어요. "받은"은 친구들이 나를 고른 수, "보낸"은 내가 고른 수예요.',
+      el('span', { class: 'badge gray', text: `${students.length}명 · 제출 ${submitted}명` })),
+    el('div', { class: 'students-wrap' }, [el('table', { class: 'table students-table' }, [
+      el('thead', {}, [
+        el('tr', {}, [
+          el('th', { rowspan: 2, text: '이름' }), el('th', { rowspan: 2, text: '제출' }), el('th', { rowspan: 2, text: '성향 · 지원서' }),
+          el('th', { colspan: 2, class: 'group', text: '받은 표시 · 나를 고른 친구 수' }),
+          el('th', { colspan: 2, class: 'group', text: '보낸 표시 · 내가 고른 친구 수' }),
+          el('th', { rowspan: 2, text: '관리' }),
+        ]),
+        el('tr', {}, [el('th', { class: 'num', text: '받은 ❤️' }), el('th', { class: 'num', text: '받은 ⚡' }), el('th', { class: 'num', text: '보낸 ❤️' }), el('th', { class: 'num', text: '보낸 ⚡' })]),
+      ]),
       el('tbody', {}, rows),
     ])]),
-    el('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
+    el('div', { class: 'grid-2 students-tools' }, [
       el('div', {}, [
         el('h3', { text: '학생 추가' }),
         el('form', { class: 'inline-form', onSubmit: (e) => {
@@ -808,7 +1018,7 @@ function renderStudents() {
           el('button', { type: 'submit', class: 'btn primary', text: '추가' }),
           el('button', { type: 'button', class: 'btn', id: 'roster-file-btn', text: '📄 명단 파일로 추가', onClick: (e) => importRosterFile(e.currentTarget) }),
         ]),
-        el('p', { class: 'muted', style: { marginTop: '6px' }, text: `${FILE_HINT} 명단 파일에서 이름을 읽어 와요. 이미 있는 이름은 건너뛰고, 추가하기 전에 목록을 확인해요.` }),
+        el('p', { class: 'muted', style: { marginTop: '8px' }, text: `${FILE_HINT} 명단 파일에서 이름을 읽어 와요. 이미 있는 이름은 건너뛰고, 추가하기 전에 목록을 확인해요.` }),
       ]),
       el('div', {}, [
         el('h3', { text: '꼭 표시해야 하는 인원' }),
@@ -820,25 +1030,81 @@ function renderStudents() {
           el('label', { class: 'min-row' }, [el('span', { class: 'min-label', text: '⚡ 안 좋은 사이' }), minBadInput, el('span', { text: '명 이상' })]),
           el('div', {}, [el('button', { type: 'submit', class: 'btn', text: '저장' })]),
         ]),
-        el('p', { class: 'muted', style: { marginTop: '6px' }, text: '학생은 둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.' }),
+        el('p', { class: 'muted', style: { marginTop: '8px' }, text: '학생은 둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.' }),
       ]),
     ]),
   );
+}
 
-  const danger = document.getElementById('danger-card');
-  setChildren(danger,
-    el('h3', { text: '교실 삭제' }),
-    el('p', { class: 'muted', text: '교실과 모든 학생 응답이 완전히 삭제돼요. 필요하면 먼저 CSV/JSON으로 내보내 두세요.' }),
-    el('button', { type: 'button', class: 'btn danger', text: '이 교실 삭제', onClick: async () => {
-      if (!confirm('정말 이 교실을 삭제할까요? 되돌릴 수 없어요.')) return;
-      if (prompt(`확인을 위해 교실 이름(${room.name})을 입력하세요.`) !== room.name) return toast('이름이 일치하지 않아요.');
-      try {
-        await api(base, { method: 'DELETE' });
-        savedRooms.remove(adminToken);
-        clearInterval(pollTimer);
-        location.href = '/';
-      } catch (err) { toast(err.message, 4000); }
-    } }),
+// ---------- 메모·규칙 (자리 배정 페이지에서 적은 교사 메모) ----------
+function renderMemo() {
+  const card = document.getElementById('memo-card');
+  const notes = state.teacherNotes || { students: {}, rules: [] };
+  const memoStudents = state.students.filter((s) => notes.students?.[s.id]?.memo || notes.students?.[s.id]?.front);
+  const rules = (notes.rules || []).filter((r) => state.stats[r.a] && state.stats[r.b]);
+  const nameLink = (id) => el('a', { href: '#', class: 'memo-name', text: nameOf(id), onClick: (e) => { e.preventDefault(); setHighlight([id], id); scrollToGraph(); } });
+  setChildren(card,
+    cardTitle('메모·규칙', '자리 배정 페이지에서 적어 둔 교사 메모와 자리 규칙이에요. 학생 상세 패널, 자리 배정, AI 분석에 함께 쓰여요. 고치려면 자리 배정 페이지로 가세요.',
+      el('a', { class: 'btn small', href: seatsPageUrl(), text: '자리 배정 페이지에서 수정' })),
+    !memoStudents.length && !rules.length
+      ? el('p', { class: 'muted', text: '아직 적어 둔 메모나 규칙이 없어요. 자리 배정 페이지에서 학생별 메모(앞자리 필요, 특이 사항)와 자리 규칙(떨어뜨리기 · 가까이 앉히기)을 적을 수 있어요.' })
+      : el('div', { class: 'grid-2' }, [
+        el('div', {}, [
+          el('h3', { text: `학생 메모 (${memoStudents.length})` }),
+          memoStudents.length ? el('ul', { class: 'memo-list' }, memoStudents.map((s) => {
+            const n = notes.students[s.id];
+            return el('li', {}, [
+              nameLink(s.id),
+              n.front ? el('span', { class: 'badge blue', text: '👓 앞자리 필요' }) : null,
+              n.memo ? el('span', { class: 'memo-text', text: `📝 ${n.memo}` }) : null,
+            ]);
+          })) : el('p', { class: 'muted', text: '없어요.' }),
+        ]),
+        el('div', {}, [
+          el('h3', { text: `자리 규칙 (${rules.length})` }),
+          rules.length ? el('ul', { class: 'memo-list' }, rules.map((r) => el('li', {}, [
+            el('span', { class: `badge ${r.type === 'apart' ? 'warn' : 'green'}`, text: r.type === 'apart' ? '↔ 떨어뜨리기' : '⇢ 가까이 앉히기' }),
+            el('span', { class: 'memo-pair' }, [nameLink(r.a), ' · ', nameLink(r.b)]),
+            r.note ? el('span', { class: 'memo-text', text: r.note }) : null,
+          ]))) : el('p', { class: 'muted', text: '없어요.' }),
+        ]),
+      ]),
+  );
+}
+
+// ---------- 데이터 관리: 내보내기 · 보관 안내 · 교실 삭제 ----------
+function renderDataCard() {
+  const card = document.getElementById('danger-card');
+  const { room } = state;
+  const r = state.retention;
+  const recent = (r?.log || []).slice().reverse();
+  setChildren(card,
+    cardTitle('데이터 관리', '응답을 파일로 내보내 보관하거나, 자동 삭제 정책을 확인하고, 교실을 삭제할 수 있어요.'),
+    el('div', { class: 'btn-row' }, [
+      el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }),
+      el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기 (전체 회차·분석 포함)' }),
+    ]),
+    r ? fold('retention', '🗓️ 데이터 보관 안내', `마감 뒤 ${r.months}개월이 지나면 자동 삭제`, [
+      el('p', { class: 'prose', text: `조사 응답은 마감 뒤 ${r.months}개월이 지나면 자동으로 삭제돼요. 교실 전체가 ${r.months}개월 동안 사용되지 않으면 교실도 삭제돼요. 오래 보관하려면 CSV/JSON으로 내보내 두세요. 삭제 60일 전부터 위의 머리 카드와 회차 목록에 미리 알려 드려요.` }),
+      el('div', { class: 'section-label', text: `최근 자동 삭제 (${recent.length})` }),
+      recent.length
+        ? el('ul', { class: 'muted retention-log' }, recent.slice(0, 10).map((x) => el('li', { text: `${x.name} (${fmtDay(x.deletedAt)}, 응답 ${x.submitted}명)` })))
+        : el('p', { class: 'muted', text: '아직 자동으로 삭제된 회차가 없어요.' }),
+    ]) : null,
+    el('div', { class: 'danger-zone' }, [
+      el('h3', { text: '교실 삭제' }),
+      el('p', { class: 'muted', text: '교실과 모든 학생 응답이 완전히 삭제돼요. 필요하면 먼저 CSV/JSON으로 내보내 두세요.' }),
+      el('button', { type: 'button', class: 'btn danger', text: '이 교실 삭제', onClick: async () => {
+        if (!confirm('정말 이 교실을 삭제할까요? 되돌릴 수 없어요.')) return;
+        if (prompt(`확인을 위해 교실 이름(${room.name})을 입력하세요.`) !== room.name) return toast('이름이 일치하지 않아요.');
+        try {
+          await api(base, { method: 'DELETE' });
+          savedRooms.remove(adminToken);
+          clearInterval(pollTimer);
+          location.href = '/';
+        } catch (err) { toast(err.message, 4000); }
+      } }),
+    ]),
   );
 }
 

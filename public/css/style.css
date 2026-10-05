@@ -255,21 +255,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .qr-card { border-color: #999; }
 }
 
-/* ---------- conflict list ---------- */
-.pair { border: 1px solid var(--gray-200); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; background: #fff; }
-.pair-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.pair-head .names { font-weight: 700; font-size: 15px; flex: 1; }
-.pair .pct { font-size: 22px; font-weight: 800; min-width: 64px; text-align: right; }
-.pair.high .pct { color: #d63d4f; }
-.pair.medium .pct { color: #b26a00; }
-.pair.low .pct { color: #1e6b32; }
-.pair ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--gray-700); }
+/* ---------- conflict list (갈등 가능성 막대 · 줄 모양은 아래 body.teacher .pair-row) ---------- */
 .pair-bar { height: 6px; background: var(--gray-200); border-radius: 999px; overflow: hidden; margin-top: 8px; }
-.pair-bar > div { height: 100%; }
-.pair.high .pair-bar > div { background: #ef5b6b; }
-.pair.medium .pair-bar > div { background: #f2a33a; }
-.pair.low .pair-bar > div { background: #2ecc71; }
-.arrow-mini { font-family: monospace; font-size: 13px; color: var(--gray-500); }
+.pair-bar > div { height: 100%; background: var(--gray-300); }
 
 .side-panel { border: 1px solid var(--gray-200); border-radius: 16px; padding: 16px; background: var(--gray-100); }
 .side-panel h3 { display: flex; align-items: center; justify-content: space-between; }
@@ -552,3 +540,258 @@ body.kid .link-box input { border-radius: 16px; }
 .roles-info .app-help { font-size: 12.5px; margin-top: 2px; }
 .roles-info .assigned-role { margin-top: 2px; }
 .roles-info .ai-mini { background: #f3f0ff; border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 13.5px; }
+
+/* =========================================================
+   선생님 대시보드 가독성 (body.teacher — server/pages.js 의 teacher 껍데기, public/js/teacher.js)
+   글자를 키우고 카드 사이를 띄우며, 긴 목록은 접어 둡니다. 모든 규칙을 body.teacher 아래로 한정해서
+   같은 style.css 를 읽는 자리 배정·1인 1역·학생 페이지에는 영향을 주지 않아요.
+   ========================================================= */
+body.teacher { font-size: 16px; line-height: 1.6; }
+body.teacher .topbar { position: static; }  /* 구역 이동 줄(.section-nav)이 대신 붙어 다녀요 */
+body.teacher .container { max-width: 1120px; padding: 16px 16px 56px; }
+body.teacher .card { padding: 24px; margin-bottom: 20px; }
+body.teacher .card[id] { scroll-margin-top: calc(var(--nav-h, 60px) + 12px); }
+body.teacher .card-title { margin-bottom: 16px; align-items: flex-start; gap: 10px 16px; }
+body.teacher .card-heading { min-width: 0; flex: 1 1 320px; }
+body.teacher h1 { font-size: 28px; margin-bottom: 4px; }
+body.teacher h2 { font-size: 21px; margin-bottom: 4px; }
+body.teacher h3 { font-size: 17px; margin: 0 0 10px; }
+body.teacher .card-desc { margin: 0; color: var(--gray-500); font-size: 14.5px; line-height: 1.55; max-width: 72ch; }
+body.teacher .muted { font-size: 14px; }
+body.teacher p.muted, body.teacher .prose { max-width: 72ch; }
+body.teacher .badge { font-size: 13px; padding: 3px 10px; }
+body.teacher .btn.small { font-size: 14px; padding: 6px 13px; }
+body.teacher .btn.ghost { border-color: transparent; box-shadow: none; color: var(--gray-700); }
+body.teacher .btn.ghost:hover { background: var(--gray-100); }
+body.teacher .alert { font-size: 15px; padding: 14px 16px; border-radius: 12px; }
+body.teacher .alert-title { font-weight: 700; margin-bottom: 2px; }
+body.teacher .alert-list { margin: 6px 0 0; padding-left: 20px; }
+body.teacher .select { font-size: 15px; padding: 9px 12px; max-width: 100%; }
+body.teacher .spacer { flex: 1; }
+body.teacher .sub-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 4px; }
+body.teacher .sub-head h3 { margin-bottom: 6px; }
+body.teacher .section-label { font-weight: 700; color: var(--gray-700); font-size: 14px; margin-top: 6px; }
+body.teacher .stat { padding: 12px 16px; }
+body.teacher .stat .label { font-size: 13.5px; }
+body.teacher .stat .value { font-size: 24px; }
+body.teacher .stat .stat-sub { font-size: 13px; margin-top: 2px; }
+body.teacher .inline-form input { font-size: 15px; padding: 9px 12px; }
+/* 두 칸 격자의 최소 너비를 0으로: 한 줄짜리 긴 글(.pair-reason 등)이 칸을 넓혀 가로 스크롤이 생기지 않게 */
+body.teacher .grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 800px) { body.teacher .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+
+/* 머리 카드: 교실 이름 · 주요 버튼 · 회차 줄 */
+body.teacher .header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px 24px; flex-wrap: wrap; }
+body.teacher .header-title { min-width: 0; flex: 1 1 320px; }
+body.teacher .header-meta { margin: 0; }
+body.teacher .round-bar { margin-top: 18px; padding: 12px 14px; gap: 10px 12px; border-radius: 14px; }
+body.teacher .round-label { font-weight: 700; }
+body.teacher #header-card .alert { margin: 14px 0 0; }
+
+/* '⋯' 메뉴 (details 로 만든 작은 팝업) */
+body.teacher .menu { position: relative; }
+body.teacher .menu > summary { list-style: none; gap: 6px; }
+body.teacher .menu > summary::-webkit-details-marker { display: none; }
+body.teacher .menu[open] > summary { background: var(--gray-100); }
+body.teacher .menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 190px; background: #fff; border: 1px solid var(--gray-200); border-radius: 14px; box-shadow: var(--shadow-float); padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+body.teacher .menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 9px 12px; border-radius: 10px; font: inherit; font-weight: 600; font-size: 14.5px; color: var(--text); cursor: pointer; white-space: nowrap; }
+body.teacher .menu-item:hover { background: var(--gray-100); }
+body.teacher .menu-item.danger { color: #b71c1c; }
+body.teacher .menu-item.danger:hover { background: var(--red-light); }
+
+/* 구역 이동 줄: 머리 카드 아래에 붙어 다니며, 좁은 화면에서는 옆으로 밀어서 봐요 */
+body.teacher .section-nav {
+  position: sticky; top: 8px; z-index: 40; display: flex; align-items: center; gap: 4px; padding: 8px; margin: 0 0 20px;
+  background: rgba(255,255,255,.94); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border: 1px solid var(--gray-200); border-radius: 999px; box-shadow: var(--shadow);
+  overflow-x: auto; scrollbar-width: none; white-space: nowrap; -webkit-overflow-scrolling: touch;
+}
+body.teacher .section-nav::-webkit-scrollbar { display: none; }
+body.teacher .nav-link { flex: none; padding: 8px 14px; border-radius: 999px; font-size: 14.5px; font-weight: 600; color: var(--gray-700); text-decoration: none; transition: background .15s, color .15s; }
+body.teacher .nav-link:hover { background: var(--gray-100); color: var(--text); }
+body.teacher .nav-link.active { background: var(--blue-light); color: var(--blue-dark); }
+body.teacher .nav-sep { flex: none; width: 1px; height: 22px; background: var(--gray-200); margin: 0 6px 0 auto; }
+body.teacher .section-nav .btn.small { flex: none; }
+
+/* 오늘의 요약: 큰 숫자 타일 */
+body.teacher .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+body.teacher .tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 16px 18px; border-radius: 16px; background: var(--gray-100); border: 1px solid var(--gray-200); text-align: left; color: inherit; font: inherit; line-height: 1.4; }
+body.teacher .tile-label { font-size: 14px; font-weight: 600; color: var(--gray-700); }
+body.teacher .tile-value { font-size: 32px; font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+body.teacher .tile-value small { font-size: 15px; font-weight: 600; color: var(--gray-500); margin-left: 3px; }
+body.teacher .tile-sub { font-size: 13.5px; color: var(--gray-500); overflow: hidden; text-overflow: ellipsis; }
+body.teacher .tile-bar { height: 6px; background: var(--gray-200); border-radius: 999px; overflow: hidden; margin: 6px 0 2px; }
+body.teacher .tile-bar > div { height: 100%; background: var(--blue); border-radius: 999px; }
+body.teacher .tile.good .tile-value { color: #c0394a; }
+body.teacher .tile.bad .tile-value { color: var(--black); }
+body.teacher .tile.risk.high .tile-value, body.teacher .tile.isolated.high .tile-value { color: #d63d4f; }
+body.teacher .tile.risk.medium .tile-value { color: #b26a00; }
+body.teacher .tile.risk.none .tile-value, body.teacher .tile.isolated.none .tile-value { color: #1e6b32; }
+body.teacher button.tile { cursor: pointer; transition: transform .1s, box-shadow .15s, border-color .15s; }
+body.teacher button.tile:hover { transform: translateY(-1px); box-shadow: var(--shadow); border-color: var(--node-border); background: #fff; }
+body.teacher button.tile:focus-visible { outline: 3px solid rgba(108,92,231,.35); outline-offset: 2px; }
+
+/* 관계도 카드: 범례 칩 · 도구 줄 · 그래프 + 학생 패널 */
+body.teacher .legend { gap: 8px; font-size: 14px; margin-bottom: 12px; }
+body.teacher .legend > span { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--gray-100); border: 1px solid var(--gray-200); color: var(--gray-700); }
+body.teacher .legend .line, body.teacher .legend .sw { margin-right: 0; }
+body.teacher .graph-toolbar { gap: 8px; padding: 8px 10px; border-radius: 18px; margin-bottom: 12px; }
+body.teacher .graph-toolbar .seg { display: inline-flex; gap: 4px; background: var(--gray-100); border-radius: 999px; padding: 3px; }
+body.teacher .graph-toolbar .btn.small { padding: 7px 14px; }
+body.teacher .graph-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+@media (max-width: 900px) { body.teacher .graph-grid { grid-template-columns: minmax(0, 1fr); } }
+body.teacher .graph-help { margin: 12px 0 0; max-width: none; }
+body.teacher .side-panel { padding: 18px; }
+body.teacher .side-panel ul { font-size: 15px; margin: 6px 0 12px; }
+body.teacher .side-panel li { margin-bottom: 6px; }
+body.teacher .side-panel .panel-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+body.teacher .side-panel .trend-line { margin-bottom: 12px; }
+body.teacher .note-box { margin-bottom: 12px; }
+body.teacher .note-link { display: inline-block; margin-top: 4px; font-size: 13.5px; }
+body.teacher .side-panel .stat { min-width: 0; padding: 10px 12px; }
+
+/* 갈등 가능성 분석: 쌍마다 한 줄 요약 + 막대, 자세한 이유는 접어 둠 */
+body.teacher .analysis-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+@media (max-width: 900px) { body.teacher .analysis-grid { grid-template-columns: minmax(0, 1fr); } }
+body.teacher .pair-row { min-width: 0; border: 1px solid var(--gray-200); border-left: 5px solid var(--gray-300); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; background: #fff; }
+body.teacher .pair-row.high { border-left-color: #ef5b6b; }
+body.teacher .pair-row.medium { border-left-color: #f2a33a; }
+body.teacher .pair-row.low { border-left-color: #2ecc71; }
+body.teacher .pair-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+body.teacher .pair-names { flex: 1; min-width: 0; font-weight: 700; font-size: 17px; color: inherit; text-decoration: none; }
+body.teacher .pair-names:hover { color: var(--blue-dark); }
+body.teacher .pair-pct { font-size: 24px; font-weight: 800; min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+body.teacher .pair-row.high .pair-pct { color: #d63d4f; }
+body.teacher .pair-row.medium .pair-pct { color: #b26a00; }
+body.teacher .pair-row.low .pair-pct { color: #1e6b32; }
+body.teacher .pair-row .pair-bar { height: 8px; margin-top: 10px; }
+body.teacher .pair-row.high .pair-bar > div { background: #ef5b6b; }
+body.teacher .pair-row.medium .pair-bar > div { background: #f2a33a; }
+body.teacher .pair-row.low .pair-bar > div { background: #2ecc71; }
+body.teacher .pair-reason { margin-top: 8px; font-size: 14.5px; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.teacher .pair-more { margin-top: 4px; }
+body.teacher .pair-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; padding: 4px 0; font-size: 14px; font-weight: 600; color: var(--blue-dark); }
+body.teacher .pair-more > summary::-webkit-details-marker { display: none; }
+body.teacher .pair-more .when-open, body.teacher .pair-more[open] .when-closed { display: none; }
+body.teacher .pair-more[open] .when-open { display: inline; }
+body.teacher .pair-arrows { margin: 6px 0 0; font-size: 14px; color: var(--gray-500); }
+body.teacher .pair-factors { margin: 6px 0 2px; padding-left: 20px; font-size: 14px; color: var(--gray-700); }
+body.teacher .pair-factors li { margin-bottom: 2px; }
+body.teacher .glance { margin-bottom: 12px; }
+body.teacher .glance .section-label:first-child { margin-top: 0; }
+body.teacher .method-list { margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: var(--gray-700); }
+
+/* 접이식 영역 (회차별 변화 · 계산 방식 · 보관 안내) */
+body.teacher .fold { border: 1px solid var(--gray-200); border-radius: 14px; background: #fff; margin-top: 12px; }
+body.teacher .fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; font-weight: 700; font-size: 15.5px; border-radius: 14px; }
+body.teacher .fold > summary:hover { background: var(--gray-100); }
+body.teacher .fold > summary::-webkit-details-marker { display: none; }
+body.teacher .fold > summary::before { content: '▸'; color: var(--gray-500); transition: transform .15s; flex: none; }
+body.teacher .fold[open] > summary::before { transform: rotate(90deg); }
+body.teacher .fold[open] > summary { border-radius: 14px 14px 0 0; }
+body.teacher .fold-hint { font-weight: 500; }
+body.teacher .fold-body { padding: 8px 16px 16px; border-top: 1px dashed var(--gray-200); }
+body.teacher .headline-stats { margin-bottom: 4px; }
+body.teacher .headline-stats .stat { min-width: 150px; }
+body.teacher .change-list { padding-left: 20px; margin: 4px 0 14px; }
+body.teacher .change-list li { margin-bottom: 4px; }
+body.teacher .table .delta { font-size: 13px; margin-left: 4px; }
+body.teacher .table tr.current td { background: var(--blue-light); }
+
+/* 표 공통 + 학생 목록 표 */
+body.teacher table.table { font-size: 15px; }
+body.teacher .table th, body.teacher .table td { padding: 10px 10px; }
+body.teacher .table th { font-size: 13.5px; }
+body.teacher .students-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+body.teacher .students-table { min-width: 760px; }
+body.teacher .students-table thead th { background: #fff; border-bottom: 0; box-shadow: inset 0 -1px 0 var(--gray-200); vertical-align: bottom; }
+body.teacher .students-table thead th.group { text-align: center; color: var(--gray-700); background: var(--gray-100); border-radius: 10px 10px 0 0; font-size: 13px; }
+body.teacher .students-table thead th.num { text-align: center; }
+body.teacher .students-table tbody tr:nth-child(even) td { background: #fafafd; }
+body.teacher .students-table tbody tr:hover td { background: #f3f2ff; }
+body.teacher .students-table tbody tr.selected td { background: var(--blue-light); }
+body.teacher .students-table td.num { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+body.teacher .students-table td.num.zero { color: var(--gray-500); font-weight: 500; }
+body.teacher .students-table .student-name { font-weight: 700; }
+body.teacher .students-table .submitted-at { font-size: 13px; color: var(--gray-500); margin-top: 2px; white-space: nowrap; }
+body.teacher .students-table .manage { flex-wrap: wrap; gap: 6px; }
+body.teacher .students-table .manage-col { min-width: 220px; }
+body.teacher .students-tools { margin-top: 20px; }
+@media (min-width: 960px) {
+  body.teacher .students-wrap { overflow: visible; }
+  body.teacher .students-table { min-width: 0; }
+  body.teacher .students-table thead { position: sticky; top: var(--nav-h, 60px); z-index: 3; }
+}
+#students-card .status-icon { font-size: 13px; padding: 2px 9px; }
+
+/* 메모·규칙 */
+body.teacher .memo-list { list-style: none; padding: 0; margin: 0; }
+body.teacher .memo-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--gray-200); font-size: 15px; }
+body.teacher .memo-list li:last-child { border-bottom: 0; }
+body.teacher .memo-name { font-weight: 700; }
+body.teacher .memo-pair { font-weight: 700; }
+body.teacher .memo-text { color: var(--gray-700); }
+
+/* 데이터 관리 */
+body.teacher .retention-log { margin: 6px 0 0; padding-left: 20px; }
+body.teacher .danger-zone { margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--gray-200); }
+
+/* AI 카드 · 학생 패널 글자 크기 (13px 미만 없음) */
+body.teacher .ai-panel .ai-privacy, body.teacher .ai-panel .ai-meta, body.teacher .ai-panel .ai-student summary .muted { font-size: 14px; }
+body.teacher .ai-panel .ai-summary { padding: 14px 18px; }
+body.teacher .ai-panel .ai-summary-label { font-size: 13.5px; }
+body.teacher .ai-panel .ai-summary p { max-width: 72ch; }
+body.teacher .ai-panel .ai-pair { padding: 14px 16px; }
+body.teacher .ai-panel .ai-pair-head .names { font-size: 16px; }
+body.teacher .ai-panel .conflict-type { font-size: 13px; }
+body.teacher .ai-panel .ai-text { font-size: 15px; }
+body.teacher .ai-panel .ai-advice { font-size: 14.5px; padding: 10px 14px; }
+body.teacher .ai-panel .ai-student summary { padding: 12px 16px; }
+body.teacher .ai-panel .ai-student-body { font-size: 15px; padding: 12px 16px 14px; }
+body.teacher .ai-panel .role-chip, body.teacher .roles-info .role-chip { font-size: 13.5px; }
+body.teacher .roles-info { font-size: 14.5px; padding: 14px 16px; }
+body.teacher .roles-info .label { font-size: 13.5px; }
+body.teacher .roles-info .profile-chip { font-size: 13px; }
+body.teacher .roles-info .quote { font-size: 14px; }
+body.teacher .roles-info .rank { font-size: 12.5px; }
+body.teacher .roles-info .app-reason { font-size: 14px; }
+body.teacher .roles-info .app-help { font-size: 13.5px; }
+body.teacher .roles-info .ai-mini { font-size: 14px; padding: 10px 12px; }
+body.teacher .roles-info .ai-mini-title { font-weight: 700; margin-bottom: 2px; }
+body.teacher .popover { font-size: 14.5px; }
+
+/* 좁은 화면 */
+@media (max-width: 600px) {
+  body.teacher .card { padding: 20px 16px; border-radius: 14px; }
+  body.teacher h1 { font-size: 24px; }
+  body.teacher .section-nav { top: 6px; border-radius: 18px; }
+  body.teacher .summary-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  body.teacher .tile { padding: 14px; }
+  body.teacher .tile-value { font-size: 28px; }
+  body.teacher .menu-list { right: auto; left: 0; }
+  body.teacher .header-actions .btn { padding: 8px 14px; font-size: 15px; }
+  body.teacher .pair-pct { font-size: 22px; min-width: 56px; }
+  body.teacher .headline-stats .stat { min-width: 130px; }
+}
+
+/* 인쇄: 이동 줄·버튼은 빼고 관계도와 갈등 분석이 깔끔하게 나오도록 (자리표 인쇄 규칙과는 별개) */
+@media print {
+  body.teacher { font-size: 13px; line-height: 1.45; background: #fff; }
+  body.teacher .topbar, body.teacher .section-nav, body.teacher .btn, body.teacher .graph-toolbar, body.teacher .menu, body.teacher .toast,
+  body.teacher #danger-card, body.teacher .students-tools, body.teacher .students-table .manage-col, body.teacher .pair-more > summary,
+  body.teacher .graph-help, body.teacher .header-actions, body.teacher .popover { display: none !important; }
+  body.teacher .container { max-width: none; padding: 0; }
+  body.teacher .card { box-shadow: none; border: 1px solid #ddd; padding: 14px 16px; margin-bottom: 12px; break-inside: avoid; page-break-inside: avoid; }
+  body.teacher #graph-card, body.teacher #analysis-card { break-inside: auto; page-break-inside: auto; }
+  body.teacher .graph-wrap { background: #fff; break-inside: avoid; }
+  body.teacher .graph-wrap svg { height: 520px; }
+  body.teacher .graph-grid, body.teacher .analysis-grid { display: block; }
+  body.teacher .side-panel { margin-top: 12px; }
+  body.teacher .pair-row { break-inside: avoid; page-break-inside: avoid; }
+  body.teacher .pair-more { display: block; }
+  body.teacher .tile, body.teacher .stat, body.teacher .legend > span, body.teacher .pair-bar, body.teacher .tile-bar, body.teacher .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.teacher .round-bar { background: #fff; border-color: #ddd; }
+  body.teacher .students-table thead { position: static; }
+  body.teacher .students-wrap { overflow: visible; }
+  body.teacher .students-table { min-width: 0; }
+}

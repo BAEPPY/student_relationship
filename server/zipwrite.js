@@ -41,10 +41,12 @@ export function makeZip(entries, { date = new Date() } = {}) {
     const method = entry.store ? 0 : 8;
     const stored = entry.store ? data : zlib.deflateRawSync(data, { level: 6 });
     const crc = crc32(data);
+    // 일반 플래그: deflate 는 0x0004(한글 저장 파일과 같게), 이름에 ASCII 가 아닌 글자가 있으면 0x0800(UTF-8)
+    const flags = (method === 8 ? 0x0004 : 0) | (/[^\x20-\x7e]/.test(entry.name) ? 0x0800 : 0);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x0800, 6); // UTF-8 이름
+    local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(method, 8);
     local.writeUInt16LE(time, 10);
     local.writeUInt16LE(day, 12);
@@ -56,7 +58,7 @@ export function makeZip(entries, { date = new Date() } = {}) {
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x0800, 8);
+    central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(method, 10);
     central.writeUInt16LE(time, 12);
     central.writeUInt16LE(day, 14);

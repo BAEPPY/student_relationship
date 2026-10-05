@@ -1,6 +1,7 @@
 // 배정표 내보내기: 한글(HWPX) · 워드(DOCX) 문서를 외부 라이브러리 없이 만듭니다.
 // 공통 문서 모델 → 형식별 XML. HWPX 구조는 한글이 저장한 실제 파일을 본떠 만들었습니다.
 import { makeZip } from './zipwrite.js';
+import { HEADER_XML, SETTINGS_XML, VERSION_XML } from './hwpx-template.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const paras = (cell) => (cell && typeof cell === 'object' && !Array.isArray(cell) ? String(cell.text ?? '') : String(cell ?? '')).split(/\r?\n/);
@@ -69,86 +70,90 @@ export function rolesDocument({ room, round, roles, students, assignment, reason
 }
 
 // ---------- HWPX ----------
+// 한글이 저장한 실제 문서의 머리 부분(header.xml 등)을 그대로 쓰고, 본문(section0.xml)은 그 문서의 표 구조를 본떠 만듭니다.
 
 const HWP_NS = 'xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hp10="http://www.hancom.co.kr/hwpml/2016/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core" xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hhs="http://www.hancom.co.kr/hwpml/2011/history" xmlns:hm="http://www.hancom.co.kr/hwpml/2011/master-page" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf/" xmlns:ooxmlchart="http://www.hancom.co.kr/hwpml/2016/ooxmlchart" xmlns:hwpunitchar="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"';
 const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>';
 
-// 쪽: A4 세로. 단위는 HWPUNIT (1/7200 인치)
+// 머리 부분(hwpx-template.js)에 정의된 id
+const CH = { body: 0, small: 2, note: 4, head: 7, cell: 8, cellBold: 9, cellSub: 12, title: 14, caption: 19 };
+const PA = { justify: 0, left: 11, center: 20 };
+const BF = { none: 1, line: 3 };
+
+// 쪽: A4 세로. 단위는 HWPUNIT (1/7200 인치). 여백은 한글 기본값(위 20mm, 아래 15mm, 좌우 20mm)에 가깝게.
 const PAGE = { width: 59528, height: 84186, left: 5669, right: 5669, top: 5669, bottom: 4252, header: 4252, footer: 4252 };
 const TEXT_WIDTH = PAGE.width - PAGE.left - PAGE.right; // 48190
 const CELL_MARGIN = { left: 510, right: 510, top: 141, bottom: 141 };
-const LINE = 1800; // 10pt 글자 + 줄 간격
 
-// 글자 모양: 0 보통, 1 굵게, 2 제목(16pt 굵게), 3 작은 회색
-// 문단 모양: 0 양쪽 정렬, 1 가운데, 2 제목(가운데·아래 여백), 3 왼쪽
-// 테두리: 1 없음(쪽), 2 없음(글자·문단 기본), 3 실선, 4 실선+회색 배경(머리글 칸)
-function charPr(id, { height = 1000, bold = false, color = '#000000', font = 0 } = {}) {
-  const ref = (v) => `hangul="${v}" latin="${v}" hanja="${v}" japanese="${v}" other="${v}" symbol="${v}" user="${v}"`;
-  return `<hh:charPr id="${id}" height="${height}" textColor="${color}" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2"><hh:fontRef ${ref(font)}/><hh:ratio ${ref(100)}/><hh:spacing ${ref(0)}/><hh:relSz ${ref(100)}/><hh:offset ${ref(0)}/>${bold ? '<hh:bold/>' : ''}<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/><hh:outline type="NONE"/><hh:shadow type="NONE" color="#B2B2B2" offsetX="10" offsetY="10"/></hh:charPr>`;
-}
-function paraPr(id, { align = 'JUSTIFY', next = 0, prev = 0, lineSpacing = 160 } = {}) {
-  const margin = `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="${prev}" unit="HWPUNIT"/><hc:next value="${next}" unit="HWPUNIT"/></hh:margin><hh:lineSpacing type="PERCENT" value="${lineSpacing}" unit="HWPUNIT"/>`;
-  return `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0"><hh:align horizontal="${align}" vertical="BASELINE"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/><hh:autoSpacing eAsianEng="0" eAsianNum="0"/><hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${margin}</hp:case><hp:default>${margin}</hp:default></hp:switch><hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>`;
-}
-function borderFill(id, { line = false, fill = null } = {}) {
-  const side = (name) => `<hh:${name} type="${line ? 'SOLID' : 'NONE'}" width="${line ? '0.12 mm' : '0.1 mm'}" color="#000000"/>`;
-  const brush = fill ? `<hc:fillBrush><hc:winBrush faceColor="${fill}" hatchColor="#999999" alpha="0"/></hc:fillBrush>` : (id === 2 ? '<hc:fillBrush><hc:winBrush faceColor="none" hatchColor="#999999" alpha="0"/></hc:fillBrush>' : '');
-  return `<hh:borderFill id="${id}" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/>${side('leftBorder')}${side('rightBorder')}${side('topBorder')}${side('bottomBorder')}<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>${brush}</hh:borderFill>`;
-}
-
-export function hwpxHeaderXml() {
-  const fonts = ['함초롬돋움', '함초롬바탕'];
-  const fontface = (lang) => `<hh:fontface lang="${lang}" fontCnt="${fonts.length}">${fonts.map((f, i) => `<hh:font id="${i}" face="${f}" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="4" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></hh:font>`).join('')}</hh:fontface>`;
-  const langs = ['HANGUL', 'LATIN', 'HANJA', 'JAPANESE', 'OTHER', 'SYMBOL', 'USER'];
-  const numbering = '<hh:numberings itemCnt="1"><hh:numbering id="1" start="0">' + [1, 2, 3, 4, 5, 6, 7].map((lv) => `<hh:paraHead start="1" level="${lv}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^${lv}.</hh:paraHead>`).join('') + '</hh:numbering></hh:numberings>';
-  return `${XML_HEAD}<hh:head ${HWP_NS} version="1.4" secCnt="1"><hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/><hh:refList><hh:fontfaces itemCnt="${langs.length}">${langs.map(fontface).join('')}</hh:fontfaces><hh:borderFills itemCnt="4">${borderFill(1)}${borderFill(2)}${borderFill(3, { line: true })}${borderFill(4, { line: true, fill: '#EEEEEE' })}</hh:borderFills><hh:charProperties itemCnt="4">${charPr(0)}${charPr(1, { bold: true })}${charPr(2, { height: 1600, bold: true })}${charPr(3, { height: 900, color: '#555555' })}</hh:charProperties><hh:tabProperties itemCnt="3"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/><hh:tabPr id="1" autoTabLeft="1" autoTabRight="0"/><hh:tabPr id="2" autoTabLeft="0" autoTabRight="1"/></hh:tabProperties>${numbering}<hh:paraProperties itemCnt="4">${paraPr(0)}${paraPr(1, { align: 'CENTER' })}${paraPr(2, { align: 'CENTER', next: 600 })}${paraPr(3, { align: 'LEFT' })}</hh:paraProperties><hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles></hh:refList><hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument><hh:docOption><hh:linkinfo path="" pageInherit="0" footnoteInherit="0"/></hh:docOption><hh:trackchageConfig flags="56"/></hh:head>`;
-}
+export function hwpxHeaderXml() { return HEADER_XML; }
 
 function secPr() {
-  const pbf = (type) => `<hp:pageBorderFill type="${type}" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>`;
+  const pbf = (type) => `<hp:pageBorderFill type="${type}" borderFillIDRef="${BF.none}" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>`;
   return `<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0"><hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/><hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/><hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/><hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/><hp:pagePr landscape="WIDELY" width="${PAGE.width}" height="${PAGE.height}" gutterType="LEFT_ONLY"><hp:margin header="${PAGE.header}" footer="${PAGE.footer}" gutter="0" left="${PAGE.left}" right="${PAGE.right}" top="${PAGE.top}" bottom="${PAGE.bottom}"/></hp:pagePr><hp:footNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="EACH_COLUMN" beneathText="0"/></hp:footNotePr><hp:endNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="END_OF_DOCUMENT" beneathText="0"/></hp:endNotePr>${pbf('BOTH')}${pbf('EVEN')}${pbf('ODD')}</hp:secPr><hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/></hp:ctrl>`;
 }
 
-/** 글자 수로 줄 수를 어림합니다 (한글 1000, 영숫자 500 단위 폭) */
-function estimateLines(text, innerWidth, charHeight = 1000) {
+/** 글자 수로 줄 수를 어림합니다 (한글은 글자 크기만큼, 영숫자는 그 절반 폭으로 봄) */
+function estimateLines(text, innerWidth, size) {
   let width = 0;
-  for (const ch of text) width += /[ᄀ-ᇿ㄰-㆏가-힯一-鿿＀-￯]/.test(ch) ? charHeight : charHeight * 0.55;
+  for (const ch of text) width += /[ᄀ-ᇿ㄰-㆏가-힯一-鿿＀-￯]/.test(ch) ? size : size * 0.55;
   return Math.max(1, Math.ceil(width / Math.max(1, innerWidth)));
 }
+const charHeight = (charPr) => ({ 0: 1000, 2: 900, 4: 900, 7: 1200, 8: 1300, 9: 1200, 12: 1200, 14: 1800, 19: 1500 }[charPr] || 1000);
 
 export function hwpxSectionXml(doc) {
-  let nextId = 1;
-  const pid = () => String(nextId++);
-  const lineseg = (vertsize, width) => `<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray>`;
-  const p = (text, { paraPr = 0, charPr = 0, width = TEXT_WIDTH, size = 1000, lead = '' } = {}) =>
-    `<hp:p id="${pid()}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(size, width)}</hp:p>`;
+  let nextId = 3121190098;
+  const topId = () => String(nextId++);
+  const lineseg = (vertsize, width, vertpos = 0) => `<hp:linesegarray><hp:lineseg textpos="0" vertpos="${vertpos}" vertsize="${vertsize}" textheight="${vertsize}" baseline="${Math.round(vertsize * 0.85)}" spacing="${Math.round(vertsize * 0.6)}" horzpos="0" horzsize="${width}" flags="393216"/></hp:linesegarray>`;
+  // 문단: 한글이 쓰는 속성 그대로. 셀 안 첫 문단은 id 2147483648, 그다음은 0 (한글 저장 파일과 같은 방식)
+  const p = (text, { id, paraPr = PA.justify, charPr = CH.body, width = TEXT_WIDTH, lead = '', vertpos = 0 } = {}) => {
+    const size = charHeight(charPr);
+    return `<hp:p id="${id}" paraPrIDRef="${paraPr}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${lead}<hp:run charPrIDRef="${charPr}">${text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>'}</hp:run>${lineseg(size, width, vertpos)}</hp:p>`;
+  };
+  const top = (text, opts = {}) => p(text, { id: topId(), ...opts });
 
   const table = (t) => {
     const cols = t.columns.map((c) => Math.round(TEXT_WIDTH * c.width));
     cols[cols.length - 1] += TEXT_WIDTH - cols.reduce((a, b) => a + b, 0);
-    const allRows = [t.header ? t.columns.map((c) => ({ text: c.label, bold: true, align: 'center', head: true })) : null, ...t.rows].filter(Boolean);
+    const allRows = [t.header ? t.columns.map((c) => ({ text: c.label, head: true })) : null, ...t.rows].filter(Boolean);
+    const styleOf = (cell, ci) => {
+      const o = cellOpts(cell);
+      if (o.head) return { paraPr: PA.center, charPr: CH.head };
+      if (o.bold) return { paraPr: PA.left, charPr: CH.cellBold, subCharPr: CH.cellSub };
+      if (o.align === 'center') return { paraPr: PA.center, charPr: CH.cell };
+      return { paraPr: ci === 0 ? PA.center : PA.left, charPr: CH.cell };
+    };
     const rowHeights = allRows.map((row) => Math.max(...row.map((cell, ci) => {
-      const lines = paras(cell).reduce((n, line) => n + estimateLines(line, cols[ci] - CELL_MARGIN.left - CELL_MARGIN.right), 0);
-      return lines * LINE + CELL_MARGIN.top + CELL_MARGIN.bottom + 300;
+      const st = styleOf(cell, ci);
+      const inner = cols[ci] - CELL_MARGIN.left - CELL_MARGIN.right;
+      const lines = paras(cell).reduce((n, line, li) => n + estimateLines(line, inner, charHeight(li && st.subCharPr ? st.subCharPr : st.charPr)), 0);
+      return Math.round(lines * charHeight(st.charPr) * 1.6) + CELL_MARGIN.top + CELL_MARGIN.bottom + 300;
     })));
     const height = rowHeights.reduce((a, b) => a + b, 0);
     const trs = allRows.map((row, ri) => `<hp:tr>${row.map((cell, ci) => {
-      const o = cellOpts(cell);
+      const st = styleOf(cell, ci);
       const inner = cols[ci] - CELL_MARGIN.left - CELL_MARGIN.right;
-      const body = paras(cell).map((line) => p(line, { paraPr: o.align === 'center' || o.head ? 1 : 3, charPr: o.head || o.bold ? 1 : 0, width: inner })).join('');
-      return `<hp:tc name="" header="${o.head ? 1 : 0}" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="${o.head ? 4 : 3}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body}</hp:subList><hp:cellAddr colAddr="${ci}" rowAddr="${ri}"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="${cols[ci]}" height="${rowHeights[ri]}"/><hp:cellMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/></hp:tc>`;
+      let vert = 0;
+      const body = paras(cell).map((line, li) => {
+        const charPr = li && st.subCharPr ? st.subCharPr : st.charPr;
+        const xml = p(line, { id: li ? '0' : '2147483648', paraPr: st.paraPr, charPr, width: inner, vertpos: vert });
+        vert += Math.round(charHeight(charPr) * 1.6);
+        return xml;
+      }).join('');
+      return `<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="${BF.line}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body}</hp:subList><hp:cellAddr colAddr="${ci}" rowAddr="${ri}"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="${cols[ci]}" height="${rowHeights[ri]}"/><hp:cellMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/></hp:tc>`;
     }).join('')}</hp:tr>`).join('');
-    const tbl = `<hp:tbl id="${pid()}" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="${allRows.length}" colCnt="${cols.length}" cellSpacing="0" borderFillIDRef="3" noAdjust="0"><hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="283" right="283" top="283" bottom="283"/><hp:inMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/>${trs}</hp:tbl>`;
-    return `${t.caption ? p(t.caption, { paraPr: 3, charPr: 1 }) : ''}<hp:p id="${pid()}" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">${tbl}<hp:t/></hp:run>${lineseg(height, TEXT_WIDTH)}</hp:p>`;
+    const tbl = `<hp:tbl id="${topId()}" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="${allRows.length}" colCnt="${cols.length}" cellSpacing="0" borderFillIDRef="${BF.line}" noAdjust="0"><hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="283" right="283" top="283" bottom="283"/><hp:inMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/>${trs}</hp:tbl>`;
+    const tablePara = `<hp:p id="${topId()}" paraPrIDRef="${PA.justify}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${CH.body}">${tbl}<hp:t/></hp:run>${lineseg(height, TEXT_WIDTH)}</hp:p>`;
+    return `${t.caption ? top(t.caption, { paraPr: PA.left, charPr: CH.caption }) : ''}${tablePara}`;
   };
 
   const body = [
-    p(doc.title, { paraPr: 2, charPr: 2, size: 1600, lead: `<hp:run charPrIDRef="0">${secPr()}</hp:run>` }),
-    ...doc.meta.map((m) => p(m, { paraPr: 1, charPr: 3, size: 900 })),
-    p(''),
-    ...doc.tables.flatMap((t, i) => [i ? p('') : '', table(t)]),
-    p(''),
-    ...doc.notes.map((n) => p(n, { paraPr: 3, charPr: 3, size: 900 })),
+    // 첫 문단: 구역·단 설정 + 제목 (한글 저장 파일처럼 첫 문단의 첫 run 에 secPr 이 들어갑니다)
+    top(doc.title, { paraPr: PA.center, charPr: CH.title, lead: `<hp:run charPrIDRef="${CH.body}">${secPr()}</hp:run>` }),
+    ...doc.meta.map((m) => top(m, { paraPr: PA.center, charPr: CH.small })),
+    top(''),
+    ...doc.tables.flatMap((t, i) => [i ? top('') : '', table(t)]),
+    top(''),
+    ...doc.notes.map((n) => top(n, { paraPr: PA.left, charPr: CH.note })),
   ].join('');
   return `${XML_HEAD}<hs:sec ${HWP_NS}>${body}</hs:sec>`;
 }
@@ -159,27 +164,26 @@ function hwpxContentHpf(title, now) {
 }
 
 const HWPX_STATIC = {
-  'version.xml': `${XML_HEAD}<hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR" major="5" minor="1" micro="0" buildNumber="1" os="1" xmlVersion="1.4" application="Hancom Office Hangul" appVersion="11, 0, 0, 1 WIN32LEWindows_10"/>`,
   'META-INF/container.xml': `${XML_HEAD}<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/><ocf:rootfile full-path="Preview/PrvText.txt" media-type="text/plain"/><ocf:rootfile full-path="META-INF/container.rdf" media-type="application/rdf+xml"/></ocf:rootfiles></ocf:container>`,
   'META-INF/manifest.xml': `${XML_HEAD}<odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>`,
   'META-INF/container.rdf': `${XML_HEAD}<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""><ns0:hasPart xmlns:ns0="http://www.hancom.co.kr/hwpml/2016/meta/pkg#" rdf:resource="Contents/header.xml"/></rdf:Description><rdf:Description rdf:about="Contents/header.xml"><rdf:type rdf:resource="http://www.hancom.co.kr/hwpml/2016/meta/pkg#HeaderFile"/></rdf:Description><rdf:Description rdf:about=""><ns0:hasPart xmlns:ns0="http://www.hancom.co.kr/hwpml/2016/meta/pkg#" rdf:resource="Contents/section0.xml"/></rdf:Description><rdf:Description rdf:about="Contents/section0.xml"><rdf:type rdf:resource="http://www.hancom.co.kr/hwpml/2016/meta/pkg#SectionFile"/></rdf:Description><rdf:Description rdf:about=""><rdf:type rdf:resource="http://www.hancom.co.kr/hwpml/2016/meta/pkg#Document"/></rdf:Description></rdf:RDF>`,
-  'settings.xml': `${XML_HEAD}<ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><ha:CaretPosition listIDRef="0" paraIDRef="0" pos="0"/></ha:HWPApplicationSetting>`,
 };
 
-/** 문서 모델 → HWPX(zip) */
+/** 문서 모델 → HWPX(zip). 항목 순서와 압축 방식은 한글 저장 파일과 같게 (mimetype 을 맨 앞에 압축 없이) */
 export function makeHwpxDocument(doc, { now = new Date() } = {}) {
   const preview = [doc.title, ...doc.meta, ...doc.tables.flatMap((t) => [t.caption || '', ...(t.header ? [t.columns.map((c) => c.label).join('\t')] : []), ...t.rows.map((r) => r.map((c) => paras(c).join(' ')).join('\t'))]), ...doc.notes].filter(Boolean).join('\n');
+  // 항목 순서와 압축 방식은 한글이 저장한 파일과 같게 (mimetype·version.xml 은 압축 없이)
   return makeZip([
     { name: 'mimetype', data: 'application/hwp+zip', store: true },
-    { name: 'version.xml', data: HWPX_STATIC['version.xml'] },
-    { name: 'META-INF/container.xml', data: HWPX_STATIC['META-INF/container.xml'] },
-    { name: 'META-INF/manifest.xml', data: HWPX_STATIC['META-INF/manifest.xml'] },
+    { name: 'version.xml', data: VERSION_XML, store: true },
+    { name: 'Contents/header.xml', data: HEADER_XML },
+    { name: 'Contents/section0.xml', data: hwpxSectionXml(doc) },
+    { name: 'Preview/PrvText.txt', data: preview },
+    { name: 'settings.xml', data: SETTINGS_XML },
     { name: 'META-INF/container.rdf', data: HWPX_STATIC['META-INF/container.rdf'] },
     { name: 'Contents/content.hpf', data: hwpxContentHpf(doc.title, now) },
-    { name: 'Contents/header.xml', data: hwpxHeaderXml() },
-    { name: 'Contents/section0.xml', data: hwpxSectionXml(doc) },
-    { name: 'settings.xml', data: HWPX_STATIC['settings.xml'] },
-    { name: 'Preview/PrvText.txt', data: preview },
+    { name: 'META-INF/container.xml', data: HWPX_STATIC['META-INF/container.xml'] },
+    { name: 'META-INF/manifest.xml', data: HWPX_STATIC['META-INF/manifest.xml'] },
   ], { date: now });
 }
 

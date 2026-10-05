@@ -23,6 +23,7 @@ describe('zip 만들기', () => {
     const buf = makeZip([{ name: 'mimetype', data: 'application/hwp+zip', store: true }, { name: 'a/b.xml', data: '<x>안녕 &amp; 잘가</x>' }], { date: new Date('2026-10-05T03:00:00Z') });
     assert.equal(buf.readUInt32LE(0), 0x04034b50);
     assert.equal(buf.readUInt16LE(8), 0, '첫 항목(mimetype)은 압축하지 않음');
+    assert.equal(buf.readUInt16LE(6), 0, '저장 항목 플래그 0');
     assert.equal(buf.subarray(30, 38).toString(), 'mimetype');
     const zip = readZip(buf);
     assert.deepEqual([...zip.keys()], ['mimetype', 'a/b.xml']);
@@ -58,14 +59,16 @@ describe('HWPX', () => {
   test('패키지 구성과 XML 이 한글 저장 파일 구조를 따른다', () => {
     const buf = buildRolesHwpx({ ...input, reasons: true });
     const zip = readZip(buf);
-    assert.deepEqual([...zip.keys()], ['mimetype', 'version.xml', 'META-INF/container.xml', 'META-INF/manifest.xml', 'META-INF/container.rdf', 'Contents/content.hpf', 'Contents/header.xml', 'Contents/section0.xml', 'settings.xml', 'Preview/PrvText.txt']);
+    assert.deepEqual([...zip.keys()], ['mimetype', 'version.xml', 'Contents/header.xml', 'Contents/section0.xml', 'Preview/PrvText.txt', 'settings.xml', 'META-INF/container.rdf', 'Contents/content.hpf', 'META-INF/container.xml', 'META-INF/manifest.xml'], '한글 저장 파일과 같은 순서');
+    assert.equal(buf.readUInt16LE(6), 0, 'mimetype 플래그 0');
     assert.equal(zip.get('mimetype')().toString(), 'application/hwp+zip');
     assert.equal(buf.readUInt16LE(8), 0, 'mimetype 은 압축 없이 첫 항목');
     const header = zip.get('Contents/header.xml')().toString();
     assert.match(header, /^<\?xml version="1\.0" encoding="UTF-8" standalone="yes" \?><hh:head /);
-    for (const tag of ['hh:fontfaces itemCnt="7"', 'hh:borderFills itemCnt="4"', 'hh:charProperties itemCnt="4"', 'hh:paraProperties itemCnt="4"', 'hh:styles itemCnt="1"', 'hh:compatibleDocument', 'hh:trackchageConfig']) assert.ok(header.includes(tag), tag);
-    assert.equal((header.match(/<hh:charPr /g) || []).length, 4);
+    // 머리 부분은 한글이 저장한 실제 문서의 것을 그대로 씀
+    for (const tag of ['hh:fontfaces itemCnt="7"', 'hh:borderFills itemCnt="3"', 'hh:charProperties itemCnt="20"', 'hh:paraProperties itemCnt="21"', 'hh:styles itemCnt="22"', 'hh:compatibleDocument', 'hh:trackchageConfig']) assert.ok(header.includes(tag), tag);
     assert.ok(header.includes('<hh:bold/>'), '굵은 글자 모양');
+    assert.ok(!/\b(user|lastsaveby)\b/.test(header.replace(/user="-?\d+"/g, '')), '머리 부분에 작성자 정보 없음');
     const section = zip.get('Contents/section0.xml')().toString();
     assert.ok(section.startsWith('<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec '));
     assert.ok(section.includes('<hp:secPr '), '첫 문단에 구역 설정');
@@ -77,9 +80,16 @@ describe('HWPX', () => {
     // 셀마다 cellAddr · cellSpan · cellSz · cellMargin 이 subList 뒤에
     assert.match(section, /<\/hp:subList><hp:cellAddr colAddr="0" rowAddr="0"\/><hp:cellSpan colSpan="1" rowSpan="1"\/><hp:cellSz width="\d+" height="\d+"\/><hp:cellMargin /);
     // 모든 참조 id 가 header 에 있음
-    for (const m of section.matchAll(/charPrIDRef="(\d+)"/g)) assert.ok(Number(m[1]) <= 3, `charPr ${m[1]}`);
-    for (const m of section.matchAll(/paraPrIDRef="(\d+)"/g)) assert.ok(Number(m[1]) <= 3, `paraPr ${m[1]}`);
-    for (const m of section.matchAll(/borderFillIDRef="(\d+)"/g)) assert.ok(Number(m[1]) >= 1 && Number(m[1]) <= 4, `borderFill ${m[1]}`);
+    const ids = (re) => new Set([...header.matchAll(re)].map((m) => m[1]));
+    const charIds = ids(/<hh:charPr id="(\d+)"/g);
+    const paraIds = ids(/<hh:paraPr id="(\d+)"/g);
+    const borderIds = ids(/<hh:borderFill id="(\d+)"/g);
+    for (const m of section.matchAll(/charPrIDRef="(\d+)"/g)) assert.ok(charIds.has(m[1]), `charPr ${m[1]}`);
+    for (const m of section.matchAll(/paraPrIDRef="(\d+)"/g)) assert.ok(paraIds.has(m[1]), `paraPr ${m[1]}`);
+    for (const m of section.matchAll(/borderFillIDRef="(\d+)"/g)) assert.ok(borderIds.has(m[1]), `borderFill ${m[1]}`);
+    // 셀 문단 id 는 한글 저장 파일과 같은 방식 (첫 문단 2147483648, 다음 문단 0)
+    assert.ok(section.includes('<hp:p id="2147483648" paraPrIDRef="20"'));
+    assert.ok(section.includes('<hp:p id="0" paraPrIDRef="'));
     // 열 너비 합 = 본문 너비
     const widths = [...section.matchAll(/<hp:cellSz width="(\d+)"/g)].slice(0, 3).map((m) => Number(m[1]));
     assert.equal(widths.reduce((a, b) => a + b, 0), 48190);
@@ -106,6 +116,7 @@ describe('HWPX', () => {
     assert.ok(xml.includes('<hp:t>A &amp; B &lt;C&gt; &quot;D&quot;</hp:t>'));
     assert.ok(xml.includes('<hp:t>1 &lt; 2 &amp; 3</hp:t>'));
     assert.ok(hwpxHeaderXml().includes('함초롬돋움'));
+    assert.ok(hwpxHeaderXml().includes('강원교육모두'));
   });
 });
 

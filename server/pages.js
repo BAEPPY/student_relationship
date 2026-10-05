@@ -109,7 +109,7 @@ export const teacher = `<!doctype html>
   <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
+<body class="teacher">
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>

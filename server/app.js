@@ -804,7 +804,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const doc = extractDocument(req.body, uploadedName(req));
     const text = documentToText(doc).slice(0, 20000);
     const tables = doc.blocks.filter((b) => b.type === 'table').length;
-    res.json({ format: doc.format, tables, text, ...parseHistoryText(text, room.students, roles) });
+    const parsed = parseHistoryText(text, room.students, roles);
+    // 반 명단과 맞는 이름이 없을 때 선생님이 원인을 알 수 있도록, 파일에서 읽힌 이름을 함께 돌려줍니다.
+    const foundNames = extractRoster(doc).names.slice(0, 60);
+    res.json({ format: doc.format, tables, paragraphs: doc.blocks.filter((b) => b.type === 'p').length, text, foundNames, ...parsed });
   });
 
   // 파일 업로드 → 역할 목록 미리보기 (저장하지 않음; 선생님이 편집기에서 확인한 뒤 저장)
@@ -813,7 +816,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const doc = extractDocument(req.body, uploadedName(req));
     const knownNames = [...DEFAULT_ROLES, ...roomRoles(room)].map((r) => r.name);
     const tables = doc.blocks.filter((b) => b.type === 'table').length;
-    res.json({ format: doc.format, tables, ...extractRoles(doc, { knownNames }) });
+    res.json({ format: doc.format, tables, paragraphs: doc.blocks.filter((b) => b.type === 'p').length, preview: documentToText(doc).slice(0, 800), ...extractRoles(doc, { knownNames }) });
   });
 
   // 배정표 내보내기: 한글(hwpx) · 워드(docx). 공개 여부와 상관없이 지금 저장된 배정으로 만듭니다.

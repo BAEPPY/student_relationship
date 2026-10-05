@@ -22,7 +22,7 @@ const ui = {
   open: { roles: true, history: true, apps: true, board: true, export: true },
   roles: { draft: [], dirty: false, notice: null, busy: false },
   export: { reasons: false },
-  history: { month: null, text: '', preview: null, expanded: new Set(), busy: false },
+  history: { month: null, text: '', preview: null, expanded: new Set(), busy: false, notice: null },
   apps: { expanded: new Set(), criteriaOpen: false },
   board: { assignments: {}, explanations: {}, dirty: false, selected: null, dragging: null, explain: new Set(), busy: null, seed: 1 },
   skipGuard: false,
@@ -236,7 +236,9 @@ async function importRolesFile() {
     const result = await uploadFile(`${base}/roles/upload`, file);
     const found = result.roles || [];
     if (!found.length) {
-      ui.roles.notice = { kind: 'warn', text: `"${file.name}"에서 역할 목록을 찾지 못했어요. ${(result.warnings || []).join(' ')} 표(역할 이름 · 설명)가 있는 문서를 올리거나, 아래 표에 직접 적어 주세요.` };
+      const what = `표 ${result.tables || 0}개 · 문단 ${result.paragraphs || 0}개`;
+      const snippet = (result.preview || '').split('\n').slice(0, 4).join(' / ').slice(0, 160);
+      ui.roles.notice = { kind: 'warn', text: `"${file.name}"에서 역할 목록을 찾지 못했어요. (${what}) ${(result.warnings || []).join(' ')} 첫 열에 역할 이름, 다른 열에 설명이 있는 표가 있어야 해요.${snippet ? ` 읽힌 내용 앞부분: "${snippet}"` : ''}` };
     } else {
       const draft = ui.roles.draft;
       let replace = true;
@@ -371,6 +373,7 @@ async function importHistoryFile() {
   if (!file) return;
   ui.history.busy = true;
   renderAll();
+  ui.history.notice = null;
   try {
     const result = await uploadFile(`${base}/roles/history/upload`, file);
     ui.history.text = result.text || '';
@@ -378,9 +381,26 @@ async function importHistoryFile() {
     for (const r of state.roles) assignments[r.id] = [...(result.assignments?.[r.id] || [])];
     ui.history.preview = { assignments, unmatched: result.unmatched || [] };
     const n = Object.values(assignments).flat().length;
-    if (!ui.history.text.trim()) toast(`"${file.name}"에서 읽을 수 있는 글을 찾지 못했어요.`, 4000);
-    else toast(n ? `"${file.name}"에서 ${n}명을 찾았어요. 확인한 뒤 저장해 주세요.` : '파일은 읽었지만 반 명단과 같은 이름을 찾지 못했어요. 아래 글을 고친 뒤 미리보기를 눌러 주세요.', 4500);
-  } catch (err) { toast(err.message, 4500); }
+    const what = `표 ${result.tables || 0}개 · 문단 ${result.paragraphs || 0}개`;
+    if (!ui.history.text.trim()) {
+      ui.history.notice = { kind: 'warn', text: `"${file.name}"에서 읽을 수 있는 글을 찾지 못했어요. (${what}) 한글에서 "다른 이름으로 저장"으로 hwpx 로 저장한 파일을 올리거나, 표를 복사해 붙여넣어 주세요.` };
+      toast(`"${file.name}"에서 읽을 수 있는 글을 찾지 못했어요.`, 4000);
+    } else if (!n) {
+      const found = result.foundNames || [];
+      const roster = new Set(state.students.map((s) => s.name));
+      const notInRoster = found.filter((x) => !roster.has(x));
+      ui.history.notice = {
+        kind: 'warn',
+        text: found.length
+          ? `파일은 읽었지만(${what}) 반 명단과 같은 이름이 없어요. 파일에서 읽힌 이름 ${found.length}명: ${found.slice(0, 30).join(', ')}${found.length > 30 ? ' …' : ''}. ${notInRoster.length ? `이 이름들이 이 교실 학생 목록(${state.students.length}명)에 없어요. 다른 교실 파일이 아닌지, 이름이 똑같이 적혀 있는지 확인해 주세요.` : ''}`
+          : `파일은 읽었지만(${what}) 학생 이름을 찾지 못했어요. 아래 글을 확인하고 "번호 이름" 형식으로 고친 뒤 미리보기를 눌러 주세요.`,
+      };
+      toast('파일은 읽었지만 반 명단과 같은 이름을 찾지 못했어요.', 4500);
+    } else {
+      ui.history.notice = n < state.students.length ? { kind: 'info', text: `"${file.name}"에서 ${n}명을 찾았어요. (${what}) 아직 ${state.students.length - n}명은 역할이 없어요. 파일에 없거나 이름이 달라서일 수 있으니 미리보기에서 더해 주세요.` } : null;
+      toast(`"${file.name}"에서 ${n}명을 찾았어요. 확인한 뒤 저장해 주세요.`, 4500);
+    }
+  } catch (err) { toast(err.message, 4500); ui.history.notice = { kind: 'error', text: err.message }; }
   ui.history.busy = false;
   renderAll();
 }
@@ -477,6 +497,7 @@ function renderHistory() {
         input('input', { type: 'text', maxlength: 40, placeholder: '예: 2026년 9월' }, ui.history.month, (v) => { ui.history.month = v; }),
         prev.month ? null : el('span', { class: 'muted', text: `(${state.round.name} 의 바로 전 달이면 제외 규칙에 쓰여요)` }),
       ]),
+      ui.history.notice ? el('div', { class: `alert ${ui.history.notice.kind}`, style: { marginBottom: '8px' }, text: ui.history.notice.text }) : null,
       input('textarea', { placeholder, rows: 8 }, ui.history.text, (v) => { ui.history.text = v; }),
       el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
         el('button', { type: 'button', class: 'btn primary', text: ui.history.busy ? '읽는 중…' : '미리보기', disabled: ui.history.busy ? true : null, onClick: previewHistory }),
@@ -868,15 +889,51 @@ function renderBoard() {
 }
 
 // ---------- 6. 결과 내보내기 ----------
-function exportText() {
-  const lines = [`${state.room.name} · ${state.round.name} 1인 1역`, '역할 · 학생', ''];
-  for (const r of state.roles) {
+/** 배정표 행: [역할, 인원, 담당 학생(번호 이름)] — 번호는 명단 순서 */
+function exportRows() {
+  const index = new Map(state.students.map((s, i) => [s.id, i + 1]));
+  const label = (sid) => `${index.get(sid) ?? '?'} ${nameOf(sid)}`;
+  const rows = state.roles.map((r) => {
     const sids = ui.board.assignments[r.id] || [];
-    lines.push(`${r.name}${r.subtitle ? ` (${r.subtitle})` : ''}: ${sids.length ? sids.map(nameOf).join(', ') : '(없음)'}`);
-  }
+    const empty = Math.max(0, r.slots - sids.length);
+    return [r.subtitle ? `${r.name} (${r.subtitle})` : r.name, `${r.slots}명`, [sids.map(label).join('  '), empty ? `(빈자리 ${empty})` : ''].filter(Boolean).join(' ')];
+  });
   const un = unassignedStudents();
-  if (un.length) lines.push('', `아직 배정 안 됨: ${un.map((s) => s.name).join(', ')}`);
-  return lines.join('\n');
+  if (un.length) rows.push(['아직 배정 안 됨', '', un.map((s) => label(s.id)).join('  ')]);
+  return rows;
+}
+const EXPORT_HEAD = ['역할명', '인원', '이번 달 담당 (번호 이름)'];
+
+/** 탭으로 나눈 글 (엑셀·구글 시트에 붙이면 칸이 나뉨) */
+function exportText() {
+  return [EXPORT_HEAD, ...exportRows()].map((r) => r.join('\t')).join('\n');
+}
+
+/** 진짜 표로 복사: HTML 표(한글·워드·구글 문서에 붙이면 표가 됨) + 탭 구분 글을 함께 넣습니다. */
+async function copyTable() {
+  const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const title = `${state.room.name} · ${state.round.name} 1인 1역 배정표`;
+  const html = `<meta charset="utf-8"><p><b>${escapeHtml(title)}</b></p><table border="1" style="border-collapse:collapse"><thead><tr>${EXPORT_HEAD.map((h) => `<th style="background:#eee;padding:4px 8px">${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${exportRows().map((r) => `<tr>${r.map((c, i) => `<td style="padding:4px 8px${i === 1 ? ';text-align:center' : ''}">${escapeHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const text = `${title}\n${exportText()}`;
+  try {
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+      return toast('표를 복사했어요. 한글·워드·알림장에 붙여 넣으면 표로 들어가요.', 3500);
+    }
+  } catch { /* 아래 방법으로 */ }
+  // 예비: 화면의 표를 선택해 복사 (HTML + 글이 함께 들어감)
+  try {
+    const node = document.querySelector('#export-card .export-table');
+    const range = document.createRange();
+    range.selectNode(node);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const ok = document.execCommand('copy');
+    sel.removeAllRanges();
+    if (ok) return toast('표를 복사했어요. 한글·워드·알림장에 붙여 넣으면 표로 들어가요.', 3500);
+  } catch { /* 마지막 방법 */ }
+  await copyText(text);
 }
 
 /** 배정표 파일 주소 (보는 회차 기준) */
@@ -888,19 +945,41 @@ function exportUrl(kind) {
 }
 const exportFileName = (kind) => `1인1역_${(state?.round?.name || '배정표').replace(/[\\/:*?"<>|]+/g, ' ').trim()}.${kind}`;
 
+/** 파일을 받아서 정해진 이름으로 저장합니다 (브라우저가 이름을 못 정하는 경우를 막음). */
+async function downloadExport(kind) {
+  if (!state.roleAssignment) return toast('먼저 배정을 저장해 주세요.');
+  const name = exportFileName(kind);
+  toast(`${kind === 'hwpx' ? '한글' : '워드'} 파일을 만드는 중…`, 1500);
+  try {
+    const res = await fetch(exportUrl(kind));
+    if (!res.ok) {
+      let msg = `파일을 만들지 못했어요 (${res.status})`;
+      try { msg = (await res.json()).error || msg; } catch { /* 본문 없음 */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: name, style: { display: 'none' } });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    toast(`${name} 파일을 내려받았어요. ${kind === 'hwpx' ? '한글 2014 이상에서 열어 주세요. 열리지 않으면 워드 파일을 써 주세요.' : '워드와 한글 모두에서 열려요.'}`, 5000);
+  } catch (err) { toast(err.message, 4500); }
+}
+
 function renderExport() {
-  const text = exportText();
   const body = () => [
-    el('p', { class: 'muted', text: '아래 표를 복사해 학급 게시판이나 알림장에 붙여 넣을 수 있어요. "인쇄"를 누르면 배정표만 깔끔하게 인쇄돼요.' }),
+    el('p', { class: 'muted', text: '"표 복사"를 누르면 아래 표가 그대로 복사돼서 한글·워드·알림장에 붙여 넣으면 표로 들어가요. (엑셀·구글 시트에 붙이면 칸이 나뉘어요) "인쇄"를 누르면 배정표만 깔끔하게 인쇄돼요.' }),
     el('div', { class: 'table-wrap' }, [el('table', { class: 'table export-table' }, [
-      el('thead', {}, [el('tr', {}, [el('th', { text: '역할' }), el('th', { text: '학생' })])]),
-      el('tbody', {}, [
-        ...state.roles.map((r) => el('tr', {}, [el('td', { style: { fontWeight: 600, whiteSpace: 'nowrap' }, text: r.name }), el('td', { text: (ui.board.assignments[r.id] || []).map(nameOf).join(', ') || '–' })])),
-        unassignedStudents().length ? el('tr', {}, [el('td', { class: 'muted', text: '아직 배정 안 됨' }), el('td', { class: 'muted', text: unassignedStudents().map((s) => s.name).join(', ') })]) : null,
-      ]),
+      el('thead', {}, [el('tr', {}, EXPORT_HEAD.map((h) => el('th', { text: h })))]),
+      el('tbody', {}, exportRows().map((r, i, arr) => el('tr', { class: i === arr.length - 1 && r[0] === '아직 배정 안 됨' ? 'muted' : '' }, [
+        el('td', { style: { fontWeight: 600, whiteSpace: 'nowrap' }, text: r[0] }),
+        el('td', { style: { textAlign: 'center', whiteSpace: 'nowrap' }, text: r[1] }),
+        el('td', { text: r[2] || '–' }),
+      ]))),
     ])]),
     el('div', { class: 'btn-row', style: { marginTop: '10px' } }, [
-      el('button', { type: 'button', class: 'btn primary', text: '표 복사', onClick: () => copyText(text) }),
+      el('button', { type: 'button', class: 'btn primary', text: '표 복사', title: '한글·워드·알림장에 붙여 넣으면 표로 들어가요', onClick: copyTable }),
       el('button', { type: 'button', class: 'btn', text: '인쇄', onClick: () => { ui.open.board = true; renderAll(); window.print(); } }),
       ui.board.dirty ? el('span', { class: 'muted', text: '저장하지 않은 수정 내용도 포함돼요.' }) : null,
     ]),
@@ -908,8 +987,8 @@ function renderExport() {
       el('h3', { text: '파일로 내려받기' }),
       el('p', { class: 'muted', text: '서버에 저장된 배정으로 배정표 문서를 만들어요. 역할명 · 인원 · 담당 학생(번호 이름) 표가 들어가고, 다음 달 "지난달 현황 가져오기"에 그대로 올릴 수 있어요.' + (ui.board.dirty ? ' 지금 수정 중인 내용은 "초안 저장"을 누른 뒤에 반영돼요.' : '') }),
       el('div', { class: 'btn-row' }, [
-        el('a', { class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-hwpx', href: exportUrl('hwpx'), download: exportFileName('hwpx'), text: '📄 한글 파일 (.hwpx)', title: '한글 2014 이상에서 열려요', onClick: (e) => { if (!state.roleAssignment) { e.preventDefault(); toast('먼저 배정을 저장해 주세요.'); } } }),
-        el('a', { class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-docx', href: exportUrl('docx'), download: exportFileName('docx'), text: '📄 워드 파일 (.docx)', title: '워드·한글 모두 열려요', onClick: (e) => { if (!state.roleAssignment) { e.preventDefault(); toast('먼저 배정을 저장해 주세요.'); } } }),
+        el('button', { type: 'button', class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-hwpx', text: '📄 한글 파일 (.hwpx)', title: '한글 2014 이상에서 열려요', onClick: () => downloadExport('hwpx') }),
+        el('button', { type: 'button', class: `btn ${state.roleAssignment ? '' : 'disabled'}`, id: 'export-docx', text: '📄 워드 파일 (.docx)', title: '워드·한글 모두 열려요', onClick: () => downloadExport('docx') }),
         el('label', { class: 'check', style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, [
           el('input', { type: 'checkbox', id: 'export-reasons', checked: ui.export.reasons ? true : null, onChange: (e) => { ui.export.reasons = e.target.checked; renderAll(); } }),
           '학생별 배정 이유 표도 넣기 (선생님 참고용)',

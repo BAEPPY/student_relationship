@@ -627,6 +627,7 @@ const ROSTER_STOP = new Set([
 // 이 낱말 바로 앞뒤의 이름은 선생님 이름이므로 뺍니다.
 const TEACHER_MARK = new Set(['담임', '부담임', '선생님', '교사', '교장', '교감']);
 const NAME_SHAPE = /^[가-힣]{2,4}[A-Za-z]?$/;          // 한글 2~4자 + 구분용 영문 한 글자(김민준A)
+const UNIT_AFTER_NUMBER = /^(월|일|명|반|학년|번째|시|분|초|개|장|회|차|교시|학기|주|년|층|호|조|등|점|권|쪽|페이지|명의|월의|일의|반의|학년의|교시의|주의|번의)[가-힣]{0,2}$/;
 const ROSTER_WORD = /\d+|[가-힣]+[A-Za-z]?|[A-Za-z]+|[^\s\d가-힣A-Za-z]/g;
 const NUM_MARK = /^[.)）\]:：\-~,，、/·•‧∙ㆍ;；|]$/;   // "1." "1)" "1," 처럼 번호 뒤에 오는 표시·구분자 (번호를 유지)
 const ROSTER_NAME_HEADER = /이름|성명|^학생$|^name$/i;
@@ -682,6 +683,8 @@ function scanEntries(text) {
       continue;
     }
     if (!NAME_SHAPE.test(w) || ROSTER_STOP.has(syl)) { pending = null; continue; }
+    // "9월의", "3반", "2명" 처럼 숫자에 붙은 단위 낱말은 이름이 아님
+    if (pending !== null && UNIT_AFTER_NUMBER.test(syl)) { pending = null; continue; }
     let num = pending;
     pending = null;
     // 이름 뒤에 "(3)" / "(3번)"
@@ -777,7 +780,8 @@ function rosterFromLines(lines) {
     if (line.length > 60 && !/\d/.test(line)) { carry = null; continue; }   // 숫자 없는 긴 줄은 문장
     const chunks = line.split(LINE_SEP).map(collapseSpacedName).filter(Boolean);
     const entries = scanEntries(chunks.join(' , '));   // 토막을 합쳐 읽어야 "1, 김하늘" 의 번호가 이어짐
-    if (carry !== null && entries.length && entries[0].num === null) entries[0].num = carry;
+    // 번호만 있던 앞줄은 다음 줄이 이름 하나로 된 짧은 줄일 때만 이어 붙입니다 ("2" 다음 "칭찬 수집가 | 3 | …" 같은 표 줄에는 붙이지 않음)
+    if (carry !== null && entries.length === 1 && entries[0].num === null && line.length <= 8 && entries[0].surname) entries[0].num = carry;
     carry = null;
     if (!entries.length) continue;
     // 토막이 목록 꼴인지: 한글 낱말이 모두 이름(성씨로 시작하거나 번호가 붙은)·머리말·구분 낱말뿐이어야 함 ("하늘은 맑고" 같은 문장 조각을 거르기 위해)
