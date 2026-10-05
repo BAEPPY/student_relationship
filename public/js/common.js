@@ -76,6 +76,23 @@ export async function copyText(text) {
   }
 }
 
+/** 글(text/plain)과 HTML 을 함께 복사합니다. 붙여 넣는 곳에 따라 서식이 있는 쪽을 씁니다. */
+export async function copyRich({ text, html, message = '복사했어요.' }) {
+  try {
+    if (html && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+      toast(message, 3500);
+      return;
+    }
+  } catch { /* 아래 방법으로 */ }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(message, 3500);
+  } catch {
+    window.prompt('아래 내용을 복사하세요.', text);
+  }
+}
+
 export const TYPE_LABEL = { good: '좋은 사이', bad: '안 좋은 사이' };
 export const TYPE_ICON = { good: '❤️', bad: '⚡' };
 

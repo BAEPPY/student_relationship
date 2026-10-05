@@ -1,4 +1,4 @@
-import { api, el, toast, copyText, fmtDate, savedRooms, setChildren, TYPE_LABEL, TYPE_ICON } from './common.js';
+import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, TYPE_LABEL, TYPE_ICON } from './common.js';
 import { RelationGraph } from './graph.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -926,6 +926,15 @@ function renderHistory() {
 }
 
 // ---------- 학생 목록 ----------
+/** "이름 - 링크" 를 한 줄씩 복사해요 (글 + HTML 목록). 클래스룸·메신저에 붙여 넣기용. */
+function copyStudentLinks(list, label = '') {
+  if (!list.length) return toast('복사할 학생이 없어요.');
+  const text = list.map((s) => `${s.name} - ${s.url}`).join('\n');
+  const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const html = `<meta charset="utf-8">${list.map((s) => `<p>${escapeHtml(s.name)} - <a href="${escapeHtml(s.url)}">${escapeHtml(s.url)}</a></p>`).join('')}`;
+  copyRich({ text, html, message: `${label ? `${label} ` : ''}학생 ${list.length}명의 "이름 - 링크"를 복사했어요. 학생별로 따로 보내 주세요.` });
+}
+
 // 학생별 성향 설문 · 지원서 제출 표시 (지원서는 역할 목록이 있을 때만)
 function statusIcons(sid) {
   const profile = state.profiles?.[sid] || null;
@@ -993,7 +1002,17 @@ function renderStudents() {
   const submitted = students.filter((s) => s.submitted).length;
   setChildren(card,
     cardTitle('학생 목록', '이름을 누르면 관계도와 상세 패널에서 그 학생을 볼 수 있어요. "받은"은 친구들이 나를 고른 수, "보낸"은 내가 고른 수예요.',
-      el('span', { class: 'badge gray', text: `${students.length}명 · 제출 ${submitted}명` })),
+      el('div', { class: 'btn-row' }, [
+        el('span', { class: 'badge gray', text: `${students.length}명 · 제출 ${submitted}명` }),
+        el('button', { type: 'button', class: 'btn small', id: 'copy-all-links', text: '📋 이름 - 링크 모두 복사', title: '학생마다 "이름 - 링크" 한 줄씩 복사해요', onClick: () => copyStudentLinks(students) }),
+        students.some((s) => !s.submitted) ? el('button', { type: 'button', class: 'btn small', id: 'copy-pending-links', text: '미제출 학생만 복사', onClick: () => copyStudentLinks(students.filter((s) => !s.submitted), '미제출') }) : null,
+      ])),
+    el('div', { class: 'alert warn links-warning', style: { marginBottom: '12px' } }, [
+      el('b', { text: '링크는 학생마다 비밀이에요. ' }),
+      '한 글에 모든 링크를 올리면 친구 링크도 열어 볼 수 있으니, 클래스룸에서는 ',
+      el('b', { text: '학생별로 "특정 학생에게 게시"하거나 비공개 댓글' }),
+      '로 한 줄씩 보내 주세요. 복사한 목록은 선생님이 나눠 보낼 때 쓰기 좋아요.',
+    ]),
     el('div', { class: 'students-wrap' }, [el('table', { class: 'table students-table' }, [
       el('thead', {}, [
         el('tr', {}, [
