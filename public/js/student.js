@@ -320,8 +320,8 @@ function renderProfile() {
   });
   if (bodyRows.length) {
     app.append(el('section', { class: 'card', id: 'body-card' }, [
-      el('div', { class: 'card-title' }, [el('h2', { text: '② 내 몸은 이런 편이에요' })]),
-      el('p', { class: 'muted', text: '자리를 정할 때 참고해. 해당하는 게 없으면 "보통이에요"를 고르거나 비워 둬도 돼.' }),
+      el('div', { class: 'card-title' }, [el('h2', { text: '② 참고해 주세요' })]),
+      el('p', { class: 'muted', text: '선생님이 자리를 정할 때 참고할게. 해당하는 게 없으면 "보통이에요"를 고르거나 비워 둬도 돼.' }),
       ...bodyRows,
     ]));
   }
