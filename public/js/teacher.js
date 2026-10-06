@@ -950,10 +950,22 @@ function copyStudentLinks(list, label = '') {
 }
 
 // 학생별 성향 설문 · 지원서 제출 표시 (지원서는 역할 목록이 있을 때만)
+/** 학생이 "나는 이런 편이에요"에서 고른 몸 특징 (예: ['👓 눈 나쁨', '❄️ 추위 잘 탐']) */
+function bodyLabelsOf(sid) {
+  const body = state.students.find((s) => s.id === sid)?.body || {};
+  const out = [];
+  for (const t of state.bodyTraits || []) {
+    const opt = t.options.find((o) => o.id === body[t.id]);
+    if (opt?.short) out.push(`${opt.icon ? `${opt.icon} ` : ''}${opt.short}`);
+  }
+  return out;
+}
+
 function statusIcons(sid) {
   const profile = state.profiles?.[sid] || null;
   const application = state.applications?.[sid] || null;
   const firstChoice = application?.choices?.[0]?.roleId;
+  const bodyLabels = bodyLabelsOf(sid);
   const icons = [
     el('span', {
       class: `status-icon ${profile ? 'done' : 'todo'}`, 'data-kind': 'profile',
@@ -968,6 +980,7 @@ function statusIcons(sid) {
       text: application ? '지원서 ✓' : '지원서 –',
     }));
   }
+  if (bodyLabels.length) icons.push(el('span', { class: 'status-icon body', 'data-kind': 'body', title: `학생이 고른 몸 특징: ${bodyLabels.join(', ')} (자리 배정에 참고)`, text: bodyLabels.map((t) => t.split(' ')[0]).filter((t) => /\p{Extended_Pictographic}/u.test(t)).join('') || '특징' }));
   return el('div', { class: 'status-icons' }, icons);
 }
 

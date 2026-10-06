@@ -14,6 +14,10 @@ let layout = { blocks: [{ cols: 2, rows: 4 }, { cols: 2, rows: 5 }, { cols: 2, r
 let seats = {};                  // seatId -> studentId
 let pinned = new Set();
 let options = { friends: 'any' };
+let zones = {};                  // seatId -> 'ac' (냉난방기 바람이 닿는 자리)
+let climate = 'off';             // 'cool' 냉방 중 | 'warm' 난방 중 | 'off'
+let zoneMode = false;            // 켜면 자리를 눌러 바람 자리를 표시/해제
+let bodies = {};                 // studentId -> 학생이 고른 몸 특징 { sight, height, cold, heat }
 let notes = {};                  // studentId -> { memo, front }
 let rules = [];                  // [{ type: 'apart'|'together', a, b, note }]
 let selected = null;             // 선택된 seatId
@@ -89,10 +93,26 @@ function buildRelations() {
   prob = {};
   for (const p of data.analysis.pairs) prob[pairKey(p.a, p.b)] = p;
   isolated = new Set(Object.values(data.analysis.studentRisk).filter((s) => s.flags.includes('isolated')).map((s) => s.id));
+  bodies = Object.fromEntries(data.students.map((s) => [s.id, s.body || {}]));
 }
 const rel = (a, b) => relType[a]?.[b] || 'none';
 const ruleOf = (a, b) => rules.find((r) => pairKey(r.a, r.b) === pairKey(a, b)) || null;
 const needsFront = (sid) => Boolean(notes[sid]?.front);
+const bodyOf = (sid) => bodies[sid] || {};
+const blockRowsOf = (seatId) => layout.blocks[Number(seatId.slice(1).split('-')[0])]?.rows || 1;
+/** 바람 자리가 지금 어떻게 느껴지는지: 냉방 중이면 '시원함', 난방 중이면 '따뜻함', 꺼져 있으면 null */
+const zoneFeel = (seatId) => (zones[seatId] === 'ac' && climate !== 'off' ? (climate === 'cool' ? 'cool' : 'warm') : null);
+const CLIMATE_LABEL = { cool: '냉방 중 · 바람 자리가 시원해요', warm: '난방 중 · 바람 자리가 따뜻해요', off: '냉난방기 꺼짐 · 바람 자리 영향 없음' };
+/** 학생이 고른 몸 특징의 짧은 표시 (예: ['👓 눈 나쁨', '❄️ 추위 잘 탐']) */
+function bodyLabels(sid) {
+  const body = bodyOf(sid);
+  const out = [];
+  for (const t of data.bodyTraits || []) {
+    const opt = t.options.find((o) => o.id === body[t.id]);
+    if (opt?.short) out.push(`${opt.icon ? `${opt.icon} ` : ''}${opt.short}`);
+  }
+  return out;
+}
 
 function pairCost(a, b) {
   if (!a || !b) return 0;
@@ -120,7 +140,16 @@ function totalCost(assign, pairs) {
     if (!sid) continue;
     const row = rowOf(seatId);
     sum += 0.8 * row;                                   // 학생이 자리보다 적으면 앞줄부터
-    if (needsFront(sid)) sum += row < FRONT_ROWS ? row * 8 : 60 + row * 30;   // 앞자리 필요 학생
+    if (needsFront(sid)) sum += row < FRONT_ROWS ? row * 8 : 60 + row * 30;   // 앞자리 필요 학생 (교사 지정)
+    // 학생이 고른 몸 특징: 눈이 나쁘면 앞줄, 키가 작으면 앞쪽·크면 뒤쪽을 조금 선호
+    const body = bodyOf(sid);
+    if (body.sight === 'poor') sum += row < FRONT_ROWS ? row * 4 : 30 + row * 12;
+    if (body.height === 'short') sum += row * 3;
+    if (body.height === 'tall') sum += (blockRowsOf(seatId) - 1 - row) * 3;
+    // 냉난방기 바람 자리: 추위를 잘 타면 냉방 바람을, 더위를 잘 타면 난방 바람을 피하고 반대쪽은 조금 선호
+    const feel = zoneFeel(seatId);
+    if (feel === 'cool') { if (body.cold === 'yes') sum += 45; if (body.heat === 'yes') sum -= 12; }
+    if (feel === 'warm') { if (body.heat === 'yes') sum += 45; if (body.cold === 'yes') sum -= 12; }
   }
   return sum;
 }
@@ -206,6 +235,14 @@ function evaluate() {
     const seatId = seatOf[sid];
     if (seatId && rowOf(seatId) >= FRONT_ROWS) { infos.push(`${nameOf(sid)}: 앞자리가 필요한데 ${rowOf(seatId) + 1}번째 줄이에요.`); conflictSeats.add(seatId); }
   }
+  // 학생이 고른 몸 특징과 맞지 않는 자리
+  for (const [sid, seatId] of Object.entries(seatOf)) {
+    const body = bodyOf(sid);
+    if (body.sight === 'poor' && !notes[sid]?.front && rowOf(seatId) >= FRONT_ROWS) { infos.push(`${nameOf(sid)}: 눈이 나쁜 편이라고 했는데 ${rowOf(seatId) + 1}번째 줄이에요.`); conflictSeats.add(seatId); }
+    const feel = zoneFeel(seatId);
+    if (feel === 'cool' && body.cold === 'yes') { infos.push(`${nameOf(sid)}: 추위를 잘 타는데 냉방 바람 자리예요.`); conflictSeats.add(seatId); }
+    if (feel === 'warm' && body.heat === 'yes') { infos.push(`${nameOf(sid)}: 더위를 잘 타는데 난방 바람 자리예요.`); conflictSeats.add(seatId); }
+  }
   return { warnings, infos, goodPairs, conflictSeats };
 }
 
@@ -233,6 +270,14 @@ function render() {
     el('option', { value: 'apart', text: '친한 친구: 떨어뜨리기', selected: options.friends === 'apart' ? true : null }),
   ]);
   friendsSelect.addEventListener('change', () => { options.friends = friendsSelect.value; dirty = true; render(); });
+  // 자리 환경: 냉난방기 바람 자리 표시 모드 + 지금 냉방/난방 중인지
+  const zoneCount = Object.values(zones).filter((z) => z === 'ac').length;
+  const climateSelect = el('select', { class: 'select', id: 'climate-select', title: '냉난방기 상태', 'aria-label': '냉난방기 상태' },
+    Object.entries(CLIMATE_LABEL).map(([value, label]) => el('option', { value, text: `🌀 ${label}`, selected: climate === value ? true : null })));
+  climateSelect.addEventListener('change', () => { climate = climateSelect.value; dirty = true; render(); });
+  const zoneBtn = el('button', { type: 'button', class: `btn ${zoneMode ? 'primary' : ''}`, id: 'zone-mode', 'aria-pressed': zoneMode ? 'true' : 'false',
+    text: zoneMode ? '✓ 바람 자리 표시 끝내기' : `🌀 바람 자리 표시${zoneCount ? ` (${zoneCount}개)` : ''}`,
+    onClick: () => { zoneMode = !zoneMode; selected = null; render(); if (zoneMode) toast('냉난방기 바람이 닿는 자리를 눌러 표시하거나 해제하세요. 끝나면 버튼을 다시 눌러요.', 4000); } });
   // 보는 방향: 저장 데이터와 무관한 표시 설정이라 dirty 로 만들지 않고 브라우저에만 기억해요
   const viewSelect = el('select', { class: 'select seat-view-select', title: '자리표 보는 방향', 'aria-label': '자리표 보는 방향' },
     Object.entries(SEAT_VIEWS).map(([value, v]) => el('option', { value, text: v.label, selected: seatView === value ? true : null })));
@@ -256,12 +301,15 @@ function render() {
         try { layout = parseLayout(layoutInput.value); layoutText = layoutInput.value; } catch (err) { return toast(err.message, 4000); }
         const valid = new Set(seatList().map((s) => s.id));
         for (const id of Object.keys(seats)) if (!valid.has(id)) delete seats[id];
+        for (const id of Object.keys(zones)) if (!valid.has(id)) delete zones[id];
         pinned = new Set([...pinned].filter((id) => valid.has(id)));
         dirty = true; render();
       } }, [el('label', { text: '교실 배치', style: { fontWeight: 600, alignSelf: 'center' } }), layoutInput, el('button', { type: 'submit', class: 'btn', text: '적용' })]),
       friendsSelect,
     ]),
-    el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요, 📝 메모 있음.' }),
+    el('div', { class: 'btn-row', style: { marginTop: '6px' } }, [zoneBtn, climateSelect]),
+    el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요(교사 지정 또는 눈이 나쁜 편), 📝 메모 있음, ❄️ 추위 잘 탐, 🔥 더위 잘 탐, 📏 키 큼, 🌱 키 작음.' }),
+    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🌀 바람 자리: 시스템 에어컨·히터 바람이 바로 닿는 자리를 표시해 두면, 냉방 중에는 추위를 잘 타는 학생을, 난방 중에는 더위를 잘 타는 학생을 자동 배정에서 그 자리에 앉히지 않아요. 학생이 "나는 이런 편이에요"에서 고른 몸 특징(눈·키·추위·더위)도 함께 참고해요.' }),
     el('p', { class: 'muted seat-view-hint', style: { marginTop: '4px', marginBottom: 0 }, text: '자리표는 "인쇄" 옆에서 보는 방향을 고를 수 있어요. 교사 시점은 교탁에서 학생들을 바라본 모습이라 위아래와 좌우가 모두 뒤집혀요. 방향은 화면과 인쇄에만 적용되고 배정 자체는 바뀌지 않아요.' }),
     staleNotice ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, [
       el('span', { style: { flex: 1 }, text: '자리를 저장한 뒤에 학생 응답이 새로 들어왔어요. 아래 경고 목록은 최신 응답 기준이에요. 고정한 자리는 그대로 두고 다시 배정할 수 있어요.' }),
@@ -281,7 +329,7 @@ function render() {
   }));
   // 교탁: 학생 시점은 위, 줄을 뒤집은 시점(교사 시점·위아래만 뒤집기)은 아래
   const podium = el('div', { class: `podium${view.flipRows ? ' below' : ''}`, text: '교탁' });
-  const chart = el('section', { class: 'card seat-chart', dataset: { view: seatView } }, [
+  const chart = el('section', { class: `card seat-chart${zoneMode ? ' zone-mode' : ''}`, dataset: { view: seatView } }, [
     el('div', { class: 'print-only', style: { fontWeight: 700, fontSize: '18px', marginBottom: '8px' } }, [
       `${data.room.name} 자리표`,
       view.printLabel ? el('span', { class: 'print-view-label', text: ` · ${view.printLabel}` }) : null,
@@ -336,10 +384,15 @@ function render() {
 function seatCard(seatId, ev) {
   const sid = seats[seatId];
   const n = sid ? notes[sid] : null;
-  const cls = ['seat', sid ? '' : 'empty', selected === seatId ? 'selected' : '', ev.conflictSeats.has(seatId) ? 'conflict' : '', pinned.has(seatId) ? 'pinned' : ''].filter(Boolean).join(' ');
-  return el('button', { type: 'button', class: cls, dataset: { seat: seatId }, title: n?.memo ? `${nameOf(sid)}: ${n.memo}` : null, onClick: () => onSeatClick(seatId) }, [
+  const body = sid ? bodyOf(sid) : {};
+  const zone = zones[seatId] || '';
+  const cls = ['seat', sid ? '' : 'empty', selected === seatId ? 'selected' : '', ev.conflictSeats.has(seatId) ? 'conflict' : '', pinned.has(seatId) ? 'pinned' : '', zone ? `zone-${zone} climate-${climate}` : ''].filter(Boolean).join(' ');
+  const marks = `${n?.front || body.sight === 'poor' ? '👓' : ''}${body.cold === 'yes' ? '❄️' : ''}${body.heat === 'yes' ? '🔥' : ''}${body.height === 'tall' ? '📏' : ''}${body.height === 'short' ? '🌱' : ''}${n?.memo ? '📝' : ''}`;
+  const title = [sid ? nameOf(sid) : '빈 자리', ...(sid ? bodyLabels(sid) : []), n?.front ? '앞자리 필요(교사 지정)' : '', n?.memo ? `메모: ${n.memo}` : '', zone === 'ac' ? `냉난방기 바람 자리 (${CLIMATE_LABEL[climate]})` : ''].filter(Boolean).join(' · ');
+  return el('button', { type: 'button', class: cls, dataset: { seat: seatId }, title, onClick: () => onSeatClick(seatId) }, [
     el('span', { class: 'seat-name', text: sid ? nameOf(sid) : '빈 자리' }),
-    n && (n.front || n.memo) ? el('span', { class: 'seat-marks', text: `${n.front ? '👓' : ''}${n.memo ? '📝' : ''}` }) : null,
+    marks ? el('span', { class: 'seat-marks', text: marks }) : null,
+    zone ? el('span', { class: 'seat-zone', text: '🌀', 'aria-label': '냉난방기 바람 자리' }) : null,
     sid ? el('span', { class: 'pin no-print', text: pinned.has(seatId) ? '📌' : '📍', title: pinned.has(seatId) ? '고정 해제' : '이 자리 고정', onClick: (e) => { e.stopPropagation(); pinned.has(seatId) ? pinned.delete(seatId) : pinned.add(seatId); dirty = true; render(); } }) : null,
   ]);
 }
@@ -372,9 +425,11 @@ function notesSection() {
     front.addEventListener('change', () => { notes[s.id] = { ...(notes[s.id] || { memo: '' }), front: front.checked }; dirty = true; render(); });
     const memo = el('input', { type: 'text', value: n.memo || '', placeholder: '예: 시력이 나빠요 / 집중이 어려워요 / 도움 잘 줌', maxlength: 300, style: { width: '100%' } });
     memo.addEventListener('input', () => { notes[s.id] = { ...(notes[s.id] || { front: false }), memo: memo.value }; markDirty(); });
+    const labels = bodyLabels(s.id);
     return el('tr', {}, [
       el('td', { text: s.name, style: { fontWeight: 600, whiteSpace: 'nowrap' } }),
       el('td', { class: 'num' }, [el('label', { style: { cursor: 'pointer' } }, [front, ' 👓'])]),
+      el('td', { class: 'body-cell' }, labels.length ? labels.map((t) => el('span', { class: 'badge gray body-badge', text: t })) : [el('span', { class: 'muted', text: '–' })]),
       el('td', {}, [memo]),
     ]);
   });
@@ -387,10 +442,10 @@ function notesSection() {
     notesOpen ? pastePanel() : null,
     notesOpen ? el('div', { class: 'grid-2' }, [
       el('div', {}, [
-        el('h3', { text: '학생별 메모 · 앞자리 필요(👓)' }),
-        el('p', { class: 'muted', text: '👓 를 체크한 학생은 자동 배정에서 앞 두 줄에 앉혀요. 메모는 좌석 위에 마우스를 올리면 보여요.' }),
+        el('h3', { text: '학생별 메모 · 앞자리 필요(👓) · 학생이 고른 특징' }),
+        el('p', { class: 'muted', text: '👓 를 체크한 학생은 자동 배정에서 앞 두 줄에 앉혀요. "특징"은 학생이 설문에서 직접 고른 몸 특징(눈·키·추위·더위)으로, 자동 배정이 함께 참고해요. 메모는 좌석 위에 마우스를 올리면 보여요.' }),
         el('div', { class: 'table-wrap', style: { maxHeight: '420px', overflowY: 'auto' } }, [el('table', { class: 'table' }, [
-          el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), el('th', { text: '앞자리' }), el('th', { text: '메모' })])]),
+          el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), el('th', { text: '앞자리' }), el('th', { text: '특징' }), el('th', { text: '메모' })])]),
           el('tbody', {}, rows),
         ])]),
       ]),
@@ -496,6 +551,11 @@ function markDirty() {
 }
 
 function onSeatClick(seatId) {
+  if (zoneMode) {
+    if (zones[seatId]) delete zones[seatId]; else zones[seatId] = 'ac';
+    dirty = true; render();
+    return;
+  }
   if (selected === null) { selected = seatId; render(); return; }
   if (selected === seatId) { selected = null; render(); return; }
   const a = seats[selected];
@@ -512,7 +572,7 @@ async function save() {
     const cleanNotes = {};
     for (const [sid, n] of Object.entries(notes)) if (n.front || (n.memo || '').trim()) cleanNotes[sid] = { memo: (n.memo || '').trim(), front: Boolean(n.front) };
     await api(`${base}/notes`, { method: 'PUT', body: { notes: cleanNotes, rules } });
-    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options } });
+    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options, zones, climate } });
     data = await api(dataUrl);
     buildRelations();
     dirty = false;
@@ -541,6 +601,8 @@ function latestResponseAt() {
       seats = { ...data.seating.seats };
       pinned = new Set(data.seating.pinned || []);
       options = { ...options, ...(data.seating.options || {}) };
+      zones = { ...(data.seating.zones || {}) };
+      climate = ['cool', 'warm', 'off'].includes(data.seating.climate) ? data.seating.climate : 'off';
     }
     notes = { ...(data.teacherNotes?.students || {}) };
     rules = [...(data.teacherNotes?.rules || [])];

@@ -53,6 +53,57 @@ export const TRAITS = [
 ];
 const traitIds = new Set(TRAITS.map((t) => t.id));
 
+/**
+ * 몸 특징 (자리 배정 참고용). 학생이 "나는 이런 편이에요"에서 고르고, 학생 정보에 남아 회차가 바뀌어도 유지됩니다.
+ * 가운데 선택지(보통)는 자리 배정에 영향이 없습니다. short 는 선생님 화면의 짧은 표시, icon 은 좌석 카드 표시.
+ */
+export const BODY_TRAITS = [
+  { id: 'sight', label: '눈 (시력)', hint: '눈이 나쁜 편이면 앞자리에 앉혀요', options: [
+    { id: 'poor', label: '눈이 나쁜 편이에요', short: '눈 나쁨', icon: '👓' },
+    { id: 'ok', label: '보통이에요' },
+    { id: 'good', label: '눈이 좋은 편이에요', short: '눈 좋음' },
+  ] },
+  { id: 'height', label: '키', hint: '키가 큰 친구는 뒤쪽, 작은 친구는 앞쪽을 생각해요', options: [
+    { id: 'tall', label: '키가 큰 편이에요', short: '키 큼', icon: '📏' },
+    { id: 'mid', label: '보통이에요' },
+    { id: 'short', label: '키가 작은 편이에요', short: '키 작음', icon: '🌱' },
+  ] },
+  { id: 'cold', label: '추위', hint: '추위를 잘 타면 냉방 바람 자리를 피해요', options: [
+    { id: 'yes', label: '추위를 잘 타는 편이에요', short: '추위 잘 탐', icon: '❄️' },
+    { id: 'ok', label: '보통이에요' },
+    { id: 'no', label: '추위를 안 타는 편이에요', short: '추위 안 탐' },
+  ] },
+  { id: 'heat', label: '더위', hint: '더위를 잘 타면 난방 바람 자리를 피하고 냉방 바람 자리를 먼저 줘요', options: [
+    { id: 'yes', label: '더위를 잘 타는 편이에요', short: '더위 잘 탐', icon: '🔥' },
+    { id: 'ok', label: '보통이에요' },
+    { id: 'no', label: '더위를 안 타는 편이에요', short: '더위 안 탐' },
+  ] },
+];
+/** 몸 특징 값 → 짧은 표시 목록 (예: ['👓 눈 나쁨', '❄️ 추위 잘 탐']). 보통은 뺍니다. */
+export function bodyLabels(body) {
+  const out = [];
+  for (const t of BODY_TRAITS) {
+    const opt = t.options.find((o) => o.id === body?.[t.id]);
+    if (opt?.short) out.push(`${opt.icon ? `${opt.icon} ` : ''}${opt.short}`);
+  }
+  return out;
+}
+
+/** 몸 특징 검증: 항목마다 정해진 선택지만, 모르는 항목은 거절 */
+export function validateBody(input) {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) throw bad('몸 특징 항목이 올바르지 않아요.');
+  const body = {};
+  for (const [key, value] of Object.entries(input)) {
+    const trait = BODY_TRAITS.find((t) => t.id === key);
+    if (!trait) throw bad('몸 특징 항목이 올바르지 않아요.');
+    if (value === null || value === undefined || value === '') continue;
+    if (!trait.options.some((o) => o.id === value)) throw bad('몸 특징 항목이 올바르지 않아요.');
+    body[key] = value;
+  }
+  return body;
+}
+
 const LIMITS = { roleName: 40, roleSubtitle: 40, roleDesc: 600, roles: 40, slots: 10, reason: 600, partnerText: 300 };
 const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty']);
 

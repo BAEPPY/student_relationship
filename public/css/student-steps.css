@@ -73,6 +73,15 @@
   .hello-card .mascot svg { width: 76px; height: 76px; }
 }
 
+/* ---------- 몸 특징 (자리 배정 참고) ---------- */
+.body-row { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px dashed #eadfd0; }
+.body-row:first-of-type { border-top: 0; padding-top: 4px; }
+.body-label { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 17px; }
+.body-hint { font-size: 13px; }
+.trait-chip.body::before { border-radius: 50%; }
+.trait-chip.body.selected { background: #edf8ec; border-color: var(--kid-grass); color: #1f6b2f; }
+.trait-chip.body.selected::before { content: '●'; font-size: 9px; background: #fff; color: var(--kid-grass); border-color: var(--kid-grass); }
+
 /* ---------- 성향 칩 ---------- */
 .trait-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .trait-chip {

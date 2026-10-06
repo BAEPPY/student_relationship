@@ -3,7 +3,7 @@
 import { computeStats, analyzeConflicts } from './analysis.js';
 import { analyzeHistory } from './history.js';
 import { roundRoom } from './rounds.js';
-import { roomRoles, applicantCounts } from './roles.js';
+import { roomRoles, applicantCounts, bodyLabels, BODY_TRAITS } from './roles.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 function dateLabel(d = new Date()) {
@@ -120,16 +120,20 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   // 5. 자리 배정
   const seating = room.seating;
   const notes = room.teacherNotes || { students: {}, rules: [] };
+  const CLIMATE_KO = { cool: '지금 냉방 중 (바람 자리가 시원함)', warm: '지금 난방 중 (바람 자리가 따뜻함)', off: '지금은 꺼짐' };
   if (seating?.layout?.blocks?.length) {
     heading('자리 배정');
-    para(`${String(seating.updatedAt || '').slice(0, 10)}에 저장한 자리표예요. 학생 시점(칠판이 위)으로 그렸어요.`, 'muted');
+    const zoneCount = Object.values(seating.zones || {}).filter((z) => z === 'ac').length;
+    para(`${String(seating.updatedAt || '').slice(0, 10)}에 저장한 자리표예요. 학생 시점(칠판이 위)으로 그렸어요.${zoneCount ? ` 🌀 표시는 냉난방기 바람 자리(${zoneCount}개) · ${CLIMATE_KO[seating.climate] || CLIMATE_KO.off}.` : ''}`, 'muted');
     blocks.push({
       type: 'seatmap',
       podium: 'top',
+      climate: seating.climate || 'off',
       blocks: seating.layout.blocks.map((b, bi) => ({
         cols: b.cols,
         rows: b.rows,
         cells: Array.from({ length: b.rows }, (_, r) => Array.from({ length: b.cols }, (_, c) => { const sid = seating.seats?.[`b${bi}-r${r}-c${c}`]; return sid ? nameOf(sid) : ''; })),
+        zones: Array.from({ length: b.rows }, (_, r) => Array.from({ length: b.cols }, (_, c) => seating.zones?.[`b${bi}-r${r}-c${c}`] || '')),
       })),
     });
     const seated = new Set(Object.values(seating.seats || {}));
@@ -137,6 +141,14 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (unseated.length) para(`자리가 없는 학생: ${unseated.join(', ')}`, 'muted');
   }
   const memoLines = [];
+  // 학생이 고른 몸 특징 (보통은 제외)
+  for (const t of BODY_TRAITS) {
+    for (const opt of t.options) {
+      if (!opt.short) continue;
+      const names = students.filter((s) => s.body?.[t.id] === opt.id).map((s) => s.name);
+      if (names.length) memoLines.push(`${opt.icon ? `${opt.icon} ` : ''}${opt.label.replace(/이에요$/, '')}: ${names.join(', ')}`);
+    }
+  }
   for (const s of students) {
     const n = notes.students?.[s.id];
     if (!n) continue;
@@ -148,8 +160,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     memoLines.push(`${r.type === 'together' ? '⇢ 가까이 앉히기' : '↔ 떨어뜨리기'}: ${nameOf(r.a)} · ${nameOf(r.b)}${r.note ? ` (${r.note})` : ''}`);
   }
   if (memoLines.length) {
-    if (!seating?.layout?.blocks?.length) heading('선생님 메모 · 규칙');
-    else sub('선생님 메모 · 규칙');
+    if (!seating?.layout?.blocks?.length) heading('자리 배정 참고 (학생 특징 · 선생님 메모 · 규칙)');
+    else sub('자리 배정 참고 (학생 특징 · 선생님 메모 · 규칙)');
     list(memoLines);
   }
 

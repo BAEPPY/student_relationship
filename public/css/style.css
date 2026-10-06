@@ -338,6 +338,15 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 }
 .select { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--gray-300); background: #fff; font-family: inherit; font-size: 15px; }
 .seat-marks { position: absolute; left: 4px; bottom: 2px; font-size: 11px; line-height: 1; }
+/* 냉난방기 바람 자리: 🌀 표시, 냉방 중이면 파란 테두리·난방 중이면 주황 테두리 */
+.seat .seat-zone { position: absolute; top: 2px; left: 4px; font-size: 12px; line-height: 1; }
+.seat.zone-ac.climate-cool { box-shadow: inset 0 0 0 2px #9fd3f7; }
+.seat.zone-ac.climate-warm { box-shadow: inset 0 0 0 2px #ffc08a; }
+.seat-chart.zone-mode .seat { cursor: cell; }
+.seat-chart.zone-mode .seat.zone-ac { background: #e7f4ff; border-color: #4aa3df; }
+.seat-chart.zone-mode .seat.empty.zone-ac { background: #e7f4ff; }
+#notes-card .body-cell { white-space: normal; }
+#notes-card .body-badge { margin: 1px 4px 1px 0; font-weight: 500; }
 .rule-item { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
 .rule-item:last-child { border-bottom: 0; }
 #notes-card input[type="text"] { padding: 7px 10px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; }
@@ -556,6 +565,7 @@ body.kid .link-box input { border-radius: 16px; }
 /* 학생 표: 성향 · 지원서 제출 표시 */
 #students-card .status-icons { display: flex; gap: 4px; flex-wrap: wrap; }
 #students-card .status-icon { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: help; }
+#students-card .status-icon.body { background: #eef7ff; color: #1f5c8a; letter-spacing: 1px; }
 #students-card .status-icon.done { background: #e3f4e6; color: #1e6b32; }
 #students-card .status-icon.todo { background: var(--gray-100); color: var(--gray-500); border: 1px dashed var(--gray-300); }
 
@@ -877,6 +887,10 @@ body.report .seat-box {
 }
 body.report .seat-box span { overflow: hidden; text-overflow: ellipsis; }
 body.report .seat-box.empty { background: #fff; border-style: dashed; border-color: var(--gray-300); }
+body.report .seat-box { position: relative; }
+body.report .seat-box .seat-zone { position: absolute; top: 1px; left: 4px; font-size: 11px; line-height: 1; }
+body.report .seat-box.zone-ac.climate-cool { box-shadow: inset 0 0 0 2px #9fd3f7; }
+body.report .seat-box.zone-ac.climate-warm { box-shadow: inset 0 0 0 2px #ffc08a; }
 body.report .page-break { height: 0; margin: 0; }
 body.report .report-error { margin-top: 8px; }
 @media (max-width: 600px) {

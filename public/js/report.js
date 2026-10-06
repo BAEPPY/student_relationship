@@ -59,7 +59,12 @@ function renderSeatmap(block) {
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const name = String(b.cells?.[r]?.[c] ?? '').trim();
-          seats.push(el('div', { class: `seat-box ${name ? '' : 'empty'}`, title: name || '빈 자리' }, [el('span', { text: name })]));
+          const zone = b.zones?.[r]?.[c] || '';
+          const zoneLabel = zone === 'ac' ? `냉난방기 바람 자리${block.climate === 'cool' ? ' (냉방 중)' : block.climate === 'warm' ? ' (난방 중)' : ''}` : '';
+          seats.push(el('div', { class: `seat-box ${name ? '' : 'empty'} ${zone ? `zone-${zone} climate-${block.climate || 'off'}` : ''}`, title: [name || '빈 자리', zoneLabel].filter(Boolean).join(' · ') }, [
+            el('span', { text: name }),
+            zone ? el('span', { class: 'seat-zone', text: '🌀', 'aria-label': zoneLabel }) : null,
+          ]));
         }
       }
       return el('div', { class: 'seat-block', style: { gridTemplateColumns: `repeat(${cols}, auto)` } }, seats);

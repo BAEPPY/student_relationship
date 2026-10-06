@@ -9,7 +9,7 @@ import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
 import { analyzeHistory } from './history.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, RETENTION_MONTHS } from './retention.js';
-import { DEFAULT_ROLES, TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateApplication, applicantCounts } from './roles.js';
+import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
 import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles } from './ai.js';
 import * as pages from './pages.js';
@@ -213,6 +213,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         url: studentUrl(req, s),
         submitted: stats[s.id].submitted,
         submittedAt: stats[s.id].submittedAt,
+        body: s.body || {},                       // 학생이 고른 몸 특징 (시력·키·추위·더위)
       })),
       relations: listRelations(rr),
       stats,
@@ -242,6 +243,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       aiAnalysis: round.aiAnalysis || null,
       ai: { enabled: aiOn(), model: process.env.AI_MODEL || DEFAULT_MODEL },
       traits: TRAITS,
+      bodyTraits: BODY_TRAITS,
       selectionCriteria: SELECTION_CRITERIA,
     };
   }
@@ -266,7 +268,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     return {
       room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad, rolesEnabled: roles.length > 0 },
       round: roundView(round),
-      me: { id: student.id, name: student.name },
+      me: { id: student.id, name: student.name, body: student.body || {} },
       classmates,
       relations,
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
@@ -279,6 +281,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       application: round.applications?.[student.id] || null,
       assignedRole,
       traits: TRAITS,
+      bodyTraits: BODY_TRAITS,
       selectionCriteria: SELECTION_CRITERIA,
     };
   }
@@ -616,6 +619,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   });
 
   // 자리 배정 저장
+  const SEAT_ZONES = ['ac'];   // 자리 환경 종류: ac = 냉난방기 바람 자리
   app.put('/api/teacher/:adminToken/seating', async (req, res) => {
     const found = await requireRoom(req);
     const body = req.body || {};
@@ -640,7 +644,16 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     }
     const pinned = [...new Set((Array.isArray(body.pinned) ? body.pinned : []).filter((id) => validSeat.test(id)))];
     const options = { friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any' };
-    const room = await mutateRoom(found, (r) => { r.seating = { layout, seats, pinned, options, updatedAt: new Date().toISOString() }; });
+    // 자리 환경: 냉난방기 바람이 닿는 자리(zones: seatId → 'ac') 와 지금 냉방/난방 중인지(climate)
+    const zones = {};
+    for (const [seatId, zone] of Object.entries(body.zones || {})) {
+      if (!validSeat.test(seatId)) throw bad('좌석 정보가 올바르지 않아요.');
+      if (!zone) continue;
+      if (!SEAT_ZONES.includes(zone)) throw bad('자리 환경 표시가 올바르지 않아요.');
+      zones[seatId] = zone;
+    }
+    const climate = ['cool', 'warm', 'off'].includes(body.climate) ? body.climate : 'off';
+    const room = await mutateRoom(found, (r) => { r.seating = { layout, seats, pinned, options, zones, climate, updatedAt: new Date().toISOString() }; });
     res.json(teacherView(req, room));
   });
 
@@ -730,6 +743,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.put('/api/student/:token/profile', async (req, res) => {
     const { room: found, student: me } = await requireStudent(req);
     const profile = validateProfile(req.body || {});
+    const body = req.body?.body === undefined ? null : validateBody(req.body.body);   // 몸 특징은 학생 정보에 남아 회차가 바뀌어도 유지
     const roundId = req.body?.roundId ? String(req.body.roundId) : null;
     // 특정 친구 이름은 적을 수 없음 (③ 특정인 X)
     if (profile.partnerText) {
@@ -747,6 +761,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (round.closedAt) throw new HttpError(403, '선생님이 이번 조사를 마감했어요. 더 이상 수정할 수 없어요.');
       round.profiles ||= {};
       round.profiles[student.id] = { ...profile, updatedAt: new Date().toISOString() };
+      if (body) student.body = body;
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });

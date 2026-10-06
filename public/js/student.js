@@ -9,7 +9,7 @@ let dirty = false;          // 관계 지도에 제출하지 않은 변경이 �
 
 // ---------- 단계(①성향 → ②1인1역 지원 → ③친구 관계 지도) ----------
 let step = 'profile';       // 'profile' | 'application' | 'relations'
-let profileDraft = { traits: new Set(), partnerTraits: new Set(), partnerText: '' };
+let profileDraft = { traits: new Set(), partnerTraits: new Set(), partnerText: '', body: {} };
 let profileDirty = false;
 let appDraft = [];          // [{ roleId, reason, helpClass, helpSelf }] × 3 (1·2·3지망)
 let appDirty = false;
@@ -108,7 +108,7 @@ function goTo(id) {
 function initDrafts(which = 'all') {
   if (which === 'all' || which === 'profile') {
     const p = data.profile;
-    profileDraft = { traits: new Set(p?.traits || []), partnerTraits: new Set((p?.partnerTraits || []).slice(0, PARTNER_MAX)), partnerText: p?.partnerText || '' };
+    profileDraft = { traits: new Set(p?.traits || []), partnerTraits: new Set((p?.partnerTraits || []).slice(0, PARTNER_MAX)), partnerText: p?.partnerText || '', body: { ...(data.me?.body || {}) } };
     profileDirty = false;
   }
   if (which === 'all' || which === 'application') {
@@ -291,7 +291,42 @@ function renderProfile() {
     traitBox,
   ]));
 
-  // ② 짝에게 바라는 점 (3개까지)
+  // ② 몸 특징 (자리 배정 참고): 항목마다 하나만 고르고, 고른 걸 다시 누르면 취소
+  const bodyTraits = data.bodyTraits || [];
+  const bodyRows = bodyTraits.map((t) => {
+    const chips = t.options.map((o) => el('button', {
+      type: 'button',
+      class: `trait-chip body ${pd.body[t.id] === o.id ? 'selected' : ''}`,
+      role: 'radio',
+      'aria-checked': pd.body[t.id] === o.id ? 'true' : 'false',
+      disabled: locked ? true : null,
+      dataset: { body: t.id, option: o.id },
+      text: o.label,
+      onClick: () => {
+        if (pd.body[t.id] === o.id) delete pd.body[t.id]; else pd.body[t.id] = o.id;
+        chips.forEach((chip, i) => {
+          const on = pd.body[t.id] === t.options[i].id;
+          chip.classList.toggle('selected', on);
+          chip.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        profileDirty = true; stepError = null;
+        hello.setBubble(profileBubble());
+      },
+    }));
+    return el('div', { class: 'body-row', role: 'radiogroup', 'aria-label': t.label }, [
+      el('div', { class: 'body-label' }, [el('b', { text: t.label }), t.hint ? el('span', { class: 'muted body-hint', text: t.hint }) : null]),
+      el('div', { class: 'trait-chips' }, chips),
+    ]);
+  });
+  if (bodyRows.length) {
+    app.append(el('section', { class: 'card', id: 'body-card' }, [
+      el('div', { class: 'card-title' }, [el('h2', { text: '② 내 몸은 이런 편이에요' })]),
+      el('p', { class: 'muted', text: '자리를 정할 때 참고해. 해당하는 게 없으면 "보통이에요"를 고르거나 비워 둬도 돼.' }),
+      ...bodyRows,
+    ]));
+  }
+
+  // ③ 짝에게 바라는 점 (3개까지)
   const counter = el('span', { class: 'pick-counter', id: 'partner-count' });
   const partnerChips = traits.map((t) => el('button', {
     type: 'button',
@@ -320,12 +355,12 @@ function renderProfile() {
   };
   syncPartner();
   app.append(el('section', { class: 'card' }, [
-    el('div', { class: 'card-title' }, [el('h2', { text: '② 내 짝은 이런 친구면 좋겠어요' }), counter]),
+    el('div', { class: 'card-title' }, [el('h2', { text: '③ 내 짝은 이런 친구면 좋겠어요' }), counter]),
     el('p', { class: 'muted', text: `${PARTNER_MAX}개만 골라요. ${PARTNER_MAX}개를 다 고르면 나머지는 잠깐 잠겨.` }),
     partnerBox,
   ]));
 
-  // ③ 어떤 짝이 좋은지 글로
+  // ④ 어떤 짝이 좋은지 글로
   const ta = el('textarea', { id: 'partner-text', maxlength: PARTNER_TEXT_MAX, placeholder: '예: 조용히 집중하는 짝이면 나도 수업에 더 집중할 수 있을 것 같아요.', disabled: locked ? true : null, style: { minHeight: '110px' } });
   ta.value = pd.partnerText;
   const cnt = el('div', { class: 'ta-counter', text: `${pd.partnerText.length} / ${PARTNER_TEXT_MAX}자` });
@@ -336,7 +371,7 @@ function renderProfile() {
     if (stepError) { stepError = null; hello.setBubble(profileBubble()); errBox.classList.add('hidden'); }
   });
   app.append(el('section', { class: 'card' }, [
-    el('h2', { text: '③ 저는 이런 짝과 앉으면 더 잘 지내고 공부도 잘할 것 같아요' }),
+    el('h2', { text: '④ 저는 이런 짝과 앉으면 더 잘 지내고 공부도 잘할 것 같아요' }),
     el('p', { class: 'muted', text: '(단, 잘생긴/인기있는/특정인 X)' }),
     el('div', { class: 'field', style: { marginBottom: '0' } }, [
       ta,
@@ -356,7 +391,7 @@ function renderProfile() {
     try {
       data = await api(`/api/student/${encodeURIComponent(token)}/profile`, {
         method: 'PUT',
-        body: { traits: [...pd.traits], partnerTraits: [...pd.partnerTraits], partnerText: pd.partnerText.trim(), roundId: data.round?.id },
+        body: { traits: [...pd.traits], partnerTraits: [...pd.partnerTraits], partnerText: pd.partnerText.trim(), body: pd.body, roundId: data.round?.id },
       });
       initDrafts('profile');
       toast('저장했어! 🎉');
