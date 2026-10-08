@@ -31,7 +31,8 @@ export function docBlocks(doc) {
   ];
 }
 
-/** 자리표 블록 → 표 블록들 (한글·워드용: 분단마다 표 하나, 칠판이 위) */
+/** 자리표 블록 → 표 블록들 (한글·워드용: 분단마다 표 하나, 칠판이 위).
+ *  셀 첫 줄은 이름(없으면 "(빈 자리)"), 그 아래 줄에 🌀 바람 자리 "(냉난방 바람)" · 🎒 역할 자리 "(역할명)" (blocks[].zones / roles 가 cells 와 같은 모양) */
 function seatmapTables(block) {
   const ZONE_KO = { ac: '(냉난방 바람)' };
   return (block.blocks || []).map((b, i) => ({
@@ -40,7 +41,8 @@ function seatmapTables(block) {
     columns: Array.from({ length: b.cols }, () => ({ label: '', width: 1 / b.cols })),
     rows: (b.cells || []).map((row, ri) => Array.from({ length: b.cols }, (_, ci) => {
       const zone = ZONE_KO[b.zones?.[ri]?.[ci]] || '';
-      return { text: `${row?.[ci] || '(빈 자리)'}${zone ? `\n${zone}` : ''}`, align: 'center', bold: Boolean(row?.[ci]) };
+      const role = b.roles?.[ri]?.[ci] ? `(${String(b.roles[ri][ci]).trim()})` : '';
+      return { text: [row?.[ci] || '(빈 자리)', zone, role].filter(Boolean).join('\n'), align: 'center', bold: Boolean(row?.[ci]) };
     })),
     header: false,
   }));

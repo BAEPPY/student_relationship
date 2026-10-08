@@ -345,6 +345,13 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .seat-chart.zone-mode .seat { cursor: cell; }
 .seat-chart.zone-mode .seat.zone-ac { background: #e7f4ff; border-color: #4aa3df; }
 .seat-chart.zone-mode .seat.empty.zone-ac { background: #e7f4ff; }
+/* 🎒 역할 자리: 1인 1역 담당 학생이 앉는 자리. 오른쪽 아래 역할 이름 배지(말줄임) + 초록 테두리, 지정 모드에서는 자리를 눌러 지정·해제 */
+.seat .seat-role { position: absolute; right: 3px; bottom: 2px; max-width: 66%; font-size: 10px; line-height: 1.3; font-weight: 600; color: #1e6b32; background: #e6f6ea; border-radius: 6px; padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seat.role-seat:not(.conflict) { border-color: #3c9a5a; }
+.seat-chart.role-mode .seat { cursor: copy; }
+.seat-chart.role-mode .seat.role-seat { background: #e6f6ea; border-color: #2f8a4c; }
+.seat-chart.role-mode .seat.empty.role-seat { background: #e6f6ea; }
+@media print { .seat .seat-role { font-size: 8px; padding: 0 2px; background: #eef7f0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 #notes-card .body-cell { white-space: normal; }
 #notes-card .body-badge { margin: 1px 4px 1px 0; font-weight: 500; }
 .rule-item { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
@@ -879,7 +886,7 @@ body.report .report-table .right { text-align: right; }
 body.report .report-table .line { display: block; }
 body.report .seatmap { margin: 0 0 18px; }
 body.report .seatmap .podium-bar { margin: 0 auto 14px; width: 220px; max-width: 100%; text-align: center; background: var(--gray-700); color: #fff; border-radius: 8px; padding: 6px 10px; font-weight: 700; font-size: 14px; letter-spacing: .08em; }
-body.report .seat-blocks { display: flex; justify-content: center; align-items: flex-start; gap: 22px; flex-wrap: wrap; }
+body.report .seat-blocks { display: flex; justify-content: center; align-items: flex-start; gap: 22px; flex-wrap: wrap; min-width: 0; }   /* 자리 페이지의 .seat-blocks { min-width: max-content } 를 풀어 좁은 화면에서 분단이 줄바꿈되게 */
 body.report .seat-block { display: grid; gap: 6px; }
 body.report .seat-box {
   width: 84px; height: 44px; border-radius: 10px; border: 1.5px solid var(--node-border); background: var(--node-fill); color: var(--node-text);
@@ -923,4 +930,13 @@ body.report .report-error { margin-top: 8px; }
   body.report .seat-box.empty { border-color: #aaa; }
   body.report .page-break { break-before: page; page-break-before: always; }
   body.report .stat-tile, body.report .report-table thead th, body.report .report-table tbody tr:nth-child(even) td, body.report .seat-box, body.report .podium-bar, body.report .alert { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* 종합 보고서 자리표의 🎒 역할 자리 (body.report — public/js/report.js renderSeatmap): 초록 테두리 + 오른쪽 아래 역할 이름 배지(말줄임) */
+body.report .seat-box.role-seat { border-color: #3c9a5a; padding-bottom: 10px; }
+body.report .seat-box.role-seat.empty { border-color: #7cc08f; }
+body.report .seat-box .seat-role { position: absolute; right: 3px; bottom: 1px; max-width: 72%; font-size: 9.5px; line-height: 1.25; font-weight: 600; color: #1e6b32; background: #e6f6ea; border-radius: 5px; padding: 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media print {
+  body.report .seat-box.role-seat { border-color: #3c9a5a; }
+  body.report .seat-box .seat-role { font-size: 8px; padding: 0 2px; background: #eef7f0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }

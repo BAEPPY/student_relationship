@@ -87,6 +87,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     });
   }
 
+  const roles = roomRoles(room);
+
   // 4. AI 분석
   const ai = round.aiAnalysis;
   if (ai) {
@@ -105,7 +107,6 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     }
     const aiStudents = (ai.students || []).filter((s) => stats[s.id]);
     if (aiStudents.length) {
-      const roles = roomRoles(room);
       const roleName = (id) => roles.find((r) => r.id === id)?.name || '(지워진 역할)';
       blocks.push({
         type: 'table',
@@ -121,10 +122,22 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   const seating = room.seating;
   const notes = room.teacherNotes || { students: {}, rules: [] };
   const CLIMATE_KO = { cool: '지금 냉방 중 (바람 자리가 시원함)', warm: '지금 난방 중 (바람 자리가 따뜻함)', off: '지금은 꺼짐' };
-  if (seating?.layout?.blocks?.length) {
+  // 🎒 역할 자리(seating.roleSeats: 좌석 → 역할 id): 이번 회차에 그 역할을 맡은 학생이 앉는 자리. 배치 안에 있고 역할이 아직 있는 것만, 분단 → 줄 → 칸 순서
+  const roleNameOf = (id) => roles.find((r) => r.id === id)?.name || '';
+  const roleHolders = (roleId) => (round.roleAssignment?.assignments?.[roleId] || []).filter((sid) => stats[sid]).map(nameOf);
+  const seatPos = (seatId) => { const m = /^b(\d+)-r(\d+)-c(\d+)$/.exec(String(seatId)); return m ? { b: Number(m[1]), r: Number(m[2]), c: Number(m[3]) } : null; };
+  const inLayout = (p) => Boolean(p && seating?.layout?.blocks?.[p.b] && p.r < seating.layout.blocks[p.b].rows && p.c < seating.layout.blocks[p.b].cols);
+  const seatLabel = (p) => `${p.b + 1}분단 ${p.r + 1}번째 줄 ${p.c + 1}번째 자리`;
+  const roleSeatList = Object.entries(seating?.roleSeats || {})
+    .map(([seatId, roleId]) => ({ seatId, roleId, pos: seatPos(seatId) }))
+    .filter((x) => inLayout(x.pos) && roleNameOf(x.roleId))
+    .sort((x, y) => x.pos.b - y.pos.b || x.pos.r - y.pos.r || x.pos.c - y.pos.c);
+  const hasSeatmap = Boolean(seating?.layout?.blocks?.length);
+  if (hasSeatmap) {
     heading('자리 배정');
     const zoneCount = Object.values(seating.zones || {}).filter((z) => z === 'ac').length;
-    para(`${String(seating.updatedAt || '').slice(0, 10)}에 저장한 자리표예요. 학생 시점(칠판이 위)으로 그렸어요.${zoneCount ? ` 🌀 표시는 냉난방기 바람 자리(${zoneCount}개) · ${CLIMATE_KO[seating.climate] || CLIMATE_KO.off}.` : ''}`, 'muted');
+    para(`${String(seating.updatedAt || '').slice(0, 10)}에 저장한 자리표예요. 학생 시점(칠판이 위)으로 그렸어요.${zoneCount ? ` 🌀 표시는 냉난방기 바람 자리(${zoneCount}개) · ${CLIMATE_KO[seating.climate] || CLIMATE_KO.off}.` : ''}${roleSeatList.length ? ` 🎒 표시는 1인 1역 담당 학생이 앉는 역할 자리(${roleSeatList.length}개)예요.` : ''}`, 'muted');
+    const roleAt = new Map(roleSeatList.map((x) => [x.seatId, roleNameOf(x.roleId)]));
     blocks.push({
       type: 'seatmap',
       podium: 'top',
@@ -134,6 +147,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
         rows: b.rows,
         cells: Array.from({ length: b.rows }, (_, r) => Array.from({ length: b.cols }, (_, c) => { const sid = seating.seats?.[`b${bi}-r${r}-c${c}`]; return sid ? nameOf(sid) : ''; })),
         zones: Array.from({ length: b.rows }, (_, r) => Array.from({ length: b.cols }, (_, c) => seating.zones?.[`b${bi}-r${r}-c${c}`] || '')),
+        roles: Array.from({ length: b.rows }, (_, r) => Array.from({ length: b.cols }, (_, c) => roleAt.get(`b${bi}-r${r}-c${c}`) || '')),
       })),
     });
     const seated = new Set(Object.values(seating.seats || {}));
@@ -159,14 +173,41 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (!stats[r.a] || !stats[r.b]) continue;
     memoLines.push(`${r.type === 'together' ? '⇢ 가까이 앉히기' : '↔ 떨어뜨리기'}: ${nameOf(r.a)} · ${nameOf(r.b)}${r.note ? ` (${r.note})` : ''}`);
   }
+  for (const x of roleSeatList) {
+    const who = roleHolders(x.roleId);
+    memoLines.push(`🎒 역할 자리: ${roleNameOf(x.roleId)} → ${seatLabel(x.pos)} (담당: ${who.length ? who.join(', ') : '아직 없음'})`);
+  }
   if (memoLines.length) {
-    if (!seating?.layout?.blocks?.length) heading('자리 배정 참고 (학생 특징 · 선생님 메모 · 규칙)');
+    if (!hasSeatmap) heading('자리 배정 참고 (학생 특징 · 선생님 메모 · 규칙)');
     else sub('자리 배정 참고 (학생 특징 · 선생님 메모 · 규칙)');
     list(memoLines);
   }
+  // 🤖 AI 자리 배정 메모: 이 회차 기준으로 만든 배정안(room.aiSeating)이 있을 때만, 자리 배정 섹션 끝에
+  const aiSeat = room.aiSeating && room.aiSeating.roundId === round.id ? room.aiSeating : null;
+  if (aiSeat) {
+    if (!hasSeatmap && !memoLines.length) {
+      heading('자리 배정');
+      para('아직 저장한 자리표가 없어요. 자리 배정 페이지에서 배정안을 확인한 뒤 저장하면 자리표가 여기에 들어가요.', 'muted');
+    }
+    sub('AI 자리 배정 메모');
+    para(`${String(aiSeat.createdAt || '').slice(0, 10)}에 AI가 만든 자리 배정안의 메모예요(${aiSeat.roundName || round.name} 기준${aiSeat.model ? ` · ${aiSeat.model}` : ''}). 자리 배정 페이지에서 "AI 배정안 다시 적용"을 누르면 다시 불러올 수 있고, 참고용이에요.${aiSeat.truncated ? ' 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' : ''}`, 'muted');
+    const warnings = (aiSeat.warnings || []).filter(Boolean);
+    if (warnings.length) para(`확인할 점: ${warnings.join(' ')}`, 'muted');
+    if (aiSeat.notes) para(String(aiSeat.notes));
+    const aiPairs = (aiSeat.pairs || []).filter((p) => stats[p.a] && stats[p.b]).sort((x, y) => (Number(y.probability) || 0) - (Number(x.probability) || 0));
+    if (aiPairs.length) {
+      const top = aiPairs.slice(0, 10);
+      blocks.push({
+        type: 'table',
+        caption: `AI 예측 갈등 가능성 (높은 순, ${top.length}쌍${aiPairs.length > top.length ? ` / 전체 ${aiPairs.length}쌍` : ''})`,
+        columns: [{ label: '학생', width: 0.26 }, { label: '가능성', width: 0.12 }, { label: '이유', width: 0.62 }],
+        rows: top.map((p) => [bold(`${nameOf(p.a)} ↔ ${nameOf(p.b)}`), center(`${Math.round(Number(p.probability) || 0)}%`), p.reason || '']),
+        header: true,
+      });
+    } else para('AI가 갈등 가능성이 있다고 본 쌍이 없어요.', 'muted');
+  }
 
   // 6. 1인 1역
-  const roles = roomRoles(room);
   const assignment = round.roleAssignment;
   if (roles.length) {
     heading('1인 1역');

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { purgeExpired, retentionView, addMonths, purgeAll } from '../server/retention.js';
+import { purgeExpired, retentionView, addMonths, purgeAll, roomLastActivity, dropStaleAiSeating } from '../server/retention.js';
 import { FileStore } from '../server/store.js';
 
 const NOW = new Date('2026-10-05T00:00:00.000Z');
@@ -93,4 +93,39 @@ test('성향 설문·지원서·배정·AI 분석 시각도 회차 활동으로 
   assert.equal(purgeExpired(room([r3]), NOW).removed.length, 0);
   r3.roleAssignment = { publishedAt: monthsAgo(15) };
   assert.equal(purgeExpired(room([r3]), NOW).removed.length, 1);
+});
+
+test('AI 자리 배정안: 만든 시각은 교실 활동으로 세고, 그 회차가 지워지면 배정안도 지운다', () => {
+  const seating = (roundId, createdAt) => ({ roundId, roundName: '옛 회차', createdAt, model: 'm', truncated: false, pairs: [{ a: 'a', b: 'b', probability: 70, reason: '가가 나를 놀려요.' }], assignment: { 'b0-r0-c0': 'a' }, explanations: { a: '앞에 앉았어요.' }, notes: '', warnings: [] });
+  // 1) 회차는 다 만료됐지만 최근에 AI 배정안을 만들었으면 교실은 남는다 (활동으로 인정). 배정안의 회차는 지워지므로 배정안도 같이 사라진다
+  const r1 = room([round('A', 18, 17)], { aiSeating: seating('rA', monthsAgo(1)) });
+  assert.equal(roomLastActivity(r1), monthsAgo(1));
+  assert.equal(retentionView(r1, NOW).roomExpiresAt, addMonths(monthsAgo(1), 14).toISOString());
+  const res1 = purgeExpired(r1, NOW);
+  assert.equal(res1.deleteRoom, false);
+  assert.equal(res1.changed, true);
+  assert.equal(r1.rounds.length, 1);
+  assert.equal(r1.aiSeating, undefined, '지워진 회차 기준 배정안은 함께 삭제');
+
+  // 2) 만료된 회차의 배정안만 지우고, 남은 회차의 배정안은 그대로
+  const r2 = room([round('A', 16, 15), round('B', 1, null)], { aiSeating: seating('rA', monthsAgo(15)) });
+  assert.deepEqual(purgeExpired(r2, NOW).removed.map((x) => x.name), ['A']);
+  assert.equal(r2.aiSeating, undefined);
+  const r3 = room([round('A', 16, 15), round('B', 1, null)], { aiSeating: seating('rB', monthsAgo(1)) });
+  purgeExpired(r3, NOW);
+  assert.equal(r3.aiSeating.roundId, 'rB', '남은 회차의 배정안은 유지');
+
+  // 3) 지울 회차가 없어도 회차가 이미 없는 배정안이 남아 있으면 정리한다 (changed 로 저장 유도)
+  const r4 = room([round('B', 1, null)], { aiSeating: seating('gone', monthsAgo(2)) });
+  const res4 = purgeExpired(r4, NOW);
+  assert.equal(res4.changed, true);
+  assert.equal(res4.removed.length, 0);
+  assert.equal(r4.aiSeating, undefined);
+  assert.equal(purgeExpired(r4, NOW).changed, false);
+
+  // dropStaleAiSeating 단독
+  const r5 = room([round('B', 1, null)], { aiSeating: seating('rB', monthsAgo(1)) });
+  assert.equal(dropStaleAiSeating(r5), false);
+  assert.ok(r5.aiSeating);
+  assert.equal(dropStaleAiSeating(room([round('B', 1, null)])), false, '배정안이 없으면 아무것도 안 함');
 });

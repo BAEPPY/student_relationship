@@ -47,7 +47,8 @@ function renderTable(block) {
   ])]);
 }
 
-/** 자리표: 교탁이 위, 0번째 줄이 맨 앞줄, 분단은 왼쪽부터 차례로. 빈 자리는 점선 상자예요. */
+/** 자리표: 교탁이 위, 0번째 줄이 맨 앞줄, 분단은 왼쪽부터 차례로. 빈 자리는 점선 상자예요.
+ *  🌀 바람 자리(zones)는 왼쪽 위 표시, 🎒 역할 자리(roles: 역할 이름)는 오른쪽 아래 작은 배지로 보여 줘요. */
 function renderSeatmap(block) {
   const blocks = Array.isArray(block.blocks) ? block.blocks : [];
   return el('div', { class: 'seatmap' }, [
@@ -61,9 +62,12 @@ function renderSeatmap(block) {
           const name = String(b.cells?.[r]?.[c] ?? '').trim();
           const zone = b.zones?.[r]?.[c] || '';
           const zoneLabel = zone === 'ac' ? `냉난방기 바람 자리${block.climate === 'cool' ? ' (냉방 중)' : block.climate === 'warm' ? ' (난방 중)' : ''}` : '';
-          seats.push(el('div', { class: `seat-box ${name ? '' : 'empty'} ${zone ? `zone-${zone} climate-${block.climate || 'off'}` : ''}`, title: [name || '빈 자리', zoneLabel].filter(Boolean).join(' · ') }, [
+          const role = String(b.roles?.[r]?.[c] ?? '').trim();
+          const roleLabel = role ? `역할 자리: ${role}` : '';
+          seats.push(el('div', { class: `seat-box ${name ? '' : 'empty'} ${zone ? `zone-${zone} climate-${block.climate || 'off'}` : ''} ${role ? 'role-seat' : ''}`, title: [name || '빈 자리', zoneLabel, roleLabel].filter(Boolean).join(' · ') }, [
             el('span', { text: name }),
             zone ? el('span', { class: 'seat-zone', text: '🌀', 'aria-label': zoneLabel }) : null,
+            role ? el('span', { class: 'seat-role', text: role, title: roleLabel }) : null,
           ]));
         }
       }

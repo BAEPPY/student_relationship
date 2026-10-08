@@ -8,10 +8,11 @@ import { REASON_CATALOG, isValidTag } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
 import { analyzeHistory } from './history.js';
-import { purgeExpired, purgeAll, retentionView, roundExpiresAt, RETENTION_MONTHS } from './retention.js';
+import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
-import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles } from './ai.js';
+import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles, aiAssignSeats } from './ai.js';
+import { repairSeating } from './seating.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
@@ -222,6 +223,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       catalog: REASON_CATALOG,
       notice: storageNotice,
       seating: room.seating || null,
+      aiSeating: room.aiSeating || null,       // 마지막 AI 자리 배정안 (저장 전 참고용)
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
       retention: retentionView(room),
       ...rolesView(room, round),
@@ -482,6 +484,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (room.rounds.length <= 1) throw bad('회차가 하나뿐이면 지울 수 없어요. 대신 학생 응답 초기화를 사용해 주세요.');
       room.rounds = room.rounds.filter((r) => r.id !== req.params.roundId);
       if (room.currentRoundId === req.params.roundId) room.currentRoundId = room.rounds[room.rounds.length - 1].id;
+      dropStaleAiSeating(room);   // 그 회차 응답으로 만든 AI 자리 배정안(실명이 든 갈등 예측)도 함께 지움
     });
     res.json(teacherView(req, room));
   });
@@ -526,7 +529,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const room = await mutateRoom(found, (room) => {
       const student = findStudent(room, req.params.studentId);
       if (room.students.some((s) => s.id !== student.id && s.name === name)) throw bad(`이미 있는 이름이에요: ${name}`);
+      const oldName = student.name;
       student.name = name;
+      renameInAiTexts(room, oldName, name);
     });
     res.json(teacherView(req, room));
   });
@@ -562,6 +567,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (room.seating?.seats) {
         for (const [seatId, sid] of Object.entries(room.seating.seats)) if (sid === student.id) delete room.seating.seats[seatId];
       }
+      if (room.aiSeating) scrubAiSeating(room.aiSeating, student);
     });
     res.json(teacherView(req, room));
   });
@@ -618,11 +624,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(teacherView(req, room));
   });
 
-  // 자리 배정 저장
+  // 자리 배정 본문 검증 (PUT /seating 과 POST /ai/seating 이 같이 씀)
   const SEAT_ZONES = ['ac'];   // 자리 환경 종류: ac = 냉난방기 바람 자리
-  app.put('/api/teacher/:adminToken/seating', async (req, res) => {
-    const found = await requireRoom(req);
-    const body = req.body || {};
+  const validSeat = /^b\d+-r\d+-c\d+$/;
+  function parseSeatingBody(body, room) {
     const blocks = Array.isArray(body.layout?.blocks) ? body.layout.blocks : null;
     if (!blocks || blocks.length < 1 || blocks.length > 6) throw bad('교실 배치는 1~6개 블록으로 입력해 주세요.');
     const layout = { blocks: blocks.map((b) => {
@@ -631,13 +636,12 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (!(cols >= 1 && cols <= 4) || !(rows >= 1 && rows <= 10)) throw bad('블록은 가로 1~4, 세로 1~10 사이여야 해요.');
       return { cols, rows };
     }) };
-    const validSeat = /^b\d+-r\d+-c\d+$/;
     const seats = {};
     const used = new Set();
     for (const [seatId, studentId] of Object.entries(body.seats || {})) {
       if (!validSeat.test(seatId)) throw bad('좌석 정보가 올바르지 않아요.');
       if (!studentId) continue;
-      if (!found.students.some((st) => st.id === studentId)) throw bad('없는 학생이 좌석에 포함되어 있어요.');
+      if (!room.students.some((st) => st.id === studentId)) throw bad('없는 학생이 좌석에 포함되어 있어요.');
       if (used.has(studentId)) throw bad('한 학생이 두 자리에 배정되어 있어요.');
       used.add(studentId);
       seats[seatId] = studentId;
@@ -653,7 +657,23 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       zones[seatId] = zone;
     }
     const climate = ['cool', 'warm', 'off'].includes(body.climate) ? body.climate : 'off';
-    const room = await mutateRoom(found, (r) => { r.seating = { layout, seats, pinned, options, zones, climate, updatedAt: new Date().toISOString() }; });
+    // 역할 자리: 이번 회차에 그 역할을 맡은 학생이 앉는 자리 (roleSeats: seatId → roleId)
+    const roleIds = new Set(roomRoles(room).map((r) => r.id));
+    const roleSeats = {};
+    for (const [seatId, roleId] of Object.entries(body.roleSeats || {})) {
+      if (!validSeat.test(seatId)) throw bad('좌석 정보가 올바르지 않아요.');
+      if (!roleId) continue;
+      if (!roleIds.has(roleId)) throw bad('역할 자리에 없는 역할이 있어요.');
+      roleSeats[seatId] = roleId;
+    }
+    return { layout, seats, pinned, options, zones, climate, roleSeats };
+  }
+
+  // 자리 배정 저장
+  app.put('/api/teacher/:adminToken/seating', async (req, res) => {
+    const found = await requireRoom(req);
+    const parsed = parseSeatingBody(req.body || {}, found);
+    const room = await mutateRoom(found, (r) => { r.seating = { ...parsed, updatedAt: new Date().toISOString() }; });
     res.json(teacherView(req, room));
   });
 
@@ -799,7 +819,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
   app.post('/api/teacher/:adminToken/roles/default', async (req, res) => {
     const found = await requireRoom(req);
-    const room = await mutateRoom(found, (room) => { room.roles = structuredClone(DEFAULT_ROLES); });
+    const room = await mutateRoom(found, (room) => {
+      room.roles = structuredClone(DEFAULT_ROLES);
+      reconcileRoles(room);   // 없어진 역할의 배정·역할 자리를 정리 (PUT /roles 와 같은 처리)
+    });
     res.json(teacherView(req, room));
   });
 
@@ -1032,6 +1055,99 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(teacherView(req, room, round.id));
   });
 
+  // AI 자리 배정 → room.aiSeating 에 저장 (room.seating 은 바꾸지 않음: 선생님이 화면에서 확인한 뒤 저장)
+  app.post('/api/teacher/:adminToken/ai/seating', async (req, res) => {
+    const found = await requireRoom(req);
+    if (!aiOn()) throw bad('AI 자리 배정을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.');
+    if (!found.students.length) throw bad('학생이 없어요. 먼저 학생을 등록해 주세요.');   // 빈 명단으로 유료 호출을 하지 않도록
+    const roundId = req.body?.roundId ? String(req.body.roundId) : null;
+    const round = roundId ? requireRound(found, roundId) : currentRound(found);
+    const { layout, seats, pinned, options, zones, climate, roleSeats } = parseSeatingBody(req.body || {}, found);
+    const fixedSeats = {};                       // 📌 고정 자리 중 학생이 앉아 있는 자리
+    for (const seatId of pinned) if (seats[seatId]) fixedSeats[seatId] = seats[seatId];
+    const rr = roundRoom(found, round);
+    const stats = computeStats(rr);
+    const analysis = analyzeConflicts(rr, stats);
+    const roleAssignment = round.roleAssignment?.assignments || {};
+    const students = found.students.map((s) => ({ id: s.id, name: s.name }));
+    const ai = makeAi();
+    const result = await aiAssignSeats({
+      ai,
+      students,
+      relations: listRelations(rr),
+      pairs: analysis.pairs,
+      teacherNotes: found.teacherNotes || { students: {}, rules: [] },
+      profiles: round.profiles || {},
+      bodies: Object.fromEntries(found.students.map((s) => [s.id, s.body || {}])),
+      roles: roomRoles(found).map((r) => ({ id: r.id, name: r.name })),
+      roleAssignment,
+      aiAnalysis: round.aiAnalysis || null,
+      isolated: Object.values(analysis.studentRisk).filter((s) => s.flags.includes('isolated')).map((s) => s.id),
+      layout,
+      fixedSeats,
+      zones,
+      climate,
+      roleSeats,
+      options,
+    });
+    const repaired = repairSeating({ assignment: result.assignment, students, layout, fixedSeats, roleSeats, roleAssignment });
+    const room = await mutateRoom(found, (room) => {
+      room.aiSeating = {
+        roundId: round.id,
+        roundName: round.name,
+        createdAt: new Date().toISOString(),
+        model: ai?.model || null,
+        truncated: Boolean(result.truncated),
+        pairs: result.pairs,
+        assignment: repaired.seats,
+        explanations: result.explanations,
+        notes: result.notes,
+        warnings: repaired.warnings,
+      };
+    });
+    res.json(teacherView(req, room, round.id));
+  });
+
+  /** 삭제된 학생의 흔적을 AI 자리 배정안에서 지웁니다. 글에 남은 이름은 '(삭제된 학생)'으로 바꿉니다. */
+  function scrubAiSeating(a, student) {
+    a.pairs = (a.pairs || []).filter((p) => p.a !== student.id && p.b !== student.id);
+    for (const [seatId, sid] of Object.entries(a.assignment || {})) if (sid === student.id) delete a.assignment[seatId];
+    if (a.explanations) delete a.explanations[student.id];
+    const name = String(student.name || '').trim();
+    if (name.length < 2) return;
+    const wipe = (t) => (typeof t === 'string' ? t.split(name).join('(삭제된 학생)') : t);
+    a.notes = wipe(a.notes);
+    for (const p of a.pairs) p.reason = wipe(p.reason);
+    for (const sid of Object.keys(a.explanations || {})) a.explanations[sid] = wipe(a.explanations[sid]);
+    a.warnings = (a.warnings || []).map(wipe);
+  }
+
+  /**
+   * 학생 이름을 바꾸면 AI 분석·AI 자리 배정안의 글에 실명으로 들어 있던 옛 이름도 새 이름으로 바꿉니다.
+   * (가명 처리는 지금 명단의 이름만 알아서, 그대로 두면 다음 AI 요청 때 옛 실명이 프롬프트에 섞여 나갑니다.)
+   */
+  function renameInAiTexts(room, oldName, newName) {
+    const from = String(oldName || '').trim();
+    if (from.length < 2 || from === newName) return;
+    const swap = (t) => (typeof t === 'string' ? t.split(from).join(newName) : t);
+    for (const round of room.rounds || []) {
+      const a = round.aiAnalysis;
+      if (!a) continue;
+      a.summary = swap(a.summary);
+      for (const p of a.pairs || []) { p.analysis = swap(p.analysis); p.advice = swap(p.advice); p.conflictType = swap(p.conflictType); }
+      for (const s of a.students || []) {
+        s.summary = swap(s.summary); s.strengths = swap(s.strengths); s.watch = swap(s.watch);
+        for (const f of s.roleFit || []) f.reason = swap(f.reason);
+      }
+    }
+    const b = room.aiSeating;
+    if (!b) return;
+    b.notes = swap(b.notes);
+    for (const p of b.pairs || []) p.reason = swap(p.reason);
+    for (const sid of Object.keys(b.explanations || {})) b.explanations[sid] = swap(b.explanations[sid]);
+    b.warnings = (b.warnings || []).map(swap);
+  }
+
   /** 삭제된 학생의 흔적을 AI 분석 결과에서 지웁니다. 자유 서술에 남은 이름은 '(삭제된 학생)'으로 바꿉니다. */
   function scrubAiAnalysis(a, student) {
     a.pairs = (a.pairs || []).filter((p) => p.a !== student.id && p.b !== student.id);
@@ -1050,6 +1166,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   /** 역할 목록이 바뀐 뒤: 지워진 역할에 배정돼 있던 학생은 미배정으로 돌리고 경고를 남깁니다. 정원이 줄어든 역할도 알립니다. */
   function reconcileRoles(room) {
     const roleMap = new Map(roomRoles(room).map((r) => [r.id, r]));
+    // 지워진 역할의 역할 자리는 보통 자리로 돌립니다.
+    for (const [seatId, rid] of Object.entries(room.seating?.roleSeats || {})) if (!roleMap.has(rid)) delete room.seating.roleSeats[seatId];
     for (const round of room.rounds || []) {
       const ra = round.roleAssignment;
       if (!ra?.assignments) continue;

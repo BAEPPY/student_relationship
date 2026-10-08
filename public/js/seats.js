@@ -1,4 +1,4 @@
-import { api, el, toast, setChildren, setupPageNav, TYPE_ICON } from './common.js';
+import { api, el, toast, setChildren, setupPageNav, fmtDate, TYPE_ICON } from './common.js';
 import { parseTeacherNotes } from './notes-parser.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -27,6 +27,11 @@ let notesOpen = true;
 let pasteText = '';
 let parsed = null;              // { items: [{...item, checked}], unmatched }
 let staleNotice = false;        // 저장 뒤에 학생 응답이 바뀌었는지
+let roleSeats = {};              // seatId -> roleId (1인 1역 담당 학생이 앉는 "역할 자리")
+let roleMode = false;            // 켜면 자리를 눌러 역할 자리를 지정/해제
+let roleModeRole = '';           // 역할 자리 지정 모드에서 고른 역할 id
+let aiSeating = null;            // 서버에 저장된 마지막 AI 자리 배정 결과 (teacherView.aiSeating)
+let aiBusy = false;              // AI 자리 배정 요청 중
 
 // 자리표 보는 방향 (화면·인쇄 전용, 좌석 id와 배정 데이터는 그대로)
 //  - student: 학생 시점, 칠판(교탁)이 위
@@ -49,6 +54,8 @@ let seatView = loadSeatView();   // 'student' | 'teacher' | 'flipV'
 const nameOf = (id) => data.stats[id]?.name || '?';
 const RULE_LABEL = { apart: '떨어뜨리기', together: '가까이 앉히기' };
 const FRONT_ROWS = 2;            // 앞자리로 인정하는 줄 수
+const AI_WARN = 40;              // 학생이 표시하지 않은 쌍이라도 AI 예측 갈등 가능성이 이 값 이상이면 떨어뜨려요
+const AI_CONFIRM = 'AI 자리 배정은 30초~1분 걸리고 API 사용량(비용)이 들어요. 지금 화면의 배치·고정·바람 자리·역할 자리와 교사 메모·규칙을 기준으로 배정안을 받아요 (메모·규칙은 먼저 저장돼요). 계속할까요?';
 
 // ---------- 좌석 ----------
 function seatList() {
@@ -85,6 +92,7 @@ function neighborPairs() {
 // ---------- 관계 비용 ----------
 let relType = {};   // relType[a][b] = 'good' | 'bad'
 let prob = {};      // 'a|b' (정렬) -> 갈등 분석 결과
+let aiProb = {};    // 'a|b' (정렬) -> AI 자리 배정이 예측한 갈등 가능성 { a, b, probability, reason }
 let isolated = new Set();
 const pairKey = (a, b) => [a, b].sort().join('|');
 function buildRelations() {
@@ -94,6 +102,11 @@ function buildRelations() {
   for (const p of data.analysis.pairs) prob[pairKey(p.a, p.b)] = p;
   isolated = new Set(Object.values(data.analysis.studentRisk).filter((s) => s.flags.includes('isolated')).map((s) => s.id));
   bodies = Object.fromEntries(data.students.map((s) => [s.id, s.body || {}]));
+  // AI 자리 배정 결과(서버 저장분)와 그 안의 갈등 예측. 없는 학생이 섞여 있으면 뺀다
+  aiSeating = data.aiSeating || null;
+  aiProb = {};
+  const known = new Set(data.students.map((s) => s.id));
+  for (const p of aiSeating?.pairs || []) if (known.has(p.a) && known.has(p.b) && p.a !== p.b) aiProb[pairKey(p.a, p.b)] = p;
 }
 const rel = (a, b) => relType[a]?.[b] || 'none';
 const ruleOf = (a, b) => rules.find((r) => pairKey(r.a, r.b) === pairKey(a, b)) || null;
@@ -114,6 +127,42 @@ function bodyLabels(sid) {
   return out;
 }
 
+// ---------- 1인 1역 역할 자리 ----------
+const roleList = () => (Array.isArray(data.roles) ? data.roles : []);
+const roleOf = (roleId) => roleList().find((r) => r.id === roleId) || null;
+const roleNameOf = (roleId) => roleOf(roleId)?.name || '(없는 역할)';
+/** 지금 저장된 1인 1역 배정(초안이든 공개든)에서 그 역할을 맡은 학생 id 들 */
+function roleHolders(roleId) {
+  const known = new Set(data.students.map((s) => s.id));
+  return (data.roleAssignment?.assignments?.[roleId] || []).filter((sid) => known.has(sid));
+}
+const holderNames = (roleId) => { const h = roleHolders(roleId); return h.length ? h.map(nameOf).join(', ') : '아직 없음'; };
+/** 좌석 id 를 사람이 읽는 말로: b0-r1-c0 → "1분단 2번째 줄 1번째 자리" */
+function seatLabel(seatId) {
+  const [b, r, c] = seatId.split('-').map((p) => Number(p.slice(1)));
+  return `${b + 1}분단 ${r + 1}번째 줄 ${c + 1}번째 자리`;
+}
+/** 자동 배정에서 움직이지 않는 자리: 📌 고정 자리 + 🎒 역할 자리(그 역할 담당 학생이 있을 때). seatId -> studentId */
+function fixedSeats() {
+  const valid = new Set(seatList().map((s) => s.id));
+  const fixed = {};
+  const taken = new Set();
+  for (const id of pinned) if (valid.has(id) && seats[id]) { fixed[id] = seats[id]; taken.add(seats[id]); }
+  const roleSeatIds = Object.keys(roleSeats).filter((seatId) => valid.has(seatId) && !fixed[seatId]);
+  // 1) 이미 자기 역할 자리에 앉아 있는 담당은 그대로 (역할 자리 순서와 상관없이 먼저 지켜요)
+  for (const seatId of roleSeatIds) {
+    const sid = seats[seatId];
+    if (sid && !taken.has(sid) && roleHolders(roleSeats[seatId]).includes(sid)) { fixed[seatId] = sid; taken.add(sid); }
+  }
+  // 2) 남은 역할 자리에는 아직 자리가 정해지지 않은 담당을 차례로. 담당이 없으면(또는 모두 앉았으면) 보통 자리처럼 씀
+  for (const seatId of roleSeatIds) {
+    if (fixed[seatId]) continue;
+    const sid = roleHolders(roleSeats[seatId]).find((h) => !taken.has(h));
+    if (sid) { fixed[seatId] = sid; taken.add(sid); }
+  }
+  return fixed;
+}
+
 function pairCost(a, b) {
   if (!a || !b) return 0;
   let cost = 0;
@@ -123,7 +172,12 @@ function pairCost(a, b) {
   if (rule?.type === 'together') cost -= 60;
   const ab = rel(a, b);
   const ba = rel(b, a);
-  if (ab === 'bad' || ba === 'bad') cost += prob[pairKey(a, b)]?.probability ?? 50;
+  const key = pairKey(a, b);
+  const aiP = aiProb[key]?.probability;
+  // 안 좋은 사이: AI 가 예측한 갈등 가능성이 있으면 그걸, 없으면 규칙 기반 분석값을 써요
+  if (ab === 'bad' || ba === 'bad') cost += aiP ?? prob[key]?.probability ?? 50;
+  // 학생은 안 좋은 사이로 표시하지 않았지만 AI 가 갈등이 생길 수 있다고 본 쌍도 조금 떨어뜨려요
+  else if (aiP >= AI_WARN) cost += aiP * 0.6;
   const mutualGood = ab === 'good' && ba === 'good';
   const anyGood = ab === 'good' || ba === 'good';
   if (options.friends === 'near') cost -= mutualGood ? 10 : anyGood ? 4 : 0;
@@ -157,17 +211,18 @@ function totalCost(assign, pairs) {
 // ---------- 자동 배정 (담금질 기법) ----------
 function autoAssign(message = '자동으로 배정했어요. 마음에 안 들면 "다른 배치"를 눌러 보세요.') {
   const all = seatList().map((s) => s.id);
-  const free = all.filter((id) => !pinned.has(id));
-  const pinnedStudents = new Set([...pinned].map((id) => seats[id]).filter(Boolean));
-  const students = data.students.map((s) => s.id).filter((id) => !pinnedStudents.has(id));
+  // 📌 고정 자리와 🎒 역할 자리(담당 학생)는 먼저 앉히고 나머지 자리만 섞어요
+  const fixed = fixedSeats();
+  const free = all.filter((id) => !(id in fixed));
+  const fixedStudents = new Set(Object.values(fixed));
+  const students = data.students.map((s) => s.id).filter((id) => !fixedStudents.has(id));
   if (students.length > free.length) toast(`자리가 ${students.length - free.length}개 부족해요. 배치를 늘려 주세요.`, 4000);
 
   const pairs = neighborPairs();
   let best = null;
   let bestCost = Infinity;
   for (let restart = 0; restart < 6; restart++) {
-    const assign = {};
-    for (const id of pinned) if (seats[id]) assign[id] = seats[id];
+    const assign = { ...fixed };
     const shuffled = [...students].sort(() => Math.random() - 0.5);
     free.forEach((id, i) => { assign[id] = shuffled[i] || null; });
     let cost = totalCost(assign, pairs);
@@ -211,15 +266,49 @@ function evaluate() {
     const rule = ruleOf(a, b);
     const ab = rel(a, b);
     const ba = rel(b, a);
+    const ai = aiProb[pairKey(a, b)] || null;      // AI 자리 배정이 예측한 갈등 가능성 (있으면)
     if (rule?.type === 'apart') {
       warnings.push({ a, b, label, p: 100, teacher: true, note: rule.note, ab, ba });
       conflictSeats.add(x); conflictSeats.add(y);
     } else if (ab === 'bad' || ba === 'bad') {
-      warnings.push({ a, b, label, p: prob[pairKey(a, b)]?.probability ?? null, ab, ba });
+      warnings.push({ a, b, label, p: prob[pairKey(a, b)]?.probability ?? null, aiP: ai?.probability ?? null, aiReason: ai?.reason || '', ab, ba });
+      conflictSeats.add(x); conflictSeats.add(y);
+    } else if (ai && ai.probability >= AI_WARN) {
+      // 학생은 안 좋은 사이로 표시하지 않았지만 AI 가 갈등이 생길 수 있다고 본 쌍
+      warnings.push({ a, b, label, p: null, aiP: ai.probability, aiReason: ai.reason || '', aiOnly: true, ab, ba });
       conflictSeats.add(x); conflictSeats.add(y);
     } else if (ab === 'good' && ba === 'good' && label === '짝꿍') goodPairs++;
   }
-  warnings.sort((p, q) => (q.p || 0) - (p.p || 0));
+  const severity = (w) => Math.max(w.p || 0, w.aiP || 0);
+  warnings.sort((p, q) => severity(q) - severity(p));
+
+  // 🎒 역할 자리: 담당이 아닌 학생이 앉았거나, 역할 자리가 비어 있는데 담당 학생이 다른 자리에 앉은 경우.
+  // 담당보다 역할 자리가 많으면 남는 역할 자리는 보통 자리라서(자동 배정·서버 보정과 같은 기준) 경고하지 않아요
+  const byRole = {};
+  for (const [seatId, roleId] of Object.entries(roleSeats)) (byRole[roleId] ||= []).push(seatId);
+  for (const [roleId, seatIds] of Object.entries(byRole)) {
+    const holders = roleHolders(roleId);
+    if (!holders.length) continue;                          // 담당이 없으면 보통 자리
+    const name = roleNameOf(roleId);
+    const isHolderSeat = (seatId) => Boolean(seats[seatId]) && holders.includes(seats[seatId]);
+    const seatedHolders = seatIds.filter(isHolderSeat).length;   // 자기 역할 자리에 앉은 담당 수
+    // 담당이 앉지 않은 역할 자리 가운데 '아직 역할 자리에 앉지 못한 담당 수'만큼만 담당 몫이에요. 빈자리를 먼저 담당 몫으로 쳐요
+    const open = seatIds.filter((seatId) => !isHolderSeat(seatId)).sort((x, y) => Number(Boolean(seats[x])) - Number(Boolean(seats[y])));
+    let unmet = Math.min(holders.length - seatedHolders, open.length);   // 담당이 들어가야 할 역할 자리 수
+    if (unmet <= 0) continue;
+    for (const seatId of open.slice(0, unmet)) {
+      const sid = seats[seatId];
+      if (sid) { infos.push(`${seatLabel(seatId)}: ${name} 자리인데 담당이 아닌 ${nameOf(sid)}이(가) 앉아 있어요.`); conflictSeats.add(seatId); }
+    }
+    for (const sid of holders) {
+      if (unmet <= 0) break;
+      const seatId = seatOf[sid];
+      if (!seatId || seatIds.includes(seatId)) continue;
+      unmet--;
+      infos.push(`${nameOf(sid)}: ${name} 담당인데 역할 자리가 아닌 ${seatLabel(seatId)}에 앉아 있어요.`);
+      conflictSeats.add(seatId);
+    }
+  }
 
   // 가까이 앉히기 지정인데 떨어져 있는 쌍
   const adjacent = new Set(pairs.map(([x, y]) => pairKey(x, y)));
@@ -277,7 +366,28 @@ function render() {
   climateSelect.addEventListener('change', () => { climate = climateSelect.value; dirty = true; render(); });
   const zoneBtn = el('button', { type: 'button', class: `btn ${zoneMode ? 'primary' : ''}`, id: 'zone-mode', 'aria-pressed': zoneMode ? 'true' : 'false',
     text: zoneMode ? '✓ 바람 자리 표시 끝내기' : `🌀 바람 자리 표시${zoneCount ? ` (${zoneCount}개)` : ''}`,
-    onClick: () => { zoneMode = !zoneMode; selected = null; render(); if (zoneMode) toast('냉난방기 바람이 닿는 자리를 눌러 표시하거나 해제하세요. 끝나면 버튼을 다시 눌러요.', 4000); } });
+    onClick: () => { zoneMode = !zoneMode; roleMode = false; selected = null; render(); if (zoneMode) toast('냉난방기 바람이 닿는 자리를 눌러 표시하거나 해제하세요. 끝나면 버튼을 다시 눌러요.', 4000); } });
+  // 🎒 역할 자리 지정: 1인 1역 역할 목록이 있을 때만. 역할을 고르고 자리를 누르면 그 역할 담당 학생의 자리가 돼요
+  const roles = roleList();
+  if (roles.length && !roles.some((r) => r.id === roleModeRole)) roleModeRole = roles[0].id;
+  const roleSeatCount = Object.keys(roleSeats).length;
+  const roleRow = roles.length ? [
+    el('button', { type: 'button', class: `btn ${roleMode ? 'primary' : ''}`, id: 'role-seat-mode', 'aria-pressed': roleMode ? 'true' : 'false',
+      text: roleMode ? '✓ 역할 자리 지정 끝내기' : `🎒 역할 자리 지정${roleSeatCount ? ` (${roleSeatCount}개)` : ''}`,
+      onClick: () => { roleMode = !roleMode; zoneMode = false; selected = null; render(); if (roleMode) toast('역할을 고른 뒤 자리를 누르면 그 역할 담당 학생이 앉는 자리가 돼요. 같은 역할 자리를 다시 누르면 해제돼요.', 4000); } }),
+    (() => {
+      const sel = el('select', { class: 'select', id: 'role-seat-role', title: '역할 자리로 지정할 역할', 'aria-label': '역할 자리로 지정할 역할' },
+        roles.map((r) => el('option', { value: r.id, text: `${r.name} (담당: ${holderNames(r.id)})`, selected: roleModeRole === r.id ? true : null })));
+      sel.addEventListener('change', () => { roleModeRole = sel.value; });
+      return sel;
+    })(),
+  ] : [el('span', { class: 'muted', id: 'role-seat-hint', style: { alignSelf: 'center', fontSize: '14px' }, text: '🎒 1인 1역 역할 목록을 만들면 역할 자리를 지정할 수 있어요.' })];
+  // 🤖 AI 자리 배정: 서버에 API 키가 있을 때만
+  const aiEnabled = Boolean(data.ai?.enabled);
+  const aiBtn = el('button', { type: 'button', class: 'btn', id: 'ai-seat-btn', disabled: aiEnabled && !aiBusy ? null : true,
+    text: aiBusy ? 'AI가 배정 중…' : '🤖 AI 자리 배정',
+    title: aiEnabled ? 'Claude 가 관계·메모·몸 특징·역할을 종합해 배정안을 만들어요 (30초~1분, API 비용)' : 'AI 자리 배정을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.',
+    onClick: aiAssign });
   // 보는 방향: 저장 데이터와 무관한 표시 설정이라 dirty 로 만들지 않고 브라우저에만 기억해요
   const viewSelect = el('select', { class: 'select seat-view-select', title: '자리표 보는 방향', 'aria-label': '자리표 보는 방향' },
     Object.entries(SEAT_VIEWS).map(([value, v]) => el('option', { value, text: v.label, selected: seatView === value ? true : null })));
@@ -289,6 +399,7 @@ function render() {
       el('div', { class: 'btn-row' }, [
         el('button', { type: 'button', class: 'btn primary', text: '자동 배정', onClick: () => autoAssign() }),
         el('button', { type: 'button', class: 'btn', text: '다른 배치', onClick: () => autoAssign() }),
+        aiBtn,
         el('button', { type: 'button', class: 'btn', text: '모두 비우기', onClick: () => { if (!confirm('고정한 자리를 포함해 모두 비울까요?')) return; seats = {}; pinned = new Set(); dirty = true; render(); } }),
         el('button', { type: 'button', class: `btn ${dirty ? 'orange' : ''}`, text: dirty ? '저장하기 *' : '저장됨', onClick: save }),
         viewSelect,
@@ -302,14 +413,17 @@ function render() {
         const valid = new Set(seatList().map((s) => s.id));
         for (const id of Object.keys(seats)) if (!valid.has(id)) delete seats[id];
         for (const id of Object.keys(zones)) if (!valid.has(id)) delete zones[id];
+        for (const id of Object.keys(roleSeats)) if (!valid.has(id)) delete roleSeats[id];
         pinned = new Set([...pinned].filter((id) => valid.has(id)));
         dirty = true; render();
       } }, [el('label', { text: '교실 배치', style: { fontWeight: 600, alignSelf: 'center' } }), layoutInput, el('button', { type: 'submit', class: 'btn', text: '적용' })]),
       friendsSelect,
     ]),
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, [zoneBtn, climateSelect]),
+    el('div', { class: 'btn-row', style: { marginTop: '6px' } }, roleRow),
     el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요(교사 지정 또는 눈이 나쁜 편), 📝 메모 있음, ❄️ 추위 잘 탐, 🔥 더위 잘 탐, 📏 키 큼, 🌱 키 작음.' }),
     el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🌀 바람 자리: 시스템 에어컨·히터 바람이 바로 닿는 자리를 표시해 두면, 냉방 중에는 추위를 잘 타는 학생을, 난방 중에는 더위를 잘 타는 학생을 자동 배정에서 그 자리에 앉히지 않아요. 학생이 "나는 이런 편이에요"에서 고른 몸 특징(눈·키·추위·더위)도 함께 참고해요.' }),
+    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🎒 역할 자리: 1인 1역에서 특정 역할(예: 칠판 지킴이)을 맡은 학생이 앉을 자리를 미리 정해 두면, 자동 배정과 AI 배정이 이번 회차 담당 학생을 그 자리에 앉혀요. 담당이 아직 없으면 보통 자리처럼 써요. 🤖 AI 자리 배정은 Claude 가 학생 관계·메모·몸 특징·성향 설문·1인 1역까지 종합해 배정안과 갈등 예측을 만들어 주는 기능으로, 실명 대신 가명을 보내고 30초~1분 정도 걸리며 API 비용이 들어요. 결과는 화면에서 확인한 뒤 저장해야 반영돼요.' }),
     el('p', { class: 'muted seat-view-hint', style: { marginTop: '4px', marginBottom: 0 }, text: '자리표는 "인쇄" 옆에서 보는 방향을 고를 수 있어요. 교사 시점은 교탁에서 학생들을 바라본 모습이라 위아래와 좌우가 모두 뒤집혀요. 방향은 화면과 인쇄에만 적용되고 배정 자체는 바뀌지 않아요.' }),
     staleNotice ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, [
       el('span', { style: { flex: 1 }, text: '자리를 저장한 뒤에 학생 응답이 새로 들어왔어요. 아래 경고 목록은 최신 응답 기준이에요. 고정한 자리는 그대로 두고 다시 배정할 수 있어요.' }),
@@ -329,7 +443,7 @@ function render() {
   }));
   // 교탁: 학생 시점은 위, 줄을 뒤집은 시점(교사 시점·위아래만 뒤집기)은 아래
   const podium = el('div', { class: `podium${view.flipRows ? ' below' : ''}`, text: '교탁' });
-  const chart = el('section', { class: `card seat-chart${zoneMode ? ' zone-mode' : ''}`, dataset: { view: seatView } }, [
+  const chart = el('section', { class: `card seat-chart${zoneMode ? ' zone-mode' : ''}${roleMode ? ' role-mode' : ''}`, dataset: { view: seatView } }, [
     el('div', { class: 'print-only', style: { fontWeight: 700, fontSize: '18px', marginBottom: '8px' } }, [
       `${data.room.name} 자리표`,
       view.printLabel ? el('span', { class: 'print-view-label', text: ` · ${view.printLabel}` }) : null,
@@ -353,8 +467,10 @@ function render() {
         el('b', { text: `${nameOf(w.a)} ↔ ${nameOf(w.b)}` }), ` · ${w.label} `,
         w.teacher
           ? el('span', { class: 'badge high', text: `교사 지정 분리${w.note ? ` · ${w.note}` : ''}` })
-          : w.p !== null ? el('span', { class: `badge ${w.p >= 70 ? 'high' : w.p >= 40 ? 'medium' : 'low'}`, text: `갈등 ${w.p}%` }) : null,
-        !w.teacher ? el('span', { class: 'muted', text: ` ${w.ab === 'bad' ? `${nameOf(w.a)} ${TYPE_ICON.bad}→ ${nameOf(w.b)}` : ''} ${w.ba === 'bad' ? `${nameOf(w.b)} ${TYPE_ICON.bad}→ ${nameOf(w.a)}` : ''}` }) : null,
+          : w.p !== null || w.aiP !== null ? el('span', { class: `badge ${badgeLevel(Math.max(w.p || 0, w.aiP || 0))}`, title: w.aiReason || null,
+            text: w.aiOnly ? `AI 예측 ${w.aiP}%` : [w.p !== null ? `갈등 ${w.p}%` : '', w.aiP !== null && w.aiP !== undefined ? `AI ${w.aiP}%` : ''].filter(Boolean).join(' · ') }) : null,
+        !w.teacher && !w.aiOnly ? el('span', { class: 'muted', text: ` ${w.ab === 'bad' ? `${nameOf(w.a)} ${TYPE_ICON.bad}→ ${nameOf(w.b)}` : ''} ${w.ba === 'bad' ? `${nameOf(w.b)} ${TYPE_ICON.bad}→ ${nameOf(w.a)}` : ''}` }) : null,
+        w.aiOnly ? el('span', { class: 'muted', text: ` 학생이 표시한 사이는 아니지만 AI 가 갈등 가능성을 봤어요${w.aiReason ? ` · ${w.aiReason}` : ''}` }) : null,
       ]))),
     ]) : el('p', { class: 'muted', style: { marginTop: '10px' }, text: Object.keys(seats).length ? '가까운 자리에 안 좋은 사이나 분리 지정 쌍이 없어요. 👍' : '아직 배정된 자리가 없어요. "자동 배정"을 눌러 보세요.' }),
     ev.infos.length ? el('div', { style: { marginTop: '8px' } }, [
@@ -376,9 +492,119 @@ function render() {
         ...memoStudents.map((s) => el('li', {}, [el('b', { text: s.name }), notes[s.id].front ? ' 👓 앞자리 필요' : '', notes[s.id].memo ? el('span', { class: 'muted', text: ` · ${notes[s.id].memo}` }) : null])),
       ]),
     ]) : null,
+    aiSeatingPanel(),
   ]);
 
   setChildren(app, header, el('div', { class: 'grid-2 seat-layout' }, [chart, side]), notesSection());
+}
+
+const badgeLevel = (p) => (p >= 70 ? 'high' : p >= 40 ? 'medium' : 'low');
+
+// ---------- 🤖 AI 자리 배정 ----------
+/** 측면 카드의 "AI 자리 배정 메모": 만든 시각·회차·모델, 메모, 예측 갈등 상위 10쌍, 학생별 설명, 다시 적용 버튼 */
+function aiSeatingPanel() {
+  const a = aiSeating;
+  if (!a) return null;
+  const known = new Set(data.students.map((s) => s.id));
+  const otherRound = a.roundId && a.roundId !== data.round.id;
+  const pairs = (a.pairs || []).filter((p) => known.has(p.a) && known.has(p.b)).sort((p, q) => (q.probability || 0) - (p.probability || 0)).slice(0, 10);
+  const explanations = Object.entries(a.explanations || {}).filter(([sid, text]) => known.has(sid) && text);
+  const when = fmtDate(a.createdAt) || (a.createdAt ? new Date(a.createdAt).toLocaleString() : '');
+  return el('div', { id: 'ai-seating-panel', style: { marginTop: '12px' } }, [
+    el('h3', { text: '🤖 AI 자리 배정 메모' }),
+    el('div', { class: 'muted', style: { fontSize: '13px' }, text: [when, otherRound ? `${a.roundName || '다른'} 회차 기준` : (a.roundName || data.round.name) + ' 회차', a.model ? `모델 ${a.model}` : ''].filter(Boolean).join(' · ') }),
+    otherRound ? el('div', { class: 'alert warn', style: { marginTop: '6px', fontSize: '13px' }, text: `이 배정안은 ${a.roundName || '다른'} 회차 응답으로 만든 거예요. 지금 보는 ${data.round.name} 회차와 다를 수 있어요.` }) : null,
+    a.truncated ? el('div', { class: 'muted', id: 'ai-seat-truncated', style: { marginTop: '4px', fontSize: '13px' }, text: '⚠️ 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' }) : null,
+    (a.warnings || []).length ? el('ul', { class: 'muted', style: { paddingLeft: '18px', margin: '6px 0', fontSize: '13px' } }, a.warnings.map((w) => el('li', { text: `⚠️ ${w}` }))) : null,
+    a.notes ? el('p', { id: 'ai-seat-notes', style: { margin: '6px 0', fontSize: '14px' }, text: a.notes }) : null,
+    pairs.length ? el('div', { style: { marginTop: '6px' } }, [
+      el('div', { style: { fontWeight: 600, fontSize: '14px' }, text: `AI 예측 갈등 가능성 (상위 ${pairs.length}쌍)` }),
+      el('ul', { id: 'ai-seat-pairs', style: { paddingLeft: '18px', margin: '4px 0', fontSize: '13.5px' } }, pairs.map((p) => el('li', {}, [
+        el('b', { text: `${nameOf(p.a)} ↔ ${nameOf(p.b)}` }), ' ',
+        el('span', { class: `badge ${badgeLevel(p.probability || 0)}`, text: `${p.probability}%` }),
+        p.reason ? el('span', { class: 'muted', text: ` · ${p.reason}` }) : null,
+      ]))),
+    ]) : null,
+    explanations.length ? el('details', { style: { marginTop: '6px', fontSize: '13.5px' } }, [
+      el('summary', { style: { cursor: 'pointer', fontWeight: 600 }, text: `학생별 자리 설명 (${explanations.length}명)` }),
+      el('ul', { style: { paddingLeft: '18px', margin: '4px 0' } }, explanations.map(([sid, text]) => el('li', {}, [el('b', { text: nameOf(sid) }), el('span', { class: 'muted', text: ` · ${text}` })]))),
+    ]) : null,
+    el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+      el('button', { type: 'button', class: 'btn small', id: 'ai-seat-reapply', text: 'AI 배정안 다시 적용', onClick: () => toast(aiApplyMessage('AI 배정안을 다시 적용했어요.', applyAiSeating()), 6000) }),
+    ]),
+  ]);
+}
+
+/**
+ * aiSeating.assignment 을 지금 배치에 맞게 좌석표에 넣어요 (없는 좌석·없는 학생·중복은 건너뜀).
+ * 배정안에 자리가 없는 학생(배치가 달라졌거나 그 뒤에 들어온 학생)은 빈자리에 앞줄부터 앉혀요.
+ * → { moved: 그렇게 앉힌 학생 수, short: 자리가 모자라 못 앉은 학생 수 }
+ */
+function applyAiSeating() {
+  if (!aiSeating?.assignment) return { moved: 0, short: 0 };
+  const list = seatList();
+  const valid = new Set(list.map((s) => s.id));
+  const known = new Set(data.students.map((s) => s.id));
+  const used = new Set();
+  seats = {};
+  for (const [seatId, sid] of Object.entries(aiSeating.assignment)) {
+    if (!valid.has(seatId) || !known.has(sid) || used.has(sid)) continue;
+    seats[seatId] = sid;
+    used.add(sid);
+  }
+  const empty = list.filter((s) => !seats[s.id]).sort((x, y) => x.r - y.r || x.b - y.b || x.c - y.c).map((s) => s.id);
+  let moved = 0;
+  let short = 0;
+  for (const s of data.students) {
+    if (used.has(s.id)) continue;
+    const seatId = empty.shift();
+    if (!seatId) { short++; continue; }
+    seats[seatId] = s.id;
+    used.add(s.id);
+    moved++;
+  }
+  dirty = true;
+  selected = null;
+  staleNotice = false;
+  render();
+  return { moved, short };
+}
+
+/** AI 배정안을 적용한 뒤 보여 줄 안내: 배정안과 다르게 앉힌 학생이 있으면 알려 줘요 */
+function aiApplyMessage(prefix, { moved = 0, short = 0 } = {}) {
+  const bits = [prefix];
+  if (moved) bits.push(`배치나 명단이 달라 ${moved}명은 배정안과 다른 자리(앞줄 빈자리부터)에 앉혔어요.`);
+  if (short) bits.push(`${short}명은 자리가 모자라 앉히지 못했어요. 배치를 늘리거나 자동 배정을 눌러 주세요.`);
+  bits.push('확인 후 저장해 주세요.');
+  return bits.join(' ');
+}
+
+/**
+ * 🤖 AI 자리 배정 요청: 화면의 교사 메모·규칙을 먼저 저장하고(서버가 저장본을 읽어요), 지금 화면의 배치·고정·바람 자리·역할 자리를 보내
+ * 받은 배정안을 좌석표에 적용해요 (자리 저장은 선생님이)
+ */
+async function aiAssign() {
+  if (aiBusy) return;
+  if (!data.ai?.enabled) return toast('AI 자리 배정을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.', 4000);
+  if (!data.students.length) return toast('학생이 없어요.');
+  if (!confirm(AI_CONFIRM)) return;
+  aiBusy = true;
+  render();
+  try {
+    await saveNotes();   // 저장하지 않은 떨어뜨리기/가까이 앉히기 규칙·👓 앞자리·메모도 AI 가 보도록
+    const body = { roundId: data.round.id, layout, seats, pinned: [...pinned], zones, climate, roleSeats, options };
+    data = await api(`${base}/ai/seating`, { method: 'POST', body });
+    buildRelations();
+    aiBusy = false;
+    if (!aiSeating?.assignment) throw new Error('AI 배정 결과를 받지 못했어요.');
+    const applied = applyAiSeating();
+    const summary = (aiSeating.notes || '').trim();
+    toast(`${aiApplyMessage('AI 배정안을 적용했어요.', applied)}${summary ? ` ${summary.length > 80 ? `${summary.slice(0, 80)}…` : summary}` : ''}`, 6000);
+  } catch (err) {
+    aiBusy = false;
+    render();
+    toast(err.message, 5000);
+  }
 }
 
 function seatCard(seatId, ev) {
@@ -386,13 +612,15 @@ function seatCard(seatId, ev) {
   const n = sid ? notes[sid] : null;
   const body = sid ? bodyOf(sid) : {};
   const zone = zones[seatId] || '';
-  const cls = ['seat', sid ? '' : 'empty', selected === seatId ? 'selected' : '', ev.conflictSeats.has(seatId) ? 'conflict' : '', pinned.has(seatId) ? 'pinned' : '', zone ? `zone-${zone} climate-${climate}` : ''].filter(Boolean).join(' ');
+  const roleId = roleSeats[seatId] || '';
+  const cls = ['seat', sid ? '' : 'empty', selected === seatId ? 'selected' : '', ev.conflictSeats.has(seatId) ? 'conflict' : '', pinned.has(seatId) ? 'pinned' : '', zone ? `zone-${zone} climate-${climate}` : '', roleId ? 'role-seat' : ''].filter(Boolean).join(' ');
   const marks = `${n?.front || body.sight === 'poor' ? '👓' : ''}${body.cold === 'yes' ? '❄️' : ''}${body.heat === 'yes' ? '🔥' : ''}${body.height === 'tall' ? '📏' : ''}${body.height === 'short' ? '🌱' : ''}${n?.memo ? '📝' : ''}`;
-  const title = [sid ? nameOf(sid) : '빈 자리', ...(sid ? bodyLabels(sid) : []), n?.front ? '앞자리 필요(교사 지정)' : '', n?.memo ? `메모: ${n.memo}` : '', zone === 'ac' ? `냉난방기 바람 자리 (${CLIMATE_LABEL[climate]})` : ''].filter(Boolean).join(' · ');
+  const title = [sid ? nameOf(sid) : '빈 자리', ...(sid ? bodyLabels(sid) : []), n?.front ? '앞자리 필요(교사 지정)' : '', n?.memo ? `메모: ${n.memo}` : '', zone === 'ac' ? `냉난방기 바람 자리 (${CLIMATE_LABEL[climate]})` : '', roleId ? `역할 자리: ${roleNameOf(roleId)} (담당: ${holderNames(roleId)})` : ''].filter(Boolean).join(' · ');
   return el('button', { type: 'button', class: cls, dataset: { seat: seatId }, title, onClick: () => onSeatClick(seatId) }, [
     el('span', { class: 'seat-name', text: sid ? nameOf(sid) : '빈 자리' }),
     marks ? el('span', { class: 'seat-marks', text: marks }) : null,
     zone ? el('span', { class: 'seat-zone', text: '🌀', 'aria-label': '냉난방기 바람 자리' }) : null,
+    roleId ? el('span', { class: 'seat-role', text: `🎒 ${roleNameOf(roleId)}`, 'aria-label': `역할 자리: ${roleNameOf(roleId)}` }) : null,
     sid ? el('span', { class: 'pin no-print', text: pinned.has(seatId) ? '📌' : '📍', title: pinned.has(seatId) ? '고정 해제' : '이 자리 고정', onClick: (e) => { e.stopPropagation(); pinned.has(seatId) ? pinned.delete(seatId) : pinned.add(seatId); dirty = true; render(); } }) : null,
   ]);
 }
@@ -556,6 +784,13 @@ function onSeatClick(seatId) {
     dirty = true; render();
     return;
   }
+  if (roleMode) {
+    // 고른 역할의 자리로 지정, 이미 같은 역할 자리면 해제
+    if (!roleModeRole || !roleOf(roleModeRole)) return toast('먼저 역할을 골라 주세요.');
+    if (roleSeats[seatId] === roleModeRole) delete roleSeats[seatId]; else roleSeats[seatId] = roleModeRole;
+    dirty = true; render();
+    return;
+  }
   if (selected === null) { selected = seatId; render(); return; }
   if (selected === seatId) { selected = null; render(); return; }
   const a = seats[selected];
@@ -567,12 +802,17 @@ function onSeatClick(seatId) {
   render();
 }
 
+/** 교사 메모(👓 앞자리·메모)와 지정 규칙을 서버에 저장해요 (저장하기와 AI 자리 배정이 같이 씀) */
+async function saveNotes() {
+  const cleanNotes = {};
+  for (const [sid, n] of Object.entries(notes)) if (n.front || (n.memo || '').trim()) cleanNotes[sid] = { memo: (n.memo || '').trim(), front: Boolean(n.front) };
+  await api(`${base}/notes`, { method: 'PUT', body: { notes: cleanNotes, rules } });
+}
+
 async function save() {
   try {
-    const cleanNotes = {};
-    for (const [sid, n] of Object.entries(notes)) if (n.front || (n.memo || '').trim()) cleanNotes[sid] = { memo: (n.memo || '').trim(), front: Boolean(n.front) };
-    await api(`${base}/notes`, { method: 'PUT', body: { notes: cleanNotes, rules } });
-    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options, zones, climate } });
+    await saveNotes();
+    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options, zones, climate, roleSeats } });
     data = await api(dataUrl);
     buildRelations();
     dirty = false;
@@ -603,6 +843,9 @@ function latestResponseAt() {
       options = { ...options, ...(data.seating.options || {}) };
       zones = { ...(data.seating.zones || {}) };
       climate = ['cool', 'warm', 'off'].includes(data.seating.climate) ? data.seating.climate : 'off';
+      // 역할 자리: 그 사이 지워진 역할은 뺀다 (저장할 때 서버가 없는 역할을 거절해요)
+      roleSeats = {};
+      for (const [seatId, roleId] of Object.entries(data.seating.roleSeats || {})) if (roleOf(roleId)) roleSeats[seatId] = roleId;
     }
     notes = { ...(data.teacherNotes?.students || {}) };
     rules = [...(data.teacherNotes?.rules || [])];

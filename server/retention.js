@@ -41,8 +41,20 @@ export function roomLastActivity(room) {
   for (const r of room.rounds || []) bump(roundLastActivity(r));
   bump(room.seating?.updatedAt);
   bump(room.teacherNotes?.updatedAt);
+  bump(room.aiSeating?.createdAt);
   for (const h of room.roleHistory || []) bump(h?.updatedAt);
   return latest;
+}
+
+/**
+ * AI 자리 배정안(room.aiSeating)은 특정 회차의 응답으로 만든 갈등 예측(실명 포함)이라, 그 회차가 없어지면 같이 지웁니다.
+ * (회차 삭제와 보관 기간 만료가 같이 씀) @returns {boolean} 지웠는지
+ */
+export function dropStaleAiSeating(room) {
+  const roundId = room.aiSeating?.roundId;
+  if (!room.aiSeating || (room.rounds || []).some((r) => r.id === roundId)) return false;
+  delete room.aiSeating;
+  return true;
 }
 
 /**
@@ -63,7 +75,10 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
   const keptHistory = history.filter((h) => !(h?.updatedAt && h.updatedAt < cutoff));
   const historyChanged = keptHistory.length !== history.length;
   if (historyChanged) room.roleHistory = keptHistory;
-  if (!removed.length) return { changed: historyChanged, deleteRoom: false, removed };
+  if (!removed.length) {
+    const seatingChanged = dropStaleAiSeating(room);   // 회차가 이미 없는 배정안이 남아 있으면 정리
+    return { changed: historyChanged || seatingChanged, deleteRoom: false, removed };
+  }
 
   const lastActivity = roomLastActivity(room);
   if (keep.length === 0 && lastActivity && lastActivity < cutoff) {
@@ -76,6 +91,7 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
     room.rounds.push(fresh);
   }
   if (!room.rounds.some((r) => r.id === room.currentRoundId)) room.currentRoundId = room.rounds[room.rounds.length - 1].id;
+  dropStaleAiSeating(room);   // 지워진 회차로 만든 AI 자리 배정안도 함께
   room.retentionLog = [
     ...(room.retentionLog || []),
     ...removed.map((r) => ({ name: r.name, startedAt: r.startedAt, closedAt: r.closedAt, deletedAt: nowIso, submitted: Object.keys(r.submissions || {}).length })),

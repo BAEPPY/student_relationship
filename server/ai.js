@@ -8,18 +8,24 @@
 //        students: [{ id, summary, strengths, watch, roleFit: [{ roleId, reason }] }] }
 // aiAssignRoles({ ai, students, roles, applications, excluded, relations, apartPairs, profiles, previousRoles })
 //   → { assignments: { [roleId]: [studentId] }, explanations: { [studentId]: string }, notes: string }
+// aiAssignSeats({ ai, students, relations, pairs, teacherNotes, profiles, bodies, roles, roleAssignment, aiAnalysis,
+//                 layout, fixedSeats, zones, climate, roleSeats, options, isolated })
+//   → { pairs: [{ a, b, probability(2~97), reason }], assignment: { [seatId]: studentId }, explanations: { [studentId]: string }, notes, truncated }
+//   (buildSeatingPrompt(input) 은 같은 입력으로 { system, user, schema, pseudo, truncated } 를 만듭니다)
 //
 // 개인정보: 학생 실명·id 는 절대 API 로 보내지 않습니다. 모든 학생은 S1, S2… 가명으로 바꾸고,
 // 자유 서술(이유, 메모, 짝 희망 등)에 들어 있는 반 친구 이름도 가명으로 바꾼 뒤 보냅니다.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { SELECTION_CRITERIA, TRAITS } from './roles.js';
+import { SELECTION_CRITERIA, TRAITS, bodyLabels } from './roles.js';
 import { tagLabel } from './reasons.js';
+import { layoutSeats } from './seating.js';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const MAX_FIELD = 300; // 자유 서술 한 칸의 최대 글자 수
 const MAX_PROMPT = 90000; // 사용자 메시지 전체의 최대 글자 수 (대략 5~6만 토큰)
+const MAX_CONFLICT_PAIRS = 40; // 자리 배정 프롬프트에 넣는 규칙 기반 갈등 추정 쌍의 최대 수 (가능성 높은 순)
 const TRUNCATED_NOTE = '\n\n(자료가 길어 뒷부분은 잘렸어요. 위 내용만으로 분석해 주세요.)';
 // 성이 두 글자인 경우 (성을 뺀 이름을 가명으로 바꿀 때 사용)
 const TWO_SYLLABLE_SURNAMES = ['남궁', '황보', '선우', '제갈', '독고', '사공', '서문', '동방', '어금', '망절', '장곡', '강전', '소봉', '등정'];
@@ -214,7 +220,7 @@ async function callJson({ ai, system, user, schema, maxTokens = 16000 }) {
 // ---------- 프롬프트 재료 ----------
 
 function relationTypeKo(type) {
-  return type === 'good' ? '좋은 사이' : type === 'bad' ? '안 좋은 사이' : String(type || '관계');
+  return type === 'good' ? '좋은 사이' : type === 'bad' ? '안 좋은 사이' : type === 'none' ? '표시 없음' : String(type || '관계');
 }
 
 function roleLines(roles, pseudo) {
@@ -303,6 +309,48 @@ function relationLines(relations, pseudo, { withReasons = true } = {}) {
     lines.push(line);
   }
   return lines;
+}
+
+/** 규칙 기반 갈등 추정(analysis.pairs) → 한 줄씩. 근거 글에 든 이름은 가명으로. */
+function conflictPairLines(pairs, pseudo) {
+  return (pairs || []).map((p) => {
+    const a = pseudo.label(p.a);
+    const b = pseudo.label(p.b);
+    if (!a || !b) return null;
+    const factors = (p.factors || []).map((f) => {
+      const label = clip(pseudo.redact(f.label), 120);
+      return f.delta ? `${label} (+${f.delta})` : label;
+    });
+    const dir = `${a}→${b} ${relationTypeKo(p.ab)}, ${b}→${a} ${relationTypeKo(p.ba)}`;
+    return `- ${a} · ${b}: 갈등 추정 ${Number(p.probability) || 0}% (${dir})${factors.length ? ` · 근거: ${factors.join('; ')}` : ''}`;
+  }).filter(Boolean);
+}
+
+/** 선생님 메모(앞자리 희망, 메모) → 한 줄씩 */
+function teacherMemoLines(teacherNotes, pseudo) {
+  const lines = [];
+  for (const [sid, note] of Object.entries(teacherNotes?.students || {})) {
+    const lab = pseudo.label(sid);
+    if (!lab || !note) continue;
+    const bits = [];
+    if (note.front) bits.push('자리: 앞쪽 희망');
+    const memo = clip(pseudo.redact(note.memo));
+    if (memo) bits.push(`메모: "${memo}"`);
+    if (bits.length) lines.push(`- ${lab} · ${bits.join(' / ')}`);
+  }
+  return lines;
+}
+
+/** 선생님 규칙(떨어뜨리기/같이 두기) → 한 줄씩. together 의 표현은 프롬프트마다 다를 수 있어요. */
+function teacherRuleLines(teacherNotes, pseudo, { together = '같이 두기', apart = '떨어뜨리기' } = {}) {
+  return (teacherNotes?.rules || []).map((r) => {
+    const a = pseudo.label(r.a);
+    const b = pseudo.label(r.b);
+    if (!a || !b) return null;
+    const kind = r.type === 'together' ? together : apart;
+    const note = clip(pseudo.redact(r.note), 100);
+    return `- ${a} · ${b}: ${kind}${note ? ` ("${note}")` : ''}`;
+  }).filter(Boolean);
 }
 
 function section(title, lines, empty = '(없음)') {
@@ -397,37 +445,6 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
   const pseudo = pseudonymize(students);
   const roleList = roles || [];
 
-  const pairLines = (pairs || []).map((p) => {
-    const a = pseudo.label(p.a);
-    const b = pseudo.label(p.b);
-    if (!a || !b) return null;
-    const factors = (p.factors || []).map((f) => {
-      const label = clip(pseudo.redact(f.label), 120);
-      return f.delta ? `${label} (+${f.delta})` : label;
-    });
-    const dir = `${a}→${b} ${relationTypeKo(p.ab)}, ${b}→${a} ${relationTypeKo(p.ba)}`;
-    return `- ${a} · ${b}: 갈등 추정 ${Number(p.probability) || 0}% (${dir})${factors.length ? ` · 근거: ${factors.join('; ')}` : ''}`;
-  }).filter(Boolean);
-
-  const memoLines = [];
-  for (const [sid, note] of Object.entries(teacherNotes?.students || {})) {
-    const lab = pseudo.label(sid);
-    if (!lab || !note) continue;
-    const bits = [];
-    if (note.front) bits.push('자리: 앞쪽 희망');
-    const memo = clip(pseudo.redact(note.memo));
-    if (memo) bits.push(`메모: "${memo}"`);
-    if (bits.length) memoLines.push(`- ${lab} · ${bits.join(' / ')}`);
-  }
-  const ruleLines = (teacherNotes?.rules || []).map((r) => {
-    const a = pseudo.label(r.a);
-    const b = pseudo.label(r.b);
-    if (!a || !b) return null;
-    const kind = r.type === 'together' ? '같이 두기' : '떨어뜨리기';
-    const note = clip(pseudo.redact(r.note), 100);
-    return `- ${a} · ${b}: ${kind}${note ? ` ("${note}")` : ''}`;
-  }).filter(Boolean);
-
   const prevMonth = previousRoles?.month ? ` (${clip(previousRoles.month, 30)})` : '';
   // 짧고 중요한 자료(명단·역할·규칙)를 앞에, 긴 자유 서술을 뒤에 두어 잘리더라도 핵심이 남게 합니다.
   const { text: user, truncated } = capPrompt([
@@ -435,9 +452,9 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     section('학생 명단', [rosterLine(pseudo)]),
     section('역할 목록 (id · 이름 · 인원 · 설명)', roleLines(roleList, pseudo)),
     section(`지난달 역할${prevMonth} — 같은 역할 연속 금지`, previousRoleLines(previousRoles, roleList, pseudo)),
-    section('선생님 규칙 (자리·모둠)', ruleLines),
-    section('선생님 메모', memoLines),
-    section('규칙 기반 갈등 추정 (참고값)', pairLines),
+    section('선생님 규칙 (자리·모둠)', teacherRuleLines(teacherNotes, pseudo)),
+    section('선생님 메모', teacherMemoLines(teacherNotes, pseudo)),
+    section('규칙 기반 갈등 추정 (참고값)', conflictPairLines(pairs, pseudo)),
     section('성향 설문', profileLines(profiles, pseudo)),
     section('1인 1역 지원서', applicationLines(applications, roleList, pseudo)),
     section('학생이 표시한 친구 관계', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
@@ -641,4 +658,256 @@ export async function aiAssignRoles(input = {}) {
   }
 
   return { assignments, explanations, notes: pseudo.restore(String(raw.notes ?? '').trim()), truncated };
+}
+
+// ---------- 자리 배정 ----------
+
+const FRONT_ROWS = 2; // 앞줄로 보는 줄 수 (public/js/seats.js 와 같음)
+const FRIENDS_KO = { any: '상관없음', near: '가까이 앉히기', apart: '떨어뜨리기' };
+const CLIMATE_KO = {
+  cool: '지금 냉방 중 — 🌀 바람 자리가 시원해요. 추위를 잘 타는 학생은 피하고, 더위를 잘 타는 학생에게는 좋아요.',
+  warm: '지금 난방 중 — 🌀 바람 자리가 따뜻해요. 더위를 잘 타는 학생은 피하고, 추위를 잘 타는 학생에게는 좋아요.',
+  off: '지금 꺼짐 — 🌀 바람 자리는 신경 쓰지 않아도 돼요.',
+};
+const CLIMATE_SHORT = { cool: '냉방 중', warm: '난방 중', off: '꺼짐' };
+const RISK_KO = { high: '높음', medium: '중간', low: '낮음' };
+
+const SEATING_SCHEMA = {
+  type: 'object',
+  properties: {
+    pairs: {
+      type: 'array',
+      description: '안 좋은 사이로 표시된 모든 쌍과, 그 밖에 갈등이 생길 수 있다고 보는 쌍. 가능성이 높은 순서로.',
+      items: {
+        type: 'object',
+        properties: {
+          a: { type: 'string', description: '학생 가명 (예: S3)' },
+          b: { type: 'string', description: '학생 가명 (예: S7)' },
+          probability: { type: 'integer', description: '자료를 종합해 예측한 갈등 가능성 (0~100 정수)' },
+          reason: { type: 'string', description: '그렇게 본 근거 한 문장 (한국어 해요체)' },
+        },
+        required: ['a', 'b', 'probability', 'reason'],
+        additionalProperties: false,
+      },
+    },
+    assignment: {
+      type: 'array',
+      description: '모든 학생을 정확히 한 번씩, 자리마다 한 명',
+      items: {
+        type: 'object',
+        properties: {
+          seat: { type: 'string', description: '좌석 목록의 id 그대로 (예: b0-r0-c0)' },
+          student: { type: 'string', description: '학생 가명 (예: S3)' },
+        },
+        required: ['seat', 'student'],
+        additionalProperties: false,
+      },
+    },
+    explanations: {
+      type: 'array',
+      description: '학생마다 왜 그 자리인지 한 문장',
+      items: {
+        type: 'object',
+        properties: {
+          student: { type: 'string', description: '학생 가명 (예: S3)' },
+          text: { type: 'string', description: '선생님께 설명하는 한 문장 (한국어 해요체)' },
+        },
+        required: ['student', 'text'],
+        additionalProperties: false,
+      },
+    },
+    notes: { type: 'string', description: '선생님께 드리는 짧은 메모 (지키지 못한 규칙, 자리가 모자란 학생, 눈여겨볼 점 등)' },
+  },
+  required: ['pairs', 'assignment', 'explanations', 'notes'],
+  additionalProperties: false,
+};
+
+const SEATING_SYSTEM = [
+  '당신은 한국 초등학교 담임 선생님의 교실 자리 배정을 돕는 도우미예요.',
+  '학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 좌석 id, 역할 id([대괄호] 안의 값)만 쓰세요.',
+  '',
+  '배정 규칙 (위에 있을수록 중요해요):',
+  '1. 명단의 모든 학생을 정확히 한 자리에 앉히고, 한 자리에는 한 명만 앉혀요. 좌석은 "좌석 목록"에 있는 id 만 그대로 써요. 학생이 자리보다 많으면 남는 학생을 notes 에 적어요.',
+  '2. 📌 고정 자리에는 적힌 학생을 그대로 두고, 🎒 역할 자리에는 그 역할의 담당 학생을 앉혀요. 담당이 없으면 보통 자리처럼 써요.',
+  '3. 선생님 규칙 "떨어뜨리기" 두 학생은 이웃 자리(짝꿍·앞뒤·대각선·통로 건너)에 두지 않아요. "가까이 앉히기" 두 학생은 이웃 자리에 앉혀요 (짝꿍이 가장 좋아요).',
+  '4. 안 좋은 사이는 갈등 가능성이 높을수록 더 멀리 떨어뜨려요. 서로 안 좋은 사이거나 갈등 가능성이 50% 이상인 쌍은 이웃 자리에 두지 않아요.',
+  `5. 앞자리 필요(선생님 지정)·👓 눈 나쁨 학생은 앞줄(1~${FRONT_ROWS}번째 줄)에, 📏 키 큰 학생은 뒤쪽에 앉혀요.`,
+  '6. 냉방 중에는 ❄️ 추위를 잘 타는 학생을, 난방 중에는 🔥 더위를 잘 타는 학생을 🌀 바람 자리에 앉히지 않아요. 냉난방기가 꺼져 있으면 바람 자리는 신경 쓰지 않아요.',
+  '7. 고립 위험(좋은 사이로 지목한 학생이 없음) 학생의 이웃에는 그 학생을 좋은 사이로 표시한 학생이나 성향이 잘 맞는 학생을 앉혀요.',
+  '8. "친한 친구끼리" 옵션을 따르고, 성향 설문(조용함·말이 많음 등)을 참고해 짝꿍이 서로 도움이 되게 해요. 짝에 대한 생각은 참고만 해요.',
+  DATA_NOT_INSTRUCTIONS,
+  '- "규칙 기반 갈등 추정"과 "지난 AI 관계 분석"은 참고값이에요. 그대로 믿지 말고 다른 자료와 함께 판단해요.',
+  '',
+  '출력:',
+  '- pairs: 안 좋은 사이로 표시된 모든 쌍과, 그 밖에 갈등이 생길 수 있다고 보는 쌍을 넣어요. probability 는 모든 자료를 종합해 앞으로 갈등이 생길 가능성을 0~100 정수로 예측한 값이고, reason 은 그 근거예요.',
+  '- assignment: 모든 학생을 정확히 한 번씩. seat 는 좌석 id, student 는 가명이에요.',
+  '- explanations: 학생마다 왜 그 자리에 앉게 됐는지. 아이에게 꼬리표를 붙이는 표현(문제아, 왕따 등)은 쓰지 않아요.',
+  '- notes: 선생님께 드리는 짧은 메모 (지키지 못한 규칙, 자리가 모자란 학생, 눈여겨볼 점).',
+  '- 모든 글은 한국어 해요체 한 문장으로 짧게 써요. 글 안에서 학생을 가리킬 때는 가명(S1 등)을 그대로 써요.',
+  '- 응답은 주어진 JSON 스키마에 맞는 JSON 하나만 출력하고, 그 밖의 글은 쓰지 않아요.',
+].join('\n');
+
+/** 좌석 위치를 한국어로: '1분단 1번째 줄 왼쪽(앞줄)' */
+function seatPlaceKo(seat, block) {
+  const cols = Number(block?.cols) || 1;
+  const rows = Number(block?.rows) || 1;
+  const col = cols === 1 ? '' : cols === 2 ? ['왼쪽', '오른쪽'][seat.c] : cols === 3 ? ['왼쪽', '가운데', '오른쪽'][seat.c] : `왼쪽에서 ${seat.c + 1}번째`;
+  const tag = seat.r < FRONT_ROWS ? '앞줄' : seat.r === rows - 1 ? '맨 뒷줄' : '';
+  return `${seat.b + 1}분단 ${seat.r + 1}번째 줄${col ? ` ${col}` : ''}${tag ? `(${tag})` : ''}`;
+}
+
+function layoutLines(layout) {
+  const blocks = Array.isArray(layout?.blocks) ? layout.blocks : [];
+  const desc = blocks.map((b, i) => `${i + 1}분단 ${b.cols}칸×${b.rows}줄`).join(', ');
+  return [
+    `분단 ${blocks.length}개 (학생 시점에서 왼쪽부터): ${desc}. 좌석 id 는 b분단-r줄-c칸 이고 번호는 0부터 세요.`,
+    `1번째 줄(r0)이 칠판·교탁 쪽이고 번호가 클수록 뒤쪽이에요. 앞줄은 1~${FRONT_ROWS}번째 줄이에요.`,
+    '이웃 자리의 뜻:',
+    '- 짝꿍: 같은 분단, 같은 줄의 바로 옆 칸 (예: b0-r0-c0 ↔ b0-r0-c1). 가장 가까워요.',
+    '- 앞뒤: 같은 분단, 같은 칸의 바로 앞·뒤 줄 (예: b0-r0-c0 ↔ b0-r1-c0)',
+    '- 대각선: 같은 분단, 바로 앞·뒤 줄의 옆 칸 (예: b0-r0-c0 ↔ b0-r1-c1)',
+    '- 통로 건너: 이웃한 분단의 같은 줄에서 통로를 사이에 둔 가장자리 자리 (예: 1분단 오른쪽 끝 b0-r0-c1 ↔ 2분단 왼쪽 끝 b1-r0-c0)',
+    '- 그 밖의 자리는 이웃이 아니에요. 분단이 다르거나 줄이 2개 이상 떨어지면 멀리 떨어진 자리로 봐요.',
+  ];
+}
+
+/** 좌석마다 한 줄: id, 위치, 🌀 바람 자리, 📌 고정 학생, 🎒 역할 자리와 담당 */
+function seatLines({ layout, fixedSeats, roleSeats, zones, climate, roles, roleAssignment }, pseudo) {
+  const roleName = roleNameMap(roles, pseudo);
+  const feel = CLIMATE_SHORT[climate] || CLIMATE_SHORT.off;
+  return layoutSeats(layout).map((s) => {
+    const bits = [seatPlaceKo(s, layout.blocks[s.b])];
+    if (zones?.[s.id] === 'ac') bits.push(`🌀 바람 자리(${feel})`);
+    const fixed = fixedSeats?.[s.id] ? pseudo.label(fixedSeats[s.id]) : null;
+    if (fixed) bits.push(`📌 고정(${fixed})`);
+    const roleId = roleSeats?.[s.id];
+    if (roleId) {
+      const holders = (Array.isArray(roleAssignment?.[roleId]) ? roleAssignment[roleId] : []).map((sid) => pseudo.label(sid)).filter(Boolean);
+      bits.push(`🎒 역할 자리([${roleId}] ${clip(roleName.get(roleId) || roleId, 40)} → 담당 ${holders.length ? holders.join(', ') : '없음'})`);
+    }
+    return `- ${s.id}: ${bits.join(' · ')}`;
+  });
+}
+
+function roleAssignmentLines(roles, roleAssignment, pseudo) {
+  const roleName = roleNameMap(roles, pseudo);
+  const lines = [];
+  for (const [roleId, sids] of Object.entries(roleAssignment || {})) {
+    const labels = (Array.isArray(sids) ? sids : []).map((sid) => pseudo.label(sid)).filter(Boolean);
+    if (labels.length) lines.push(`- [${roleId}] ${clip(roleName.get(roleId) || roleId, 40)}: ${labels.join(', ')}`);
+  }
+  return lines;
+}
+
+function bodyLines(bodies, pseudo) {
+  const lines = [];
+  for (const [sid, body] of Object.entries(bodies || {})) {
+    const lab = pseudo.label(sid);
+    if (!lab) continue;
+    const labels = bodyLabels(body);
+    if (labels.length) lines.push(`- ${lab}: ${labels.join(', ')}`);
+  }
+  return lines;
+}
+
+/** 지난 AI 관계 분석의 쌍 (위험도·갈등 성격·분석). 글 속 실명은 가명으로. */
+function aiAnalysisLines(aiAnalysis, pseudo) {
+  const lines = [];
+  for (const p of (Array.isArray(aiAnalysis?.pairs) ? aiAnalysis.pairs : []).slice(0, 15)) {
+    const a = pseudo.label(p.a);
+    const b = pseudo.label(p.b);
+    if (!a || !b) continue;
+    const bits = [`위험 ${RISK_KO[p.riskLevel] || p.riskLevel || '?'}`];
+    const type = clip(pseudo.redact(p.conflictType), 40);
+    if (type) bits.push(type);
+    const analysis = clip(pseudo.redact(p.analysis), 200);
+    if (analysis) bits.push(analysis);
+    lines.push(`- ${a} · ${b}: ${bits.join(' · ')}`);
+  }
+  return lines;
+}
+
+/** 자리 배정용 system/user 프롬프트와 스키마. 실명·학생 id 는 포함되지 않습니다. */
+export function buildSeatingPrompt({ students, relations, pairs, teacherNotes, profiles, bodies, roles, roleAssignment, aiAnalysis, layout, fixedSeats, zones, climate, roleSeats, options, isolated } = {}) {
+  const pseudo = pseudonymize(students);
+  const roleList = roles || [];
+  const safeLayout = { blocks: Array.isArray(layout?.blocks) ? layout.blocks : [] };
+  const badRelations = (relations || []).filter((r) => r.type === 'bad');
+  const goodRelations = (relations || []).filter((r) => r.type === 'good');
+  const isolatedLines = (Array.isArray(isolated) ? isolated : []).map((sid) => pseudo.label(sid)).filter(Boolean).map((lab) => `- ${lab}`);
+  const settings = [
+    `자리 수: ${layoutSeats(safeLayout).length}개, 학생 수: ${pseudo.roster.length}명`,
+    `친한 친구(좋은 사이)끼리: ${FRIENDS_KO[options?.friends] || FRIENDS_KO.any}`,
+    `냉난방기: ${CLIMATE_KO[climate] || CLIMATE_KO.off}`,
+  ];
+
+  // 규칙 기반 추정은 응답에서 계산한 파생값이라 가능성 높은 순으로 상위 몇 쌍만 넣어요 (큰 반에서 학생이 직접 적은 자료를 밀어내지 않게)
+  const topPairs = [...(pairs || [])].sort((x, y) => (Number(y.probability) || 0) - (Number(x.probability) || 0)).slice(0, MAX_CONFLICT_PAIRS);
+
+  // 짧고 중요한 자료(배치·좌석·규칙)를 앞에, 학생이 직접 적은 관계·설문을 그다음에, 파생값(규칙 기반 추정·지난 AI 분석)을 맨 뒤에 두어
+  // 길이 제한에 잘리더라도 1차 자료가 남게 합니다.
+  const { text: user, truncated } = capPrompt([
+    '# 자리 배정 자료 (가명 처리됨)',
+    section('학생 명단', [rosterLine(pseudo)]),
+    section('교실 배치와 이웃 자리의 뜻', layoutLines(safeLayout)),
+    section('배정 조건', settings),
+    section('좌석 목록 (id: 위치 · 표시)', seatLines({ layout: safeLayout, fixedSeats, roleSeats, zones, climate, roles: roleList, roleAssignment }, pseudo), '(좌석이 없어요)'),
+    section('선생님 규칙 (떨어뜨리기 / 가까이 앉히기)', teacherRuleLines(teacherNotes, pseudo, { together: '가까이 앉히기' })),
+    section('앞자리 필요 · 선생님 메모', teacherMemoLines(teacherNotes, pseudo)),
+    section('1인 1역 배정 (역할 id · 이름: 담당)', roleAssignmentLines(roleList, roleAssignment, pseudo)),
+    section('학생 몸 특징 (학생이 직접 고름)', bodyLines(bodies, pseudo)),
+    section('고립 위험 학생 (좋은 사이로 지목한 학생이 없음)', isolatedLines),
+    section('안 좋은 사이 (학생이 표시 · 방향 · 이유)', relationLines(badRelations, pseudo)),
+    section('좋은 사이 (학생이 표시)', relationLines(goodRelations, pseudo, { withReasons: false })),
+    section('성향 설문', profileLines(profiles, pseudo)),
+    section(`규칙 기반 갈등 추정 (참고값 · 가능성 높은 순 최대 ${MAX_CONFLICT_PAIRS}쌍)`, conflictPairLines(topPairs, pseudo)),
+    section('지난 AI 관계 분석 (참고값)', aiAnalysisLines(aiAnalysis, pseudo)),
+    '',
+    '위 자료를 바탕으로 JSON 스키마에 맞춰 자리 배정안을 작성해 주세요.',
+  ].join('\n\n'));
+
+  return { system: SEATING_SYSTEM, user, schema: SEATING_SCHEMA, pseudo, truncated };
+}
+
+export async function aiAssignSeats(input = {}) {
+  const { ai } = input;
+  if (!ai?.client) throw fail(503, MSG.disabled);
+  const { system, user, schema, pseudo, truncated } = buildSeatingPrompt(input);
+  const raw = await callJson({ ai, system, user, schema, maxTokens: 24000 });
+  const seatIds = new Set(layoutSeats(input.layout).map((s) => s.id));
+
+  const seenPairs = new Set();
+  const pairs = [];
+  for (const p of Array.isArray(raw.pairs) ? raw.pairs : []) {
+    const a = pseudo.reverse(p?.a);
+    const b = pseudo.reverse(p?.b);
+    if (!a || !b || a === b) continue;
+    const key = [a, b].sort().join('|');
+    if (seenPairs.has(key)) continue;
+    seenPairs.add(key);
+    const n = Number(p?.probability);
+    const probability = Math.min(97, Math.max(2, Math.round(Number.isFinite(n) ? n : 50)));
+    pairs.push({ a, b, probability, reason: pseudo.restore(String(p?.reason ?? '').trim()) });
+  }
+  pairs.sort((x, y) => y.probability - x.probability);
+
+  const assignment = {};
+  const placed = new Set();
+  for (const e of Array.isArray(raw.assignment) ? raw.assignment : []) {
+    const seat = String(e?.seat ?? '').trim();
+    const sid = pseudo.reverse(e?.student);
+    if (!seatIds.has(seat) || !sid || assignment[seat] || placed.has(sid)) continue;
+    assignment[seat] = sid;
+    placed.add(sid);
+  }
+
+  const explanations = {};
+  for (const e of Array.isArray(raw.explanations) ? raw.explanations : []) {
+    const sid = pseudo.reverse(e?.student);
+    const text = pseudo.restore(String(e?.text ?? '').trim());
+    if (!sid || !text || explanations[sid]) continue;
+    explanations[sid] = text;
+  }
+
+  return { pairs, assignment, explanations, notes: pseudo.restore(String(raw.notes ?? '').trim()), truncated };
 }
