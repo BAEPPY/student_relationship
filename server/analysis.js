@@ -78,8 +78,9 @@ function levelOf(p) {
 }
 
 /**
- * 두 학생 사이에 앞으로 갈등이 생길 "추정 확률"(%)을 계산합니다.
- * 단순한 규칙 기반 추정치이며, 근거(factors)를 함께 돌려줍니다.
+ * 교사가 먼저 살펴볼 관계의 관심 점수(100점 척도)를 계산합니다.
+ * 실측·보정된 발생 확률이 아닙니다. probability 필드명은 기존 데이터 호환을 위해 유지합니다.
+ * 단순한 규칙 기반 점수이며, 근거(factors)를 함께 돌려줍니다.
  */
 export function analyzeConflicts(room, stats = computeStats(room)) {
   const rel = room.relations || {};

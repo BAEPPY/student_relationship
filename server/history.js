@@ -11,7 +11,7 @@ export function analyzeHistory(room) {
     const rr = roundRoom(room, r);
     const stats = computeStats(rr);
     const analysis = analyzeConflicts(rr, stats);
-    return { round: roundView(r), stats, analysis, relations: r.relations };
+    return { round: roundView(r), stats, analysis, relations: r.relations || {} };
   });
 
   const trend = rounds.map(({ round, analysis }) => ({
@@ -74,29 +74,81 @@ export function analyzeHistory(room) {
     const newConflicts = [];
     const resolved = [];
     const persistent = [];
+    const pending = [];
+    const names = (ids) => ids.map(nameOf);
+    const reporters = (r, a, b) => [a, b].filter((id) => typeOf(r.relations, id, id === a ? b : a) === 'bad');
+    const pendingPair = (entry, missing, round, reasonCode, reason) => ({
+      ...entry, reason, reasonCode,
+      missingStudentIds: missing, missingStudentNames: names(missing),
+      missingRoundId: round.round.id, missingRoundName: round.round.name,
+    });
     for (const p of pairHistory) {
       const lastBad = hasBad(last, p.a, p.b);
       const prevBad = hasBad(prev, p.a, p.b);
-      const bothSubmittedLast = last.stats[p.a].submitted || last.stats[p.b].submitted;
       const entry = { a: p.a, b: p.b, aName: p.aName, bName: p.bName, probability: last.analysis.pairs.find((x) => pairKey(x.a, x.b) === pairKey(p.a, p.b))?.probability ?? null };
-      if (lastBad && !prevBad) newConflicts.push(entry);
-      else if (lastBad && prevBad) persistent.push(entry);
-      else if (!lastBad && prevBad && bothSubmittedLast) resolved.push(entry);
+      if (lastBad && !prevBad) {
+        // 이번에 처음 응답한 학생의 부정 표시를 '새로 생긴 갈등'으로 단정하지 않습니다.
+        const missing = reporters(last, p.a, p.b).filter((id) => !prev.stats[id].submitted);
+        if (missing.length) pending.push(pendingPair(entry, missing, prev, 'missing_previous_response', `이번에 안 좋은 사이로 표시한 ${names(missing).join(', ')}의 이전 회차 응답이 없어 새로 생긴 갈등인지 판단을 보류해요.`));
+        else newConflicts.push(entry);
+      } else if (lastBad && prevBad) persistent.push(entry);
+      else if (!lastBad && prevBad) {
+        // 반대쪽 학생의 응답만으로는 이전의 부정 표시가 사라졌다고 볼 수 없습니다.
+        const missing = reporters(prev, p.a, p.b).filter((id) => !last.stats[id].submitted);
+        if (missing.length) pending.push(pendingPair(entry, missing, last, 'missing_current_response', `이전에 안 좋은 사이로 표시한 ${names(missing).join(', ')}이 이번 회차에 아직 응답하지 않아 해소 판단을 보류해요.`));
+        else resolved.push(entry);
+      }
     }
-    const studentChanges = students.map((s) => {
-      const l = s.rounds[s.rounds.length - 1];
-      const p = s.rounds[s.rounds.length - 2];
-      return {
+    const studentChanges = [];
+    const studentPending = [];
+    for (const s of students) {
+      // 받은 관계는 본인 외의 응답자만 비교합니다. 제출자 수가 같아도 사람이 바뀌면 보류합니다.
+      const peers = room.students.map((student) => student.id).filter((id) => id !== s.id);
+      const previous = peers.filter((id) => prev.stats[id].submitted);
+      const current = peers.filter((id) => last.stats[id].submitted);
+      const common = previous.filter((id) => last.stats[id].submitted);
+      const missingPrevious = current.filter((id) => !prev.stats[id].submitted);
+      const missingCurrent = previous.filter((id) => !last.stats[id].submitted);
+      if (missingPrevious.length || missingCurrent.length || !common.length) {
+        const changed = missingPrevious.length > 0 || missingCurrent.length > 0;
+        const missing = changed ? [...new Set([...missingPrevious, ...missingCurrent])] : peers;
+        studentPending.push({
+          id: s.id, name: s.name,
+          reasonCode: changed ? 'response_cohort_changed' : 'no_comparable_responses',
+          reason: changed
+            ? `두 회차의 응답자가 달라 받은 관계 수만으로 좋아짐·악화·고립 위험의 변화를 판단하지 않아요. (${names(missing).join(', ')})`
+            : '두 회차에 모두 응답한 친구가 없어 학생 변화를 판단하기 어려워요.',
+          missingStudentIds: missing, missingStudentNames: names(missing),
+          missingPreviousStudentIds: changed ? missingPrevious : peers,
+          missingCurrentStudentIds: changed ? missingCurrent : peers,
+          comparableRespondentCount: common.length,
+          previousRespondentCount: previous.length, currentRespondentCount: current.length,
+        });
+        continue;
+      }
+      const counts = (r) => ({
+        good: common.filter((id) => typeOf(r.relations, id, s.id) === 'good').length,
+        bad: common.filter((id) => typeOf(r.relations, id, s.id) === 'bad').length,
+      });
+      const p = counts(prev);
+      const l = counts(last);
+      // 본인의 제출로 전체 제출 수가 2→3이 되어 생긴 플래그 변화도 학생 변화로 세지 않습니다.
+      const enoughResponses = prev.analysis.submittedCount >= 3 && last.analysis.submittedCount >= 3;
+      const wasIsolated = enoughResponses && p.good === 0 && p.bad > 0;
+      const isIsolated = enoughResponses && l.good === 0 && l.bad > 0;
+      studentChanges.push({
         id: s.id, name: s.name,
-        inGoodDelta: l.inGood - p.inGood,
-        inBadDelta: l.inBad - p.inBad,
-        newlyIsolated: l.flags.includes('isolated') && !p.flags.includes('isolated'),
-        recovered: !l.flags.includes('isolated') && p.flags.includes('isolated'),
-      };
-    });
+        inGoodDelta: l.good - p.good,
+        inBadDelta: l.bad - p.bad,
+        newlyIsolated: isIsolated && !wasIsolated,
+        recovered: !isIsolated && wasIsolated,
+        comparableRespondentCount: common.length,
+      });
+    }
     changes = {
       lastId: last.round.id, lastName: last.round.name, prevId: prev.round.id, prevName: prev.round.name,
-      newConflicts, resolved, persistent,
+      newConflicts, resolved, persistent, pending, studentPending,
+      comparison: { method: 'same_respondents', description: '학생 변화는 두 회차에 모두 응답한 같은 친구들의 표시를 비교해요. 응답자가 달라지면 판단을 보류해요.' },
       improved: studentChanges.filter((s) => s.inBadDelta < 0 || s.inGoodDelta > 0 || s.recovered).sort((x, y) => (y.inGoodDelta - y.inBadDelta) - (x.inGoodDelta - x.inBadDelta)),
       worsened: studentChanges.filter((s) => s.inBadDelta > 0 || s.newlyIsolated || s.inGoodDelta < 0).sort((x, y) => (y.inBadDelta - y.inGoodDelta) - (x.inBadDelta - x.inGoodDelta)),
     };

@@ -30,7 +30,7 @@ export const index = `<!doctype html>
       <div class="steps">
         <div class="step"><span class="n">1</span><div><b>교실 만들기</b><br><span class="muted">학생 이름을 등록하면 학생마다 개인 QR 링크가 만들어져요.</span></div></div>
         <div class="step"><span class="n">2</span><div><b>학생이 관계 표시</b><br><span class="muted">각자 자기 QR로 접속해서 좋은 사이(빨간 화살표)와 안 좋은 사이(검은 화살표)를 표시해요. 다른 학생의 답은 볼 수 없어요.</span></div></div>
-        <div class="step"><span class="n">3</span><div><b>선생님이 종합 확인</b><br><span class="muted">관계가 많은 학생은 가운데, 적은 학생은 바깥쪽에 배치된 관계도와 갈등 확률 분석을 확인해요.</span></div></div>
+        <div class="step"><span class="n">3</span><div><b>선생님이 종합 확인</b><br><span class="muted">관계가 많은 학생은 가운데, 적은 학생은 바깥쪽에 배치된 관계도와 관계 관심 점수를 확인해요.</span></div></div>
       </div>
     </section>
 
@@ -90,7 +90,7 @@ export const index = `<!doctype html>
       <ul class="muted" style="padding-left:18px">
         <li>학생은 자기 QR 링크로만 접속하며, 자기가 표시한 관계만 볼 수 있어요.</li>
         <li>학생 링크와 선생님 링크는 추측할 수 없는 긴 임의 문자열이에요. 링크가 유출되면 선생님 페이지에서 새 링크를 발급할 수 있어요.</li>
-        <li>갈등 확률은 학생 응답을 바탕으로 한 <b>참고용 추정치</b>예요. 학생을 판단하는 근거가 아니라 관심을 기울일 곳을 찾는 도구로 사용해 주세요.</li>
+        <li>관계 관심 점수는 학생 응답에 정해진 가중치를 더한 <b>100점 기준 참고 점수</b>이며 실제 발생 확률이 아니에요. 응답 근거와 제출률을 함께 확인해 주세요.</li>
         <li>조사 응답은 마감 뒤 <b>14개월이 지나면 자동으로 삭제</b>돼요. 오래 보관하려면 선생님 페이지에서 CSV/JSON으로 내보내 두세요. 삭제 60일 전부터 선생님 페이지에 미리 알려 드려요.</li>
       </ul>
     </section>
@@ -217,6 +217,7 @@ export const seats = `<!doctype html>
   <title>자리 배정 · 학생 관계 마인드맵</title>
   <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/seats.css">
 </head>
 <body>
   <header class="topbar no-print">

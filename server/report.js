@@ -1,9 +1,11 @@
-// 학급 종합 보고서: 관계도 분석 · 갈등 가능성 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서 모델로 모읍니다.
+// 학급 종합 보고서: 관계 관심 점수 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서 모델로 모읍니다.
 // 결과는 웹 보고서 화면(public/js/report.js)과 한글·워드 내보내기(export-docs.js)가 함께 씁니다.
 import { computeStats, analyzeConflicts } from './analysis.js';
 import { analyzeHistory } from './history.js';
 import { roundRoom } from './rounds.js';
 import { roomRoles, applicantCounts, bodyLabels, BODY_TRAITS } from './roles.js';
+import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
+import { seatingView } from './seating-history.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 function dateLabel(d = new Date()) {
@@ -33,6 +35,19 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   const sub = (text) => blocks.push({ type: 'heading', text, level: 3 });
   const para = (text, style) => blocks.push({ type: 'paragraph', text, ...(style ? { style } : {}) });
   const list = (items) => { if (items.length) blocks.push({ type: 'list', items }); };
+  const aiContext = (saved, kind = 'relationships', extra = null) => {
+    const context = describeAnalysisContext(saved.provenance, captureAnalysisContext(room, round, { kind, extra }));
+    const label = { fresh: '현재 입력과 일치', stale: '입력 변경 · 재분석 필요', unknown: '분석 당시 근거 확인 불가' }[context.status];
+    const coverage = context.inputCoverage;
+    const current = context.currentCoverage;
+    para(`AI 분석 상태: ${label}.${coverage ? ` 분석 당시 제출 ${coverage.submitted}/${coverage.total}명(${coverage.percent}%).${coverage.complete ? '' : ' 미제출 응답이 있어 분석 자료가 부족해요.'}` : ' 이전 결과에는 분석 당시 제출 현황과 근거 기록이 없어요.'} 현재 제출 ${current.submitted}/${current.total}명(${current.percent}%).`, 'muted');
+    if (context.evidence.length) {
+      const counts = {};
+      for (const evidence of context.evidence) counts[evidence.kind] = (counts[evidence.kind] || 0) + 1;
+      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
+      para(`분석 근거: ${Object.entries(counts).map(([key, count]) => `${labels[key] || key} ${count}건`).join(' · ')}${context.sourceUpdatedAt ? ` · 최근 응답·메모 기록 ${context.sourceUpdatedAt.replace('T', ' ').slice(0, 16)} (UTC)` : ''}.`, 'muted');
+    }
+  };
 
   // 1. 한눈에 보기
   heading('한눈에 보기');
@@ -49,6 +64,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   if (analysis.submittedCount < analysis.totalStudents) {
     const pending = students.filter((s) => !stats[s.id].submitted).map((s) => s.name);
     para(`아직 제출하지 않은 학생 ${pending.length}명: ${pending.join(', ')}`, 'muted');
+    para('자료 부족: 아직 제출하지 않은 학생의 관계는 알 수 없어요. 지목 수가 적거나 표시가 없다는 사실만으로 관계가 좋거나 갈등이 해소됐다고 판단하지 않아요.', 'muted');
   }
 
   // 2. 학생별 관계
@@ -70,9 +86,9 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     analysis.mostDisliked.length ? `안 좋은 사이로 많이 지목된 학생: ${analysis.mostDisliked.map((x) => `${x.name} ${x.count}명`).join(', ')}` : '',
   ].filter(Boolean));
 
-  // 3. 갈등 가능성 분석
-  heading('갈등 가능성 분석');
-  para('안 좋은 사이로 표시된 관계마다 앞으로 갈등이 생길 가능성을 응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부로 어림한 참고용 수치예요. 학생을 판단하는 근거가 아니라 먼저 관심을 기울일 관계를 찾는 도구로 써 주세요.', 'muted');
+  // 3. 관계 관심 점수
+  heading('관계 관심 점수');
+  para('응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 정해진 규칙으로 합친 관심 점수(100점 척도)예요. 실제 갈등 발생 확률을 뜻하지 않아요. 제출률과 주요 근거를 함께 보고 먼저 살펴볼 관계를 찾는 참고자료로 써 주세요.', 'muted');
   const flagged = analysis.pairs.filter((p) => p.ab === 'bad' || p.ba === 'bad');
   if (!flagged.length) para('안 좋은 사이로 표시된 관계가 아직 없어요.');
   else {
@@ -80,9 +96,12 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     const direction = (p) => (p.ab === 'bad' && p.ba === 'bad' ? '서로 안 좋은 사이' : p.ab === 'bad' ? `${p.aName} → ${p.bName}` : `${p.bName} → ${p.aName}`);
     blocks.push({
       type: 'table',
-      caption: `주의가 필요한 관계 (가능성 높은 순, ${top.length}쌍${flagged.length > top.length ? ` / 전체 ${flagged.length}쌍` : ''})`,
-      columns: [{ label: '학생', width: 0.24 }, { label: '가능성', width: 0.1 }, { label: '수준', width: 0.1 }, { label: '방향', width: 0.2 }, { label: '주요 근거', width: 0.36 }],
-      rows: top.map((p) => [bold(`${p.aName} ↔ ${p.bName}`), center(`${p.probability}%`), center(LEVEL_KO[p.level] || p.level), direction(p), (p.factors || []).slice(0, 3).map((f) => f.label).join(' · ')]),
+      caption: `주의가 필요한 관계 (관심 점수 높은 순, ${top.length}쌍${flagged.length > top.length ? ` / 전체 ${flagged.length}쌍` : ''})`,
+      columns: [{ label: '학생', width: 0.22 }, { label: '관심 점수', width: 0.12 }, { label: '수준', width: 0.1 }, { label: '방향', width: 0.2 }, { label: '주요 근거 · 응답 범위', width: 0.36 }],
+      rows: top.map((p) => {
+        const submitted = Number(stats[p.a]?.submitted) + Number(stats[p.b]?.submitted);
+        return [bold(`${p.aName} ↔ ${p.bName}`), center(`${p.attentionScore ?? p.probability}/100점`), center(LEVEL_KO[p.level] || p.level), direction(p), [(p.factors || []).slice(0, 3).map((f) => f.label).join(' · '), `두 학생 중 ${submitted}/2명 제출${submitted < 2 ? ' · 자료 부족' : ''}`].filter(Boolean).join('\n')];
+      }),
       header: true,
     });
   }
@@ -94,6 +113,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   if (ai) {
     heading('AI 분석');
     para(`AI가 학생 응답(가명 처리), 선생님 메모, 성향 설문, 지원서를 함께 읽고 쓴 내용이에요. ${String(ai.createdAt || '').slice(0, 10)} 기준이며 참고용이에요.`, 'muted');
+    aiContext(ai);
     if (ai.summary) para(ai.summary);
     const pairs = (ai.pairs || []).filter((p) => stats[p.a] && stats[p.b]);
     if (pairs.length) {
@@ -119,7 +139,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   }
 
   // 5. 자리 배정
-  const seating = room.seating;
+  const seating = seatingView(room, round).seating;
   const notes = room.teacherNotes || { students: {}, rules: [] };
   const CLIMATE_KO = { cool: '지금 냉방 중 (바람 자리가 시원함)', warm: '지금 난방 중 (바람 자리가 따뜻함)', off: '지금은 꺼짐' };
   // 🎒 역할 자리(seating.roleSeats: 좌석 → 역할 id): 이번 회차에 그 역할을 맡은 학생이 앉는 자리. 배치 안에 있고 역할이 아직 있는 것만, 분단 → 줄 → 칸 순서
@@ -183,7 +203,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     list(memoLines);
   }
   // 🤖 AI 자리 배정 메모: 이 회차 기준으로 만든 배정안(room.aiSeating)이 있을 때만, 자리 배정 섹션 끝에
-  const aiSeat = room.aiSeating && room.aiSeating.roundId === round.id ? room.aiSeating : null;
+  const aiSeat = round.aiSeating || (room.aiSeating && room.aiSeating.roundId === round.id ? room.aiSeating : null);
   if (aiSeat) {
     if (!hasSeatmap && !memoLines.length) {
       heading('자리 배정');
@@ -191,6 +211,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     }
     sub('AI 자리 배정 메모');
     para(`${String(aiSeat.createdAt || '').slice(0, 10)}에 AI가 만든 자리 배정안의 메모예요(${aiSeat.roundName || round.name} 기준${aiSeat.model ? ` · ${aiSeat.model}` : ''}). 자리 배정 페이지에서 "AI 배정안 다시 적용"을 누르면 다시 불러올 수 있고, 참고용이에요.${aiSeat.truncated ? ' 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' : ''}`, 'muted');
+    aiContext(aiSeat, 'seating', aiSeat.inputConfig || null);
     const warnings = (aiSeat.warnings || []).filter(Boolean);
     if (warnings.length) para(`확인할 점: ${warnings.join(' ')}`, 'muted');
     if (aiSeat.notes) para(String(aiSeat.notes));
@@ -199,12 +220,12 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
       const top = aiPairs.slice(0, 10);
       blocks.push({
         type: 'table',
-        caption: `AI 예측 갈등 가능성 (높은 순, ${top.length}쌍${aiPairs.length > top.length ? ` / 전체 ${aiPairs.length}쌍` : ''})`,
-        columns: [{ label: '학생', width: 0.26 }, { label: '가능성', width: 0.12 }, { label: '이유', width: 0.62 }],
-        rows: top.map((p) => [bold(`${nameOf(p.a)} ↔ ${nameOf(p.b)}`), center(`${Math.round(Number(p.probability) || 0)}%`), p.reason || '']),
+        caption: `AI 관계 관심 점수 (높은 순, ${top.length}쌍${aiPairs.length > top.length ? ` / 전체 ${aiPairs.length}쌍` : ''})`,
+        columns: [{ label: '학생', width: 0.26 }, { label: '관심 점수', width: 0.14 }, { label: '이유', width: 0.6 }],
+        rows: top.map((p) => [bold(`${nameOf(p.a)} ↔ ${nameOf(p.b)}`), center(`${Math.round(Number(p.attentionScore ?? p.probability) || 0)}/100점`), p.reason || '']),
         header: true,
       });
-    } else para('AI가 갈등 가능성이 있다고 본 쌍이 없어요.', 'muted');
+    } else para('AI가 별도로 관심을 제안한 학생 쌍이 없어요. 갈등이 없다는 뜻은 아니에요.', 'muted');
   }
 
   // 6. 1인 1역
@@ -250,7 +271,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   }
 
   // 7. 회차별 변화
-  const history = analyzeHistory(room);
+  const roundIndex = room.rounds.findIndex((item) => item.id === round.id);
+  const history = analyzeHistory({ ...room, rounds: roundIndex >= 0 ? room.rounds.slice(0, roundIndex + 1) : [round] });
   if ((history.trend || []).length >= 2) {
     heading('회차별 변화');
     blocks.push({
@@ -264,12 +286,17 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (ch) {
       const pairName = (p) => `${p.aName} ↔ ${p.bName}`;
       para(`${ch.prevName} → ${ch.lastName} 비교`, 'muted');
+      para(ch.comparison.description, 'muted');
       list([
         `새로 생긴 갈등 ${ch.newConflicts.length}쌍${ch.newConflicts.length ? `: ${ch.newConflicts.map(pairName).join(', ')}` : ''}`,
         `계속되는 갈등 ${ch.persistent.length}쌍${ch.persistent.length ? `: ${ch.persistent.map(pairName).join(', ')}` : ''}`,
         `해소된 갈등 ${ch.resolved.length}쌍${ch.resolved.length ? `: ${ch.resolved.map(pairName).join(', ')}` : ''}`,
+        `판단 보류 관계 ${ch.pending.length}쌍`,
+        ...ch.pending.map((p) => `${pairName(p)}: ${p.reason}`),
         ch.improved.length ? `좋아진 학생: ${ch.improved.slice(0, 10).map((s) => s.name).join(', ')}` : '',
         ch.worsened.length ? `관심이 필요한 학생: ${ch.worsened.slice(0, 10).map((s) => s.name).join(', ')}` : '',
+        `학생 변화 판단 보류 ${ch.studentPending.length}명`,
+        ...ch.studentPending.map((s) => `${s.name}: ${s.reason}`),
       ].filter(Boolean));
     }
   }
