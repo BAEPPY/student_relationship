@@ -1,5 +1,7 @@
 // 데이터 보관 정책: 회차(조사) 응답은 마감 뒤 14개월이 지나면 자동 삭제됩니다.
 import { makeRound, monthName, ensureRounds } from './rounds.js';
+import { pruneGroupActivities } from './groups.js';
+import { pruneFollowups } from './followups.js';
 
 export const RETENTION_MONTHS = Number.parseInt(process.env.RETENTION_MONTHS, 10) || 14;
 export const WARN_DAYS = 60;
@@ -46,6 +48,8 @@ export function roomLastActivity(room) {
   bump(room.teacherNotes?.updatedAt);
   bump(room.aiSeating?.createdAt);
   for (const h of room.roleHistory || []) bump(h?.updatedAt);
+  for (const a of room.groupActivities || []) bump(a?.updatedAt);
+  for (const f of room.followups || []) bump(f?.updatedAt);
   return latest;
 }
 
@@ -67,6 +71,7 @@ export function dropStaleAiSeating(room) {
 export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) {
   const cutoff = addMonths(now, -months).toISOString();
   const nowIso = new Date(now).toISOString();
+  const workflowChanged = (pruneGroupActivities(room, cutoff) + pruneFollowups(room, cutoff)) > 0;
   const removed = [];
   const keep = [];
   for (const r of room.rounds || []) {
@@ -80,7 +85,7 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
   if (historyChanged) room.roleHistory = keptHistory;
   if (!removed.length) {
     const seatingChanged = dropStaleAiSeating(room);   // 회차가 이미 없는 배정안이 남아 있으면 정리
-    return { changed: historyChanged || seatingChanged, deleteRoom: false, removed };
+    return { changed: historyChanged || seatingChanged || workflowChanged, deleteRoom: false, removed };
   }
 
   const lastActivity = roomLastActivity(room);
@@ -89,6 +94,8 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
   }
 
   room.rounds = keep;
+  const removedIds = new Set(removed.map((r) => r.id));
+  if (room.groupActivities) room.groupActivities = room.groupActivities.filter((a) => !removedIds.has(a.roundId));
   if (room.rounds.length === 0) {
     const fresh = makeRound(monthName(nowIso), nowIso);
     room.rounds.push(fresh);
