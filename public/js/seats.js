@@ -1,5 +1,7 @@
 import { api, el, toast, setChildren, setupPageNav, fmtDate, TYPE_ICON } from './common.js';
 import { parseTeacherNotes } from './notes-parser.js';
+import { layoutSeats, neighborPairs, deskmatePairs } from './seat-geometry.js';
+import { COST, buildPastPenalty, makeCostModel } from './seat-cost.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -13,7 +15,7 @@ let data = null;                 // 교사 API 응답
 let layout = { blocks: [{ cols: 2, rows: 4 }, { cols: 2, rows: 5 }, { cols: 2, rows: 4 }] };
 let seats = {};                  // seatId -> studentId
 let pinned = new Set();
-let options = { friends: 'any' };
+let options = { friends: 'any', variety: 'on' };   // variety: 'on' 지난 자리와 다른 짝 우선 | 'off' 상관없음
 let zones = {};                  // seatId -> 'ac' (냉난방기 바람이 닿는 자리)
 let climate = 'off';             // 'cool' 냉방 중 | 'warm' 난방 중 | 'off'
 let zoneMode = false;            // 켜면 자리를 눌러 바람 자리를 표시/해제
@@ -53,41 +55,49 @@ let seatView = loadSeatView();   // 'student' | 'teacher' | 'flipV'
 
 const nameOf = (id) => data.stats[id]?.name || '?';
 const RULE_LABEL = { apart: '떨어뜨리기', together: '가까이 앉히기' };
-const FRONT_ROWS = 2;            // 앞자리로 인정하는 줄 수
-const AI_WARN = 40;              // 학생이 표시하지 않은 쌍이라도 AI 예측 갈등 가능성이 이 값 이상이면 떨어뜨려요
+const FRONT_ROWS = COST.FRONT_ROWS;   // 앞자리로 인정하는 줄 수
+const AI_WARN = COST.AI_WARN;         // 학생이 표시하지 않은 쌍이라도 AI 예측 갈등 가능성이 이 값 이상이면 떨어뜨려요
 const AI_CONFIRM = 'AI 자리 배정은 30초~1분 걸리고 API 사용량(비용)이 들어요. 지금 화면의 배치·고정·바람 자리·역할 자리와 교사 메모·규칙을 기준으로 배정안을 받아요 (메모·규칙은 먼저 저장돼요). 계속할까요?';
 
 // ---------- 좌석 ----------
-function seatList() {
-  const list = [];
-  layout.blocks.forEach((b, bi) => {
-    for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) list.push({ id: `b${bi}-r${r}-c${c}`, b: bi, r, c });
-  });
-  return list;
-}
+// 좌석 목록·인접 관계(짝꿍 1.0 / 앞뒤 0.6 / 대각선 0.3 / 통로 건너 0.35)는 서버와 같은 공유 모듈(seat-geometry.js)을 써요
+const seatList = () => layoutSeats(layout);
 const rowOf = (seatId) => Number(seatId.split('-')[1].slice(1));
 
-// 인접 관계: [seatA, seatB, weight, label]
-function neighborPairs() {
-  const pairs = [];
-  const id = (b, r, c) => `b${b}-r${r}-c${c}`;
-  layout.blocks.forEach((blk, bi) => {
-    for (let r = 0; r < blk.rows; r++) {
-      for (let c = 0; c < blk.cols; c++) {
-        if (c + 1 < blk.cols) pairs.push([id(bi, r, c), id(bi, r, c + 1), 1.0, '짝꿍']);
-        if (r + 1 < blk.rows) pairs.push([id(bi, r, c), id(bi, r + 1, c), 0.6, '앞뒤']);
-        if (r + 1 < blk.rows && c + 1 < blk.cols) pairs.push([id(bi, r, c), id(bi, r + 1, c + 1), 0.3, '대각선']);
-        if (r + 1 < blk.rows && c > 0) pairs.push([id(bi, r, c), id(bi, r + 1, c - 1), 0.3, '대각선']);
-      }
-    }
-    const next = layout.blocks[bi + 1];
-    if (next) {
-      const rows = Math.min(blk.rows, next.rows);
-      for (let r = 0; r < rows; r++) pairs.push([id(bi, r, blk.cols - 1), id(bi + 1, r, 0), 0.35, '통로 건너']);
-    }
-  });
-  return pairs;
+// ---------- 지난 자리표 (다양한 짝) ----------
+// 지난 자리표에서 짝꿍·이웃이었던 쌍은 자동 배정에서 다시 붙이지 않도록 비용을 더해요 (최근 것일수록 크게).
+// 숫자(짝꿍 80 × 0.5^i, 이웃 16 × 0.5^i, 같은 분단 4 × 0.5^i)와 합산(buildPastPenalty)은 공유 모듈 seat-cost.js 에 있어요
+const PAST_FOR_EVAL = 3;         // 평가(안내·타일)에서 살펴보는 지난 자리표 수
+let pastList = [];               // [{ savedAt, roundName, layout, seats, live }] 최신이 앞 (live: 저장돼 있지만 아직 보관 전인 지금 자리표)
+let pastPenalty = {};            // a -> b -> { mate, near, block } 지난 자리표에서 짝꿍/이웃/같은 분단이었던 쌍의 페널티 합 (양방향, 같은 객체)
+let hasPast = false;             // 지난 자리표 페널티가 하나라도 있는지 (없으면 담금질에서 그 계산을 통째로 건너뛰어요)
+
+/** layout+seats 가 같은 자리표인지 (연속 중복 제거용) */
+function sameArrangement(x, y) {
+  if (!x || !y) return false;
+  const key = (a) => JSON.stringify([(a.layout?.blocks || []).map((b) => [Number(b.cols), Number(b.rows)]), Object.entries(a.seats || {}).filter(([, sid]) => sid).sort()]);
+  return key(x) === key(y);
 }
+
+/**
+ * 지난 자리표 목록: 저장된 자리표가 비어 있지 않고 지금 회차가 아니면(또는 회차 정보가 없으면) 그것 + 서버에 보관된 seatingHistory.
+ * 연속 중복(같은 layout+seats)은 빼고 최대 6개. 최신이 앞이에요.
+ */
+function pastArrangements() {
+  const list = [];
+  const cur = data.seating;
+  if (cur?.seats && Object.values(cur.seats).some(Boolean) && (!cur.roundId || cur.roundId !== data.round.id)) {
+    list.push({ savedAt: cur.updatedAt, roundId: cur.roundId, roundName: cur.roundName, layout: cur.layout, seats: cur.seats, live: true });
+  }
+  for (const h of data.seatingHistory || []) {
+    if (h?.layout && h?.seats) list.push({ savedAt: h.savedAt, roundId: h.roundId, roundName: h.roundName, layout: h.layout, seats: h.seats, live: false });
+  }
+  const out = [];
+  for (const item of list) if (!out.length || !sameArrangement(out[out.length - 1], item)) out.push(item);
+  return out.slice(0, 6);
+}
+
+const pastRoundLabel = (arr) => arr.roundName || (arr.savedAt ? fmtDate(arr.savedAt) : '지난 회차');
 
 // ---------- 관계 비용 ----------
 let relType = {};   // relType[a][b] = 'good' | 'bad'
@@ -107,7 +117,13 @@ function buildRelations() {
   aiProb = {};
   const known = new Set(data.students.map((s) => s.id));
   for (const p of aiSeating?.pairs || []) if (known.has(p.a) && known.has(p.b) && p.a !== p.b) aiProb[pairKey(p.a, p.b)] = p;
+  // 지난 자리표(저장된 다른 회차 자리표 + 보관 기록)에서 짝꿍·이웃이었던 쌍 → 자동 배정이 다시 붙이지 않도록
+  pastList = pastArrangements();
+  pastPenalty = buildPastPenalty(pastList);
+  hasPast = Object.keys(pastPenalty).length > 0;
 }
+/** 다양한 짝 옵션이 켜져 있고 지난 자리표가 있을 때만 페널티를 계산해요 (처음 자리표나 상관없음이면 그 계산을 건너뛰어 빨라요) */
+const usePast = () => options.variety !== 'off' && hasPast;
 const rel = (a, b) => relType[a]?.[b] || 'none';
 const ruleOf = (a, b) => rules.find((r) => pairKey(r.a, r.b) === pairKey(a, b)) || null;
 const needsFront = (sid) => Boolean(notes[sid]?.front);
@@ -163,50 +179,24 @@ function fixedSeats() {
   return fixed;
 }
 
-function pairCost(a, b) {
-  if (!a || !b) return 0;
-  let cost = 0;
-  // 교사 지정 규칙이 가장 강함
-  const rule = ruleOf(a, b);
-  if (rule?.type === 'apart') cost += 400;
-  if (rule?.type === 'together') cost -= 60;
-  const ab = rel(a, b);
-  const ba = rel(b, a);
-  const key = pairKey(a, b);
-  const aiP = aiProb[key]?.probability;
-  // 안 좋은 사이: AI 가 예측한 갈등 가능성이 있으면 그걸, 없으면 규칙 기반 분석값을 써요
-  if (ab === 'bad' || ba === 'bad') cost += aiP ?? prob[key]?.probability ?? 50;
-  // 학생은 안 좋은 사이로 표시하지 않았지만 AI 가 갈등이 생길 수 있다고 본 쌍도 조금 떨어뜨려요
-  else if (aiP >= AI_WARN) cost += aiP * 0.6;
-  const mutualGood = ab === 'good' && ba === 'good';
-  const anyGood = ab === 'good' || ba === 'good';
-  if (options.friends === 'near') cost -= mutualGood ? 10 : anyGood ? 4 : 0;
-  if (options.friends === 'apart') cost += mutualGood ? 8 : anyGood ? 3 : 0;
-  if (isolated.has(a) && ba === 'good') cost -= 8;
-  if (isolated.has(b) && ab === 'good') cost -= 8;
-  return cost;
-}
+// 비용 모델(totalCost · pairCost)은 공유 모듈 seat-cost.js 에 있어요 — 화면 상태를 그때그때 읽는 함수들을 넘겨요.
+// 우선순위: ① 고정·역할·선생님 규칙 > ② 갈등 회피 > ③ 선생님 👓 앞자리 > ④ 다양한 짝(지난 짝꿍) > ⑤ 학생 몸 특징
+const { totalCost } = makeCostModel({
+  rule: ruleOf,
+  rel,
+  prob: (a, b) => prob[pairKey(a, b)]?.probability,
+  aiProb: (a, b) => aiProb[pairKey(a, b)]?.probability,
+  isolated: (sid) => isolated.has(sid),
+  friends: () => options.friends,
+  pastPenalty: () => (usePast() ? pastPenalty : null),
+  needsFront,
+  body: bodyOf,
+  zoneFeel,
+  blockRows: blockRowsOf,
+});
 
-function totalCost(assign, pairs) {
-  let sum = 0;
-  for (const [x, y, w] of pairs) sum += w * pairCost(assign[x], assign[y]);
-  for (const [seatId, sid] of Object.entries(assign)) {
-    if (!sid) continue;
-    const row = rowOf(seatId);
-    sum += 0.8 * row;                                   // 학생이 자리보다 적으면 앞줄부터
-    if (needsFront(sid)) sum += row < FRONT_ROWS ? row * 8 : 60 + row * 30;   // 앞자리 필요 학생 (교사 지정)
-    // 학생이 고른 몸 특징: 눈이 나쁘면 앞줄, 키가 작으면 앞쪽·크면 뒤쪽을 조금 선호
-    const body = bodyOf(sid);
-    if (body.sight === 'poor') sum += row < FRONT_ROWS ? row * 4 : 30 + row * 12;
-    if (body.height === 'short') sum += row * 3;
-    if (body.height === 'tall') sum += (blockRowsOf(seatId) - 1 - row) * 3;
-    // 냉난방기 바람 자리: 추위를 잘 타면 냉방 바람을, 더위를 잘 타면 난방 바람을 피하고 반대쪽은 조금 선호
-    const feel = zoneFeel(seatId);
-    if (feel === 'cool') { if (body.cold === 'yes') sum += 45; if (body.heat === 'yes') sum -= 12; }
-    if (feel === 'warm') { if (body.heat === 'yes') sum += 45; if (body.cold === 'yes') sum -= 12; }
-  }
-  return sum;
-}
+/** 분단별 좌석 id 묶음 (같은 분단 반복 페널티용) — 담금질이 시작할 때 한 번만 만들어 넘겨요 */
+const blockGroups = () => layout.blocks.map((_, bi) => seatList().filter((s) => s.b === bi).map((s) => s.id));
 
 // ---------- 자동 배정 (담금질 기법) ----------
 function autoAssign(message = '자동으로 배정했어요. 마음에 안 들면 "다른 배치"를 눌러 보세요.') {
@@ -218,21 +208,22 @@ function autoAssign(message = '자동으로 배정했어요. 마음에 안 들�
   const students = data.students.map((s) => s.id).filter((id) => !fixedStudents.has(id));
   if (students.length > free.length) toast(`자리가 ${students.length - free.length}개 부족해요. 배치를 늘려 주세요.`, 4000);
 
-  const pairs = neighborPairs();
+  const pairs = neighborPairs(layout);
+  const groups = blockGroups();
   let best = null;
   let bestCost = Infinity;
   for (let restart = 0; restart < 6; restart++) {
     const assign = { ...fixed };
     const shuffled = [...students].sort(() => Math.random() - 0.5);
     free.forEach((id, i) => { assign[id] = shuffled[i] || null; });
-    let cost = totalCost(assign, pairs);
+    let cost = totalCost(assign, pairs, groups);
     let T = 40;
     for (let it = 0; it < 14000; it++) {
       const i = free[Math.floor(Math.random() * free.length)];
       const j = free[Math.floor(Math.random() * free.length)];
       if (i === j) continue;
       [assign[i], assign[j]] = [assign[j], assign[i]];
-      const next = totalCost(assign, pairs);
+      const next = totalCost(assign, pairs, groups);
       const delta = next - cost;
       if (delta <= 0 || Math.random() < Math.exp(-delta / T)) cost = next;
       else [assign[i], assign[j]] = [assign[j], assign[i]];
@@ -251,7 +242,7 @@ function autoAssign(message = '자동으로 배정했어요. 마음에 안 들�
 
 // ---------- 평가 ----------
 function evaluate() {
-  const pairs = neighborPairs();
+  const pairs = neighborPairs(layout);
   const warnings = [];     // 가까이 앉은 갈등/분리 지정 쌍
   const infos = [];        // 참고 사항
   let goodPairs = 0;
@@ -324,15 +315,34 @@ function evaluate() {
     const seatId = seatOf[sid];
     if (seatId && rowOf(seatId) >= FRONT_ROWS) { infos.push(`${nameOf(sid)}: 앞자리가 필요한데 ${rowOf(seatId) + 1}번째 줄이에요.`); conflictSeats.add(seatId); }
   }
-  // 학생이 고른 몸 특징과 맞지 않는 자리
+  // 학생이 고른 몸 특징과 맞지 않는 자리. 지난 자리표가 있어 다양한 짝을 먼저 보는 중이면(usePast) 몸 특징은 후순위라
+  // 뒤로 간 것이 설계대로예요 — 자리를 빨갛게 칠하지 않고 참고만 남겨요 (처음 자리표거나 "상관없음"이면 전처럼 빨갛게)
+  const pastFirst = usePast();
+  const bodyNote = pastFirst ? ' (지난 자리와 다른 짝을 먼저 봐서 그럴 수 있어요)' : '';
+  const bodyMismatch = (seatId, text) => { infos.push(text + bodyNote); if (!pastFirst) conflictSeats.add(seatId); };
   for (const [sid, seatId] of Object.entries(seatOf)) {
     const body = bodyOf(sid);
-    if (body.sight === 'poor' && !notes[sid]?.front && rowOf(seatId) >= FRONT_ROWS) { infos.push(`${nameOf(sid)}: 눈이 나쁜 편이라고 했는데 ${rowOf(seatId) + 1}번째 줄이에요.`); conflictSeats.add(seatId); }
+    if (body.sight === 'poor' && !notes[sid]?.front && rowOf(seatId) >= FRONT_ROWS) bodyMismatch(seatId, `${nameOf(sid)}: 눈이 나쁜 편이라고 했는데 ${rowOf(seatId) + 1}번째 줄이에요.`);
     const feel = zoneFeel(seatId);
-    if (feel === 'cool' && body.cold === 'yes') { infos.push(`${nameOf(sid)}: 추위를 잘 타는데 냉방 바람 자리예요.`); conflictSeats.add(seatId); }
-    if (feel === 'warm' && body.heat === 'yes') { infos.push(`${nameOf(sid)}: 더위를 잘 타는데 난방 바람 자리예요.`); conflictSeats.add(seatId); }
+    if (feel === 'cool' && body.cold === 'yes') bodyMismatch(seatId, `${nameOf(sid)}: 추위를 잘 타는데 냉방 바람 자리예요.`);
+    if (feel === 'warm' && body.heat === 'yes') bodyMismatch(seatId, `${nameOf(sid)}: 더위를 잘 타는데 난방 바람 자리예요.`);
   }
-  return { warnings, infos, goodPairs, conflictSeats };
+  // 다양한 짝: 지난 자리표(최근 3개)와 같은 짝꿍인 쌍 (참고만, 자리를 빨갛게 표시하지는 않아요)
+  let repeatPairs = 0;
+  if (options.variety !== 'off' && pastList.length) {
+    const known = new Set(data.students.map((s) => s.id));
+    const pastMates = new Map();   // 'a|b' -> 가장 최근 자리표의 회차 이름
+    for (const arr of [...pastList.slice(0, PAST_FOR_EVAL)].reverse()) {
+      for (const [a, b] of deskmatePairs(arr.layout, arr.seats)) pastMates.set(pairKey(a, b), pastRoundLabel(arr));
+    }
+    for (const [a, b] of deskmatePairs(layout, seats)) {
+      const when = pastMates.get(pairKey(a, b));
+      if (!when || !known.has(a) || !known.has(b)) continue;
+      repeatPairs++;
+      infos.push(`지난 자리표(${when})와 같은 짝꿍: ${nameOf(a)} · ${nameOf(b)}`);
+    }
+  }
+  return { warnings, infos, goodPairs, conflictSeats, repeatPairs };
 }
 
 // ---------- 화면 ----------
@@ -359,6 +369,12 @@ function render() {
     el('option', { value: 'apart', text: '친한 친구: 떨어뜨리기', selected: options.friends === 'apart' ? true : null }),
   ]);
   friendsSelect.addEventListener('change', () => { options.friends = friendsSelect.value; dirty = true; render(); });
+  // 다양한 짝: 지난 자리표(다른 회차에 저장한 자리표·보관 기록)와 같은 짝꿍을 피할지
+  const varietySelect = el('select', { class: 'select', id: 'variety-select', title: '지난 자리표와 같은 짝꿍 피하기', 'aria-label': '지난 자리표와 같은 짝꿍 피하기' }, [
+    el('option', { value: 'on', text: '지난 자리와 다른 짝: 우선', selected: options.variety !== 'off' ? true : null }),
+    el('option', { value: 'off', text: '지난 자리와 다른 짝: 상관없음', selected: options.variety === 'off' ? true : null }),
+  ]);
+  varietySelect.addEventListener('change', () => { options.variety = varietySelect.value === 'off' ? 'off' : 'on'; dirty = true; render(); });
   // 자리 환경: 냉난방기 바람 자리 표시 모드 + 지금 냉방/난방 중인지
   const zoneCount = Object.values(zones).filter((z) => z === 'ac').length;
   const climateSelect = el('select', { class: 'select', id: 'climate-select', title: '냉난방기 상태', 'aria-label': '냉난방기 상태' },
@@ -418,10 +434,12 @@ function render() {
         dirty = true; render();
       } }, [el('label', { text: '교실 배치', style: { fontWeight: 600, alignSelf: 'center' } }), layoutInput, el('button', { type: 'submit', class: 'btn', text: '적용' })]),
       friendsSelect,
+      varietySelect,
     ]),
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, [zoneBtn, climateSelect]),
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, roleRow),
     el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요(교사 지정 또는 눈이 나쁜 편), 📝 메모 있음, ❄️ 추위 잘 탐, 🔥 더위 잘 탐, 📏 키 큼, 🌱 키 작음.' }),
+    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '자동 배정 우선순위: 📌 고정·🎒 역할 자리·선생님 규칙(떨어뜨리기/가까이) → 갈등 회피(안 좋은 사이는 지난 짝꿍을 반복하더라도 붙이지 않아요) → 선생님이 표시한 👓 앞자리 필요(선생님이 직접 표시한 것이라 지난 짝꿍보다 먼저 지켜요) → 지난 자리표와 다른 짝꿍(다양한 짝) → 학생이 고른 몸 특징(시력·추위·더위·키)은 후순위예요. 지난 자리표가 없는 처음 자리표에서는 눈이 나쁜 학생이 자연히 앞줄에 가고, 그 뒤부터는 같은 짝꿍을 피하는 쪽이 먼저예요 (짝꿍 반복은 강하게, 앞뒤 반복은 약하게, 같은 분단 반복은 더 약하게 피해요).' }),
     el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🌀 바람 자리: 시스템 에어컨·히터 바람이 바로 닿는 자리를 표시해 두면, 냉방 중에는 추위를 잘 타는 학생을, 난방 중에는 더위를 잘 타는 학생을 자동 배정에서 그 자리에 앉히지 않아요. 학생이 "나는 이런 편이에요"에서 고른 몸 특징(눈·키·추위·더위)도 함께 참고해요.' }),
     el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🎒 역할 자리: 1인 1역에서 특정 역할(예: 칠판 지킴이)을 맡은 학생이 앉을 자리를 미리 정해 두면, 자동 배정과 AI 배정이 이번 회차 담당 학생을 그 자리에 앉혀요. 담당이 아직 없으면 보통 자리처럼 써요. 🤖 AI 자리 배정은 Claude 가 학생 관계·메모·몸 특징·성향 설문·1인 1역까지 종합해 배정안과 갈등 예측을 만들어 주는 기능으로, 실명 대신 가명을 보내고 30초~1분 정도 걸리며 API 비용이 들어요. 결과는 화면에서 확인한 뒤 저장해야 반영돼요.' }),
     el('p', { class: 'muted seat-view-hint', style: { marginTop: '4px', marginBottom: 0 }, text: '자리표는 "인쇄" 옆에서 보는 방향을 고를 수 있어요. 교사 시점은 교탁에서 학생들을 바라본 모습이라 위아래와 좌우가 모두 뒤집혀요. 방향은 화면과 인쇄에만 적용되고 배정 자체는 바뀌지 않아요.' }),
@@ -459,6 +477,7 @@ function render() {
     el('div', { class: 'stat-row' }, [
       el('div', { class: 'stat' }, [el('div', { class: 'label', text: '가까이 앉은 갈등 쌍' }), el('div', { class: 'value', text: `${ev.warnings.length}쌍`, style: { color: ev.warnings.length ? '#d63d4f' : '#1e6b32' } })]),
       el('div', { class: 'stat' }, [el('div', { class: 'label', text: '서로 좋은 사이 짝꿍' }), el('div', { class: 'value', text: `${ev.goodPairs}쌍` })]),
+      el('div', { class: 'stat', id: 'stat-repeat', title: '지난 자리표(최근 3개)와 같은 짝꿍인 쌍' }, [el('div', { class: 'label', text: '지난 자리와 같은 짝꿍' }), el('div', { class: 'value', text: `${ev.repeatPairs}쌍`, style: { color: ev.repeatPairs ? '#b86a00' : '#1e6b32' } })]),
       el('div', { class: 'stat' }, [el('div', { class: 'label', text: '아직 자리 없음' }), el('div', { class: 'value', text: `${unassigned.length}명` })]),
     ]),
     ev.warnings.length ? el('div', { style: { marginTop: '12px' } }, [
@@ -492,6 +511,7 @@ function render() {
         ...memoStudents.map((s) => el('li', {}, [el('b', { text: s.name }), notes[s.id].front ? ' 👓 앞자리 필요' : '', notes[s.id].memo ? el('span', { class: 'muted', text: ` · ${notes[s.id].memo}` }) : null])),
       ]),
     ]) : null,
+    seatHistoryPanel(),
     aiSeatingPanel(),
   ]);
 
@@ -499,6 +519,55 @@ function render() {
 }
 
 const badgeLevel = (p) => (p >= 70 ? 'high' : p >= 40 ? 'medium' : 'low');
+
+// ---------- 🗂️ 지난 자리표 ----------
+/** 측면 카드의 "지난 자리표": 보관된 개수, 최근 목록(회차명 · 저장일, 최대 6개), 보관하기 / 기록 지우기 버튼 */
+function seatHistoryPanel() {
+  const stored = Array.isArray(data.seatingHistory) ? data.seatingHistory.length : 0;
+  const hasSaved = Boolean(data.seating?.seats && Object.values(data.seating.seats).some(Boolean));
+  return el('div', { id: 'seat-history', style: { marginTop: '12px' } }, [
+    el('h3', { text: '🗂️ 지난 자리표' }),
+    el('div', { class: 'muted', id: 'seat-history-count', style: { fontSize: '13px' }, text: stored ? `보관된 자리표 ${stored}개` : '아직 보관된 자리표가 없어요.' }),
+    pastList.length ? el('ul', { class: 'seat-history-list', id: 'seat-history-list' }, pastList.map((arr) => el('li', {}, [
+      el('b', { text: pastRoundLabel(arr) }),
+      arr.savedAt ? el('span', { class: 'muted', text: ` · ${fmtDate(arr.savedAt)}` }) : null,
+      arr.live ? el('span', { class: 'muted', text: ' · 지금 저장된 자리표' }) : null,
+    ]))) : null,
+    el('p', { class: 'muted', style: { margin: '6px 0', fontSize: '13px' }, text: '회차가 바뀐 뒤 저장하면 이전 자리표가 자동으로 보관돼요. 자동 배정과 AI 배정은 보관된 자리표와 같은 짝꿍을 피해요.' }),
+    el('div', { class: 'btn-row' }, [
+      el('button', { type: 'button', class: 'btn small', id: 'archive-seating', disabled: hasSaved ? null : true, title: hasSaved ? '지금 저장된 자리표를 지난 자리표 기록에 넣어요' : '먼저 자리를 저장해 주세요', text: '지금 자리표 보관하기', onClick: archiveSeating }),
+      stored ? el('button', { type: 'button', class: 'btn small', id: 'clear-seat-history', text: '기록 지우기', onClick: clearSeatHistory }) : null,
+    ]),
+  ]);
+}
+
+/** 서버에서 교사 화면 자료를 다시 받아 지난 자리표·관계를 새로 계산해요 (화면의 배치·자리는 그대로) */
+async function reloadData() {
+  data = await api(dataUrl);
+  buildRelations();
+}
+
+/** 지금 저장된 자리표를 지난 자리표 기록에 보관 (저장하지 않은 변경이 있으면 먼저 저장하라고 안내) */
+async function archiveSeating() {
+  if (dirty) return toast('먼저 저장해 주세요. 보관은 저장된 자리표를 넣어요.', 3500);
+  try {
+    await api(`${base}/seating/archive`, { method: 'POST' });
+    await reloadData();
+    render();
+    toast('지금 자리표를 지난 자리표 기록에 보관했어요.');
+  } catch (err) { toast(err.message, 4000); }
+}
+
+/** 보관된 지난 자리표 기록 전부 삭제 */
+async function clearSeatHistory() {
+  if (!confirm('보관된 지난 자리표 기록을 모두 지울까요? 지우면 자동 배정이 지난 짝꿍을 더 이상 피하지 않아요.')) return;
+  try {
+    await api(`${base}/seating/history`, { method: 'DELETE' });
+    await reloadData();
+    render();
+    toast('지난 자리표 기록을 지웠어요.');
+  } catch (err) { toast(err.message, 4000); }
+}
 
 // ---------- 🤖 AI 자리 배정 ----------
 /** 측면 카드의 "AI 자리 배정 메모": 만든 시각·회차·모델, 메모, 예측 갈등 상위 10쌍, 학생별 설명, 다시 적용 버튼 */
@@ -671,7 +740,7 @@ function notesSection() {
     notesOpen ? el('div', { class: 'grid-2' }, [
       el('div', {}, [
         el('h3', { text: '학생별 메모 · 앞자리 필요(👓) · 학생이 고른 특징' }),
-        el('p', { class: 'muted', text: '👓 를 체크한 학생은 자동 배정에서 앞 두 줄에 앉혀요. "특징"은 학생이 설문에서 직접 고른 몸 특징(눈·키·추위·더위)으로, 자동 배정이 함께 참고해요. 메모는 좌석 위에 마우스를 올리면 보여요.' }),
+        el('p', { class: 'muted', text: '👓 를 체크한 학생은 자동 배정에서 앞 두 줄에 앉혀요. "특징"은 학생이 설문에서 직접 고른 몸 특징(눈·키·추위·더위)으로, 자동 배정이 다양한 짝(지난 자리표와 다른 짝꿍) 다음 순서로 참고해요. 메모는 좌석 위에 마우스를 올리면 보여요.' }),
         el('div', { class: 'table-wrap', style: { maxHeight: '420px', overflowY: 'auto' } }, [el('table', { class: 'table' }, [
           el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), el('th', { text: '앞자리' }), el('th', { text: '특징' }), el('th', { text: '메모' })])]),
           el('tbody', {}, rows),
@@ -812,6 +881,7 @@ async function saveNotes() {
 async function save() {
   try {
     await saveNotes();
+    // roundId 는 보내지 않아요: 자리표는 교실에 하나라 서버가 늘 지금 회차의 것으로 기록해요 (?round= 로 지난 회차를 보다가 저장해도 지금 회차 자리표가 '지난 자리표'로 밀려나지 않게)
     await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options, zones, climate, roleSeats } });
     data = await api(dataUrl);
     buildRelations();
@@ -841,6 +911,7 @@ function latestResponseAt() {
       seats = { ...data.seating.seats };
       pinned = new Set(data.seating.pinned || []);
       options = { ...options, ...(data.seating.options || {}) };
+      options.variety = options.variety === 'off' ? 'off' : 'on';
       zones = { ...(data.seating.zones || {}) };
       climate = ['cool', 'warm', 'off'].includes(data.seating.climate) ? data.seating.climate : 'off';
       // 역할 자리: 그 사이 지워진 역할은 뺀다 (저장할 때 서버가 없는 역할을 거절해요)

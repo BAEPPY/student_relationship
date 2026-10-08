@@ -12,7 +12,7 @@ import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeati
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
 import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles, aiAssignSeats } from './ai.js';
-import { repairSeating } from './seating.js';
+import { repairSeating, deskmatePairs } from './seating.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
@@ -31,6 +31,7 @@ const LIMITS = {
   minRelations: 10,
   minEach: 10,
   rounds: 36,
+  seatingHistory: 12,   // 보관하는 지난 자리표 수
 };
 
 class HttpError extends Error {
@@ -223,6 +224,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       catalog: REASON_CATALOG,
       notice: storageNotice,
       seating: room.seating || null,
+      seatingHistory: room.seatingHistory || [],   // 보관된 지난 자리표 (최신이 앞) — 자동 배정·AI 배정이 같은 짝꿍을 피하는 데 씀
       aiSeating: room.aiSeating || null,       // 마지막 AI 자리 배정안 (저장 전 참고용)
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
       retention: retentionView(room),
@@ -460,6 +462,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         if (room.rounds.some((r) => r.id !== round.id && r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}`);
         const oldName = round.name;
         round.name = name;
+        // 자리표(지금 저장된 것·보관본)에 적어 둔 회차 이름도 따라갑니다 (자리 배정 페이지의 지난 자리표 목록·평가 문구·AI 프롬프트가 이 이름을 써요).
+        if (room.seating?.roundId === round.id) room.seating.roundName = name;
+        for (const h of room.seatingHistory || []) if (h?.roundId === round.id) h.roundName = name;
         // 이 회차에서 공개한 배정 기록도 같은 이름을 따라갑니다.
         const history = room.roleHistory || [];
         const mine = history.find((h) => h.roundId === round.id || (h.source === 'published' && h.month === oldName));
@@ -567,6 +572,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (room.seating?.seats) {
         for (const [seatId, sid] of Object.entries(room.seating.seats)) if (sid === student.id) delete room.seating.seats[seatId];
       }
+      for (const h of room.seatingHistory || []) {
+        for (const [seatId, sid] of Object.entries(h?.seats || {})) if (sid === student.id) delete h.seats[seatId];
+      }
       if (room.aiSeating) scrubAiSeating(room.aiSeating, student);
     });
     res.json(teacherView(req, room));
@@ -647,7 +655,12 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       seats[seatId] = studentId;
     }
     const pinned = [...new Set((Array.isArray(body.pinned) ? body.pinned : []).filter((id) => validSeat.test(id)))];
-    const options = { friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any' };
+    // options.variety: 지난 자리표와 다른 짝을 우선할지 ('on' 기본) — 자동 배정(화면)과 AI 배정이 같이 씀
+    if (body.options?.variety !== undefined && !['on', 'off'].includes(body.options.variety)) throw bad('지난 자리와 다른 짝 옵션은 우선(on) 또는 상관없음(off)이어야 해요.');
+    const options = {
+      friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any',
+      variety: body.options?.variety === 'off' ? 'off' : 'on',
+    };
     // 자리 환경: 냉난방기 바람이 닿는 자리(zones: seatId → 'ac') 와 지금 냉방/난방 중인지(climate)
     const zones = {};
     for (const [seatId, zone] of Object.entries(body.zones || {})) {
@@ -669,11 +682,73 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     return { layout, seats, pinned, options, zones, climate, roleSeats };
   }
 
-  // 자리 배정 저장
+  // ---------- 지난 자리표 보관 (seatingHistory) ----------
+  // 같은 자리표인지: 배치(블록 크기)와 자리 → 학생이 모두 같으면 같은 자리표로 봅니다.
+  const seatingKey = (s) => JSON.stringify({
+    layout: (s?.layout?.blocks || []).map((b) => [Number(b?.cols) || 0, Number(b?.rows) || 0]),
+    seats: Object.entries(s?.seats || {}).filter(([, sid]) => sid).sort(([a], [b]) => a.localeCompare(b)),
+  });
+  const hasSeats = (s) => Boolean(s?.seats) && Object.values(s.seats).some(Boolean);
+  /**
+   * 지금 저장된 자리표(room.seating)를 history 맨 앞에 보관합니다 (최신이 앞, 최대 LIMITS.seatingHistory 개).
+   * 비어 있거나 history[0] 과 같은 자리표면 넣지 않아요. @returns {boolean} 보관했는지
+   */
+  function archiveSeating(room) {
+    const cur = room.seating;
+    if (!hasSeats(cur)) return false;
+    const history = Array.isArray(room.seatingHistory) ? room.seatingHistory : [];
+    if (history[0] && seatingKey(history[0]) === seatingKey(cur)) return false;
+    const entry = {
+      savedAt: cur.updatedAt || new Date().toISOString(),
+      roundId: cur.roundId || null,
+      roundName: cur.roundName || null,
+      layout: structuredClone(cur.layout),
+      seats: Object.fromEntries(Object.entries(cur.seats || {}).filter(([, sid]) => sid)),
+    };
+    room.seatingHistory = [entry, ...history].slice(0, LIMITS.seatingHistory);
+    return true;
+  }
+  /**
+   * 지난 자리표 목록 (최근 순): 저장된 자리표가 비어 있지 않고 다른 회차의 것이면 그것부터, 그다음 보관 기록.
+   * 이어지는 같은 자리표는 하나만 셉니다. (AI 배정의 "지난 짝꿍" 자료)
+   */
+  function pastArrangements(room, roundId, limit = 3) {
+    const list = [];
+    if (hasSeats(room.seating) && room.seating.roundId !== roundId) list.push(room.seating);
+    for (const h of room.seatingHistory || []) if (hasSeats(h)) list.push(h);
+    const out = [];
+    for (const s of list) if (!out.length || seatingKey(out[out.length - 1]) !== seatingKey(s)) out.push(s);
+    return out.slice(0, limit);
+  }
+
+  // 자리 배정 저장. 자리표는 교실에 하나라 늘 지금 회차(currentRound)의 것으로 기록합니다 — 본문의 roundId 는 보고 있던 회차로, 있으면 검증만 해요
+  // (지난 회차를 보다가 저장해도 지금 회차 자리표가 '지난 자리표'로 밀려나거나 새 자리표가 지난 회차 것으로 적히지 않게).
+  // 지금 회차가 지난 저장의 회차와 다르면 지난 자리표를 먼저 보관합니다 (같은 회차 안의 재저장은 덮어쓰기).
+  // 자리가 그대로여도 보관해 두어야 그 회차 안에서 다시 짜더라도 이전 회차의 자리표가 남아요. (같은 자리표가 이어지면 하나만 보관)
   app.put('/api/teacher/:adminToken/seating', async (req, res) => {
     const found = await requireRoom(req);
+    if (req.body?.roundId) requireRound(found, String(req.body.roundId));
     const parsed = parseSeatingBody(req.body || {}, found);
-    const room = await mutateRoom(found, (r) => { r.seating = { ...parsed, updatedAt: new Date().toISOString() }; });
+    const room = await mutateRoom(found, (r) => {
+      const rnd = currentRound(r);
+      const prev = r.seating;
+      if (hasSeats(prev) && prev.roundId !== rnd.id) archiveSeating(r);
+      r.seating = { ...parsed, roundId: rnd.id, roundName: rnd.name, updatedAt: new Date().toISOString() };
+    });
+    res.json(teacherView(req, room));
+  });
+
+  // 지금 저장된 자리표를 지난 자리표로 보관 (회차를 바꾸지 않고 자리를 다시 짤 때)
+  app.post('/api/teacher/:adminToken/seating/archive', async (req, res) => {
+    const found = await requireRoom(req);
+    if (!hasSeats(found.seating)) throw bad('보관할 자리표가 없어요. 먼저 자리를 저장해 주세요.');
+    const room = await mutateRoom(found, (r) => { archiveSeating(r); });
+    res.json(teacherView(req, room));
+  });
+
+  app.delete('/api/teacher/:adminToken/seating/history', async (req, res) => {
+    const found = await requireRoom(req);
+    const room = await mutateRoom(found, (r) => { r.seatingHistory = []; });
     res.json(teacherView(req, room));
   });
 
@@ -693,7 +768,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       return { ...roundView(r), relations: listRelations(rr), analysis: analyzeConflicts(rr, stats), profiles: r.profiles || {}, applications: r.applications || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: r.aiAnalysis || null };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, seatingHistory: view.seatingHistory, roles: view.roles, roleHistory: view.roleHistory });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
@@ -1070,6 +1145,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const analysis = analyzeConflicts(rr, stats);
     const roleAssignment = round.roleAssignment?.assignments || {};
     const students = found.students.map((s) => ({ id: s.id, name: s.name }));
+    // 지난 자리표의 짝꿍 (최근 순 최대 3개): 다양한 짝 옵션이 켜져 있으면 프롬프트에 들어가 같은 짝을 피해요
+    const pastDeskmates = pastArrangements(found, round.id)
+      .map((s) => ({ roundName: s.roundName || '지난 자리표', pairs: deskmatePairs(s.layout, s.seats) }))
+      .filter((p) => p.pairs.length);
     const ai = makeAi();
     const result = await aiAssignSeats({
       ai,
@@ -1089,6 +1168,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       climate,
       roleSeats,
       options,
+      pastDeskmates,
     });
     const repaired = repairSeating({ assignment: result.assignment, students, layout, fixedSeats, roleSeats, roleAssignment });
     const room = await mutateRoom(found, (room) => {

@@ -1,5 +1,6 @@
 // 자리 배정 보정 (순수 함수) — AI 가 만든 배정안을 교실 규칙에 맞게 고칩니다.
 //
+// layoutSeats · neighborPairs · seatedPairs · deskmatePairs 는 public/js/seat-geometry.js (브라우저와 공용) 에서 가져와 다시 내보냅니다.
 // layoutSeats(layout) → [{ id, b, r, c }]   배치의 모든 좌석 (분단 → 줄 → 칸 순서, id 는 'b0-r0-c0' 꼴)
 // repairSeating({ assignment, students, layout, fixedSeats, roleSeats, roleAssignment })
 //   → { seats: { seatId: studentId }, warnings: string[] }
@@ -11,15 +12,9 @@
 //   - 한 학생은 한 자리만 (겹치면 배치 순서상 앞의 자리만 인정). 자리가 없는 학생은 빈자리에 앞줄부터 채웁니다.
 //   - 자리가 모자라면 warnings 에 '자리가 N개 부족해요.' 를 넣습니다.
 
-export function layoutSeats(layout) {
-  const list = [];
-  (Array.isArray(layout?.blocks) ? layout.blocks : []).forEach((b, bi) => {
-    const rows = Number(b?.rows) || 0;
-    const cols = Number(b?.cols) || 0;
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) list.push({ id: `b${bi}-r${r}-c${c}`, b: bi, r, c });
-  });
-  return list;
-}
+import { layoutSeats, neighborPairs, seatedPairs, deskmatePairs } from '../public/js/seat-geometry.js';
+
+export { layoutSeats, neighborPairs, seatedPairs, deskmatePairs };
 
 export function repairSeating({ assignment = {}, students = [], layout, fixedSeats = {}, roleSeats = {}, roleAssignment = {} } = {}) {
   const seatList = layoutSeats(layout);
