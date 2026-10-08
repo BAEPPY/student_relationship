@@ -97,7 +97,7 @@ export async function copyRich({ text, html, message = '복사했어요.' }) {
 export function setupPageNav(adminToken, roundId = null) {
   const t = encodeURIComponent(adminToken);
   const q = roundId ? `?round=${encodeURIComponent(roundId)}` : '';
-  const urls = { dashboard: `/t/${t}`, seats: `/t/${t}/seats${q}`, roles: `/t/${t}/roles${q}`, print: `/t/${t}/print`, report: `/t/${t}/report${q}` };
+  const urls = { dashboard: `/t/${t}`, seats: `/t/${t}/seats${q}`, roles: `/t/${t}/roles${q}`, groups: `/t/${t}/groups${q}`, followups: `/t/${t}/followups`, print: `/t/${t}/print`, report: `/t/${t}/report${q}` };
   for (const a of document.querySelectorAll('.page-nav a[data-nav]')) {
     const url = urls[a.dataset.nav];
     if (url) a.href = url;

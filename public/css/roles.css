@@ -156,3 +156,15 @@
 .export-files { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--gray-300); }
 .export-files h3 { margin: 0 0 4px; font-size: 15px; }
 .export-files .btn.disabled { opacity: .5; cursor: not-allowed; }
+
+.role-balance-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.role-balance-controls label { font-weight: 700; }
+.role-balance-scroll { overflow-x: auto; }
+.role-balance-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.role-balance-table caption { text-align: left; font-weight: 700; margin: 8px 0; }
+.role-balance-table th, .role-balance-table td { padding: 10px 12px; border-bottom: 1px solid var(--gray-200); text-align: left; vertical-align: top; white-space: nowrap; }
+.role-balance-table thead { background: var(--gray-100); }
+.role-balance-rolelist { white-space: normal; min-width: 160px; max-width: 280px; margin-top: 3px; }
+.role-balance-preference { margin-bottom: 14px; padding: 12px; border: 1px solid var(--gray-200); border-radius: 10px; }
+.role-balance-preference label { display: block; font-weight: 700; margin-bottom: 5px; }
+.role-balance-preference input { margin-right: 4px; }

@@ -21,6 +21,11 @@ import { reportDocument } from './report.js';
 import { validateDraft, studentDraftView, saveStudentDraft, clearStudentDraft, removeStudentFromDrafts } from './student-drafts.js';
 import { seatingView, saveRoundSeating, removeStudentSeating, walkSeatings } from './seating-history.js';
 import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
+import { registerGroupRoutes } from './group-routes.js';
+import { removeStudentGroups, renameStudentGroups } from './groups.js';
+import { registerFollowupRoutes } from './followup-routes.js';
+import { followupSummary, removeStudentFollowups, renameStudentFollowups } from './followups.js';
+import { summarizeRoleBalance, captureRoleBalanceSnapshot, roleBalancePriorities } from './role-balance.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -229,6 +234,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       ...seatingView(room, round),
       aiSeating: aiSeatingView(room, round),
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
+      followupSummary: followupSummary(room),
       retention: retentionView(room),
       ...rolesView(room, round),
     };
@@ -252,6 +258,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       roles,
       roleHistory: room.roleHistory || [],
       previousRoles: prev,                       // { month, byStudent: { sid: [roleId] } }
+      roleBalance: summarizeRoleBalance(room, round),
       applications: round.applications || {},    // { sid: { choices, updatedAt } }
       profiles: round.profiles || {},            // { sid: { traits, partnerTraits, partnerText, updatedAt } }
       applicantCounts: applicantCounts(roles, round.applications || {}),
@@ -310,9 +317,14 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/t/:adminToken/print', page(pages.print));
   app.get('/t/:adminToken/seats', page(pages.seats));
   app.get('/t/:adminToken/roles', page(pages.roles));
+  app.get('/t/:adminToken/groups', page(pages.groups));
+  app.get('/t/:adminToken/followups', page(pages.followups));
   app.get('/t/:adminToken/report', (req, res) => res.type('html').send(pages.report || pages.notFound));
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
+
+  registerGroupRoutes(app, { requireRoom, mutateRoom, requireRound, currentRound });
+  registerFollowupRoutes(app, { requireRoom, mutateRoom });
 
   app.get('/api/health', (req, res) => res.json({ ok: true, storage: storageKind, notice: storageNotice || null, retentionMonths: RETENTION_MONTHS }));
 
@@ -498,6 +510,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const room = await mutateRoom(found, (room) => {
       if (room.rounds.length <= 1) throw bad('회차가 하나뿐이면 지울 수 없어요. 대신 학생 응답 초기화를 사용해 주세요.');
       room.rounds = room.rounds.filter((r) => r.id !== req.params.roundId);
+      if (room.groupActivities) room.groupActivities = room.groupActivities.filter((a) => a.roundId !== req.params.roundId);
       if (room.currentRoundId === req.params.roundId) room.currentRoundId = room.rounds[room.rounds.length - 1].id;
       dropStaleAiSeating(room);   // 그 회차 응답으로 만든 AI 자리 배정안(실명이 든 갈등 예측)도 함께 지움
     });
@@ -547,6 +560,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const oldName = student.name;
       student.name = name;
       renameInAiTexts(room, oldName, name);
+      renameStudentGroups(room, student, oldName, name);
+      renameStudentFollowups(room, student, oldName, name);
     });
     res.json(teacherView(req, room));
   });
@@ -569,6 +584,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
           const ra = round.roleAssignment;
           for (const [rid, list] of Object.entries(ra.assignments || {})) ra.assignments[rid] = (list || []).filter((x) => x !== student.id);
           if (ra.explanations) delete ra.explanations[student.id];
+          if (ra.balanceSnapshot?.choicesByStudent) delete ra.balanceSnapshot.choicesByStudent[student.id];
           ra.unassigned = (ra.unassigned || []).filter((x) => x !== student.id);
         }
         if (round.aiAnalysis) scrubAiAnalysis(round.aiAnalysis, student);
@@ -576,12 +592,15 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       }
       for (const h of room.roleHistory || []) {
         for (const [rid, list] of Object.entries(h.assignments || {})) h.assignments[rid] = (list || []).filter((x) => x !== student.id);
+        if (h.balanceSnapshot?.choicesByStudent) delete h.balanceSnapshot.choicesByStudent[student.id];
       }
       if (room.teacherNotes) {
         delete room.teacherNotes.students?.[student.id];
         room.teacherNotes.rules = (room.teacherNotes.rules || []).filter((r) => r.a !== student.id && r.b !== student.id);
       }
       removeStudentSeating(room, student.id);
+      removeStudentGroups(room, student);
+      removeStudentFollowups(room, student);
     });
     res.json(teacherView(req, room));
   });
@@ -722,7 +741,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [] });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
@@ -985,6 +1004,12 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.json(teacherView(req, room));
   });
 
+  app.get('/api/teacher/:adminToken/roles/balance', async (req, res) => {
+    const room = await requireRoom(req);
+    const round = req.query.round ? requireRound(room, String(req.query.round)) : currentRound(room);
+    res.set('Cache-Control', 'no-store').json({ roleBalance: summarizeRoleBalance(room, round, { semester: req.query.semester }) });
+  });
+
   // 자동 배정 (rules: 규칙 기반, ai: Claude API) → 회차에 초안으로 저장
   app.post('/api/teacher/:adminToken/roles/assign', async (req, res) => {
     const found = await requireRoom(req);
@@ -994,6 +1019,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (!roles.length) throw bad('먼저 역할 목록을 만들어 주세요.');
     const method = req.body?.method === 'ai' ? 'ai' : 'rules';
     const inputs = assignmentInputs(found, round);
+    if (req.body?.balancePreference !== undefined && typeof req.body.balancePreference !== 'boolean') throw bad('희망 역할 우선 고려 설정이 올바르지 않아요.');
+    if (req.body?.balancePreference) {
+      if (method === 'ai') throw bad('학기 누적 희망 역할 우선 고려는 규칙 배정에서 사용할 수 있어요.');
+      inputs.balancePriority = roleBalancePriorities(summarizeRoleBalance(found, round, { semester: req.body?.semester, beforeRound: true }));
+    }
     let result;
     let notes = '';
     let truncated = false;
@@ -1009,6 +1039,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     }
     const room = await mutateRoom(found, (room) => {
       const r = requireRound(room, round.id);
+      assertAiRosterUnchanged(found, room);
       r.roleAssignment = {
         assignments: result.assignments,
         explanations: result.explanations || {},
@@ -1065,7 +1096,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       };
       if (published) {
         room.roleHistory ||= [];
-        const entry = { roundId: r.id, month: r.name, assignments, source: 'published', updatedAt: new Date().toISOString() };
+        const balanceSnapshot = captureRoleBalanceSnapshot(room, r, undefined, prev);
+        r.roleAssignment.balanceSnapshot = balanceSnapshot;
+        const entry = { roundId: r.id, month: r.name, assignments, source: 'published', updatedAt: new Date().toISOString(), balanceSnapshot };
         const idx = room.roleHistory.findIndex((h) => h.roundId === r.id || h.month === r.name);
         if (idx >= 0) room.roleHistory[idx] = entry; else room.roleHistory.push(entry);
         // 같은 회차의 옛 기록(이름이 바뀌기 전 등)은 하나만 남깁니다.

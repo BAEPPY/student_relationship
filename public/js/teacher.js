@@ -21,12 +21,13 @@ let ui = {
 let popoverEl = null;
 let pollTimer = null;
 let lastLoadedAt = null;
+const followupBusy = new Set();
 
 const LEVEL_LABEL = { high: '높음', medium: '주의', low: '낮음' };
 const RISK_ORDER = { high: 0, medium: 1, low: 2 };
 // 구역 이동 줄(sticky nav)에 나오는 카드 순서
 const SECTIONS = [
-  ['summary-card', '요약'], ['graph-card', '관계도'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
+  ['summary-card', '요약'], ['followups-card', '후속 확인'], ['graph-card', '관계도'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
   ['history-card', '회차별 변화'], ['students-card', '학생 목록'], ['memo-card', '메모·규칙'],
 ];
 const nameOf = (id) => state?.stats[id]?.name || '?';
@@ -34,6 +35,8 @@ const rolesPageUrl = () => `/t/${encodeURIComponent(adminToken)}/roles?round=${e
 const seatsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(state.round.id)}`;
 const printPageUrl = () => `/t/${encodeURIComponent(adminToken)}/print`;
 const reportPageUrl = () => `/t/${encodeURIComponent(adminToken)}/report?round=${encodeURIComponent(state.round.id)}`;
+const groupsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/groups?round=${encodeURIComponent(state.round.id)}`;
+const followupsPageUrl = (query = '') => `/t/${encodeURIComponent(adminToken)}/followups${query ? `?${query}` : ''}`;
 // "?" 버튼을 누르면 뜨는 짧은 설명 (common.js helpTip)
 const HELP = {
   csv: '엑셀·구글 시트로 바로 열리는 표예요. 학생이 표시한 관계만 들어가요: 회차 · 보낸 학생 · 받은 학생 · 관계 · 선택한 이유 · 직접 쓴 이유 · 수정 시각. 관계를 정렬하거나 필터로 볼 때 좋아요.',
@@ -157,6 +160,7 @@ function renderAll() {
   renderHeader();
   renderNav();
   renderSummary();
+  renderFollowups();
   graph.setData({ students: state.students, relations: state.relations, stats: state.stats });
   graph.setFilter(ui.filter);
   graph.setHighlight(ui.highlight);
@@ -197,6 +201,7 @@ function buildSkeleton() {
     el('section', { class: 'card', id: 'header-card' }),
     buildNav(),
     el('section', { class: 'card', id: 'summary-card' }),
+    el('section', { class: 'card', id: 'followups-card' }),
     el('section', { class: 'card', id: 'graph-card' }, [
       cardTitle('전체 관계도', '학생들이 표시한 좋은 사이(빨강)와 안 좋은 사이(검정)를 한 장에 모았어요. 연결이 많은 학생일수록 가운데에 있어요.'),
       el('div', { class: 'legend' }, [
@@ -252,6 +257,8 @@ function buildNav() {
     el('span', { class: 'nav-sep', 'aria-hidden': 'true' }),
     el('a', { class: 'btn small orange', id: 'nav-seats', href: '#', text: '자리 배정' }),
     el('a', { class: 'btn small green', id: 'nav-roles', href: '#', text: '1인 1역' }),
+    el('a', { class: 'btn small', id: 'nav-groups', href: '#', text: '모둠 편성' }),
+    el('a', { class: 'btn small', href: followupsPageUrl(), text: '상담·관찰' }),
     el('a', { class: 'btn small', id: 'nav-print', href: '#', target: '_blank', text: 'QR 인쇄' }),
     el('a', { class: 'btn small', id: 'nav-report', href: '#', text: '📑 보고서' }),
   ]);
@@ -261,6 +268,7 @@ function renderNav() {
   const set = (id, href) => { const a = document.getElementById(id); if (a) a.href = href; };
   set('nav-seats', seatsPageUrl());
   set('nav-roles', rolesPageUrl());
+  set('nav-groups', groupsPageUrl());
   set('nav-print', printPageUrl());
   set('nav-report', reportPageUrl());
 }
@@ -402,6 +410,8 @@ function renderHeader() {
             title: `${round.name} 1인 1역 지원서를 낸 학생 수`, text: `지원서 ${appCount}/${students.length}`,
           }) : null,
         ]),
+        el('a', { class: 'btn', href: groupsPageUrl(), text: '모둠 편성' }),
+        el('a', { class: 'btn', href: followupsPageUrl(), text: '상담·관찰 기록' }),
         withHelp(el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }), HELP.csv),
         withHelp(el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }), HELP.json),
         el('button', { type: 'button', class: 'btn', text: '새로고침', onClick: () => load() }),
@@ -483,6 +493,39 @@ function renderSummary() {
   );
 }
 
+// ---------- 교실 전체 상담·관찰 후속 확인 (조사 회차와 별개) ----------
+function renderFollowups() {
+  const summary = state.followupSummary || { overdue: [], dueToday: [], upcoming: [], unscheduled: [], openCount: 0 };
+  const group = (label, key, filter) => {
+    const entries = summary[key] || [];
+    if (!entries.length) return null;
+    return el('div', { style: { marginTop: '14px' } }, [
+      el('h3', { text: `${label} (${entries.length})` }),
+      el('ul', { class: 'memo-list' }, entries.slice(0, 5).map((entry) => el('li', {}, [
+        el('a', { href: followupsPageUrl(`edit=${encodeURIComponent(entry.id)}&status=all`), text: entry.studentIds.map(nameOf).join(', ') }),
+        el('span', { class: `badge ${key === 'overdue' ? 'warn' : 'blue'}`, text: entry.nextCheckDate || '확인일 미정' }),
+        el('span', { class: 'memo-text', text: entry.observation }),
+        el('button', { class: 'btn small', type: 'button', disabled: followupBusy.has(entry.id), text: followupBusy.has(entry.id) ? '저장 중…' : '확인 완료', onClick: async () => {
+          if (followupBusy.has(entry.id)) return;
+          followupBusy.add(entry.id); renderFollowups();
+          try {
+            await api(`${base}/followups/${encodeURIComponent(entry.id)}`, { method: 'PUT', body: { expectedVersion: entry.version, status: 'completed' } });
+            await load(); toast('확인 완료로 표시했어요.');
+          } catch (error) { toast(error.message, 5000); }
+          finally { followupBusy.delete(entry.id); renderFollowups(); }
+        } }),
+      ]))),
+      entries.length > 5 ? el('a', { href: followupsPageUrl(`due=${filter}`), text: `${label} 전체 보기` }) : null,
+    ]);
+  };
+  setChildren(document.getElementById('followups-card'),
+    cardTitle('다시 확인할 학생', '조사 회차와 관계없이, 선생님이 정한 날짜에 다시 확인할 상담·관찰 기록이에요.', el('a', { class: 'btn small', href: followupsPageUrl(), text: '기록 작성·전체 보기' })),
+    summary.openCount ? el('p', { class: 'muted', text: `확인 중 ${summary.openCount}개 · 확인일 지남 ${summary.overdue.length}개 · 오늘 ${summary.dueToday.length}개` }) : el('p', { class: 'muted', text: '다시 확인할 기록이 없어요. 상담이나 관찰 후 다음 확인일을 정해 두면 여기에 나타나요.' }),
+    group('확인일이 지난 기록', 'overdue', 'overdue'), group('오늘 확인', 'dueToday', 'today'), group('앞으로 확인', 'upcoming', 'upcoming'),
+    summary.unscheduled.length ? el('p', {}, [el('a', { href: followupsPageUrl('due=unscheduled'), text: `확인일 미정 ${summary.unscheduled.length}개 · 날짜 정하기` })]) : null,
+  );
+}
+
 // ---------- 화살표 팝오버 ----------
 function showEdgePopover(edge, pt) {
   closePopover();
@@ -553,6 +596,7 @@ function renderSidePanel() {
       stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('보낸 ❤️', st.outGood.length), stat('보낸 ⚡', st.outBad.length),
     ]),
     teacherNoteBox(id),
+    el('a', { class: 'btn small', href: followupsPageUrl(`student=${encodeURIComponent(id)}&status=all`), text: '이 학생의 상담·관찰 기록' }),
     rolesInfoBox(id),
     state.history.trend.length > 1 ? el('div', { class: 'muted trend-line', text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
