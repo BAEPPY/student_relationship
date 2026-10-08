@@ -23,6 +23,7 @@ export function roundLastActivity(round) {
   for (const sub of Object.values(round.submissions || {})) bump(sub?.submittedAt);
   for (const p of Object.values(round.profiles || {})) bump(p?.updatedAt);
   for (const a of Object.values(round.applications || {})) bump(a?.updatedAt);
+  for (const draft of Object.values(round.studentDrafts || {})) bump(draft?.updatedAt);
   bump(round.roleAssignment?.createdAt);
   bump(round.roleAssignment?.updatedAt);
   bump(round.roleAssignment?.publishedAt);

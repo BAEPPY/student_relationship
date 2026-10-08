@@ -18,6 +18,7 @@ import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
 import { buildRolesHwpx, buildRolesDocx, makeHwpxDocument, makeDocxDocument } from './export-docs.js';
 import { reportDocument } from './report.js';
+import { validateDraft, studentDraftView, saveStudentDraft, clearStudentDraft, removeStudentFromDrafts } from './student-drafts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -274,6 +275,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       classmates,
       relations,
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
+      draft: studentDraftView(round, student.id),
       catalog: REASON_CATALOG,
       // 1인 1역 · 성향
       roles,
@@ -544,6 +546,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (idx === -1) throw new HttpError(404, '학생을 찾을 수 없어요.');
       const [student] = room.students.splice(idx, 1);
       for (const round of room.rounds) {
+        removeStudentFromDrafts(round, student.id);
         delete round.relations[student.id];
         delete round.submissions[student.id];
         for (const targets of Object.values(round.relations)) delete targets[student.id];
@@ -610,6 +613,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const round = roundId ? requireRound(room, roundId) : currentRound(room);
       delete round.relations[student.id];
       delete round.submissions[student.id];
+      clearStudentDraft(round, student.id);
     });
     res.json(teacherView(req, room, roundId));
   });
@@ -713,7 +717,23 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   // ---------- student API ----------
   app.get('/api/student/:token', async (req, res) => {
     const { room, student } = await requireStudent(req);
+    res.set('Cache-Control', 'no-store');
     res.json(studentView(req, room, student));
+  });
+
+  app.put('/api/student/:token/draft', async (req, res) => {
+    const { room: found, student: me } = await requireStudent(req);
+    let saved;
+    await mutateRoom(found, (room) => {
+      const student = room.students.find((s) => s.id === me.id && s.token === me.token);
+      if (!student) throw new HttpError(404, '링크가 올바르지 않아요. 선생님께 QR 코드를 다시 받아 주세요.');
+      const round = currentRound(room);
+      if (typeof req.body?.roundId === 'string' && req.body.roundId && req.body.roundId !== round.id) throw Object.assign(new HttpError(409, '선생님이 새 조사를 시작했어요. 화면을 새로고침해 주세요.'), { code: 'ROUND_CHANGED', currentRoundId: round.id });
+      // 마감은 최종 제출만 막습니다. 작성 중인 내용은 마감 직후에도 보존합니다.
+      saveStudentDraft(round, student.id, req.body?.revision, () => validateDraft(req.body, room, student.id));
+      saved = studentDraftView(round, student.id);
+    });
+    res.set('Cache-Control', 'no-store').json({ draft: saved });
   });
 
   app.put('/api/student/:token/relations', async (req, res) => {
@@ -755,6 +775,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
       round.relations[student.id] = next;
       round.submissions[student.id] = { submittedAt: now, firstSubmittedAt: round.submissions[student.id]?.firstSubmittedAt || now };
+      clearStudentDraft(round, student.id, 'relations');
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
@@ -782,6 +803,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       round.profiles ||= {};
       round.profiles[student.id] = { ...profile, updatedAt: new Date().toISOString() };
       if (body) student.body = body;
+      clearStudentDraft(round, student.id, 'profile');
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
@@ -802,6 +824,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const application = validateApplication(req.body || {}, roles, excluded);
       round.applications ||= {};
       round.applications[student.id] = { ...application, updatedAt: new Date().toISOString() };
+      clearStudentDraft(round, student.id, 'application');
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
@@ -1221,7 +1244,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (status >= 500) console.error(err);
     let message = status >= 500 && !err.expose ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
     if (err.type === 'entity.too.large') message = '보낸 내용이 너무 커요. (파일은 6MB 까지)';
-    if (req.path.startsWith('/api')) res.status(status).json({ error: message });
+    if (req.path.startsWith('/api')) res.status(status).json({ error: message, ...(err.code === 'DRAFT_CONFLICT' ? { code: err.code, draft: err.draft } : {}), ...(err.code === 'ROUND_CHANGED' ? { code: err.code, currentRoundId: err.currentRoundId } : {}) });
     else res.status(status).type('text/plain').send(message);
   });
 

@@ -1,4 +1,5 @@
 import { api, el, svgEl, toast, TYPE_LABEL, TYPE_ICON, avatarColor, mascotSvg } from './common.js';
+import { createDraftController } from './student-drafts.js';
 
 const token = decodeURIComponent(location.pathname.split('/')[2] || '');
 const app = document.getElementById('app');
@@ -15,6 +16,11 @@ let appDraft = [];          // [{ roleId, reason, helpClass, helpSelf }] × 3 (1
 let appDirty = false;
 let appErrors = {};         // { [지망 index]: { role?: msg, reason?: msg } }
 let stepError = null;       // 저장/검증 오류 (말풍선에 표시)
+let draftStore = null;
+let draftStatus = null;
+let submitting = false;
+let refreshPromise = null;
+let closeRelationEditor = null;
 
 const PARTNER_MAX = 3;      // 짝에게 바라는 점은 3개까지
 const REASON_MIN = 10;      // 하고 싶은 이유 최소 글자 수
@@ -30,6 +36,169 @@ const KID_CRITERIA = [
   '한 역할에 너무 많은 친구가 몰리지 않았는지 봐. (모든 역할이 소중해. 인기 있어 보이는 역할만 고르면 곤란해!)',
 ];
 
+// ---------- 자동 임시 저장 / 같은 학생·같은 회차의 이어 쓰기 ----------
+function captureDraft() {
+  if (!draftStore || submitting) return;
+  const sections = {};
+  if (dirty) sections.relations = draft;
+  if (profileDirty) sections.profile = { traits: [...profileDraft.traits], partnerTraits: [...profileDraft.partnerTraits], partnerText: profileDraft.partnerText, body: profileDraft.body };
+  if (appDirty) sections.application = { choices: appDraft.map(({ roleId, reason, helpClass, helpSelf }) => ({ roleId, reason, helpClass, helpSelf })) };
+  draftStore.update({ step, sections });
+}
+
+function draftMessage(s = draftStatus) {
+  if (submitting) return '제출하는 중이야. 잠깐만 기다려 줘.';
+  if (!s) return '임시 저장을 준비하고 있어.';
+  if (s.conflict === 'round') return '새 조사가 시작됐어. 최신 내용을 확인해 줘. 이전 초안을 새 조사에 보내지 않았어.';
+  if (s.conflict) return '다른 화면에서 저장했거나 선생님이 초기화했어. 덮어쓰지 않도록 저장을 멈췄어. 최신 내용을 확인해 줘.';
+  if (s.status === 'saving') return s.localSafe ? '이 기기에 보관했어. 서버에 임시 저장 중…' : '서버에 임시 저장 중… 이 화면을 잠시 유지해 줘.';
+  if (s.pending && s.localSafe) return s.error ? '이 기기에만 보관 중이야. 연결되면 다시 저장할게.' : '이 기기에 보관했어. 곧 서버에도 임시 저장할게.';
+  if (s.pending) return '아직 저장하지 못했어. 이 화면을 닫지 말고 임시 저장을 다시 눌러 줘.';
+  if (s.status === 'saved') return '서버에 임시 저장됐어. 같은 링크에서 이어 쓸 수 있어.';
+  return '쓰는 내용은 자동으로 임시 저장돼. 다 쓴 뒤에는 꼭 제출해 줘.';
+}
+
+function updateDraftStatus(status = draftStatus) {
+  draftStatus = status;
+  const node = document.getElementById('draft-status');
+  if (node) node.textContent = draftMessage(status);
+  const button = document.getElementById('save-draft');
+  if (button) button.disabled = submitting || status?.status === 'saving' || Boolean(status?.conflict);
+  const refresh = document.getElementById('refresh-student');
+  if (refresh) refresh.textContent = status?.conflict ? '최신 내용 확인' : '새로 확인';
+  const bar = document.getElementById('draft-bar');
+  if (bar) bar.classList.toggle('draft-warning', Boolean(status?.conflict || status?.error || status?.status === 'unsaved'));
+}
+
+function draftBar() {
+  return el('section', { class: 'draft-bar', id: 'draft-bar', 'aria-label': '임시 저장' }, [
+    el('div', { class: 'draft-info' }, [
+      el('div', { id: 'draft-status', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', text: draftMessage() }),
+      el('small', { text: '임시 저장은 제출이 아니야. 선생님은 제출한 내용만 볼 수 있어.' }),
+    ]),
+    el('div', { class: 'btn-row' }, [
+      el('button', { type: 'button', class: 'btn small', id: 'save-draft', text: '임시 저장', onClick: async () => {
+        captureDraft();
+        await draftStore.flush();
+        toast(draftMessage(), 4500);
+      } }),
+      el('button', { type: 'button', class: 'btn small', id: 'refresh-student', text: '새로 확인', onClick: () => refreshStudent({ explicit: true }) }),
+    ]),
+  ]);
+}
+
+async function sendDraft(body, { keepalive = false } = {}) {
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 12000);
+  try {
+    const res = await fetch(`/api/student/${encodeURIComponent(token)}/draft`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive, signal: abort.signal,
+    });
+    const result = await res.json();
+    if (!res.ok) throw Object.assign(new Error(result.error || '임시 저장하지 못했어.'), { status: res.status, code: result.code, draft: result.draft });
+    return result;
+  } finally { clearTimeout(timeout); }
+}
+
+function applyDraftSections(saved) {
+  const sections = saved.sections || {};
+  draft = JSON.parse(JSON.stringify(sections.relations ?? data.relations ?? {}));
+  dirty = Object.hasOwn(sections, 'relations');
+  initDrafts();
+  if (sections.profile) {
+    const p = sections.profile;
+    profileDraft = { traits: new Set(p.traits || []), partnerTraits: new Set(p.partnerTraits || []), partnerText: p.partnerText || '', body: { ...(p.body || {}) } };
+    profileDirty = true;
+  }
+  if (sections.application) {
+    const choices = sections.application.choices || [];
+    appDraft = [0, 1, 2].map((i) => ({ roleId: choices[i]?.roleId || '', reason: choices[i]?.reason || '', helpClass: choices[i]?.helpClass || '', helpSelf: choices[i]?.helpSelf || '', stale: null }));
+    appDirty = true;
+    dropStaleChoices(appDraft);
+  }
+  step = stepList().includes(saved.step) ? saved.step : firstIncompleteStep();
+}
+
+function initializeStudent(next) {
+  closeRelationEditor?.();
+  draftStore?.dispose();
+  data = next;
+  let storage = null;
+  try { storage = window.localStorage; } catch { /* the status explains when device recovery is unavailable */ }
+  draftStore = createDraftController({ token, roundId: data.round.id, serverDraft: data.draft, storage, send: sendDraft, onStatus: updateDraftStatus });
+  applyDraftSections(draftStore.getState());
+}
+
+// Pause writes while checking the current round/reset revision after sleep or reconnection.
+async function refreshStudent({ explicit = false } = {}) {
+  if (!draftStore || submitting || refreshPromise) return refreshPromise;
+  const store = draftStore;
+  store.pause();
+  refreshPromise = (async () => {
+    try {
+      await store.settle();
+      const next = await api(`/api/student/${encodeURIComponent(token)}`);
+      if (store !== draftStore || submitting) return;
+      if (next.round.id !== data.round.id) {
+        initializeStudent(next);
+        stepError = '새 조사가 시작됐어. 이전 조사에서 쓴 내용을 새 조사로 옮기지 않았어.';
+        render();
+        toast(stepError, 5500);
+        return;
+      }
+      if ((next.draft?.revision || 0) < store.getState().revision) return;
+      const previous = store.getState();
+      const changed = store.reconcile(next.draft);
+      if (store.getState().conflict) {
+        if (!explicit || !confirm('다른 화면에서 저장했거나 선생님이 응답을 초기화했어. 지금 화면의 임시 내용을 바꾸고 최신 내용으로 불러올까?')) return;
+        store.adopt(next.draft);
+      }
+      const lockedChanged = Boolean(next.room.locked) !== Boolean(data.room.locked);
+      data = next;
+      // Same-revision local edits, including an open relation editor, remain untouched.
+      if (changed || previous.conflict || (previous.revision !== store.getState().revision && !store.getState().pending)) {
+        closeRelationEditor?.();
+        applyDraftSections(store.getState());
+        render();
+      } else if (lockedChanged) {
+        closeRelationEditor?.();
+        render();
+      }
+      if (explicit) toast(data.room.locked ? '조사가 마감됐어. 쓴 내용은 임시 저장해 둘게.' : '최신 상태를 확인했어. 이어서 쓸 수 있어.');
+    } catch (err) {
+      if (explicit) toast(`상태를 확인하지 못했어. ${err.message}`, 4500);
+    } finally {
+      if (store === draftStore && !submitting) store.resume();
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
+async function submitSection(section, body) {
+  if (submitting) throw new Error('제출 중이야. 잠깐만 기다려 줘.');
+  const store = draftStore;
+  const roundId = data.round.id;
+  captureDraft();
+  submitting = true;
+  app.inert = true;
+  store.pause();
+  updateDraftStatus();
+  try {
+    if (!await store.flush()) throw new Error('임시 저장을 완료하지 못했어. 연결과 최신 내용을 확인하고 다시 제출해 줘.');
+    const next = await api(`/api/student/${encodeURIComponent(token)}/${section}`, { method: 'PUT', body: { ...body, roundId } });
+    data = next;
+    store.adopt(next.draft);
+    applyDraftSections(store.getState());
+    return next;
+  } finally {
+    submitting = false;
+    app.inert = false;
+    if (store === draftStore) store.resume();
+    updateDraftStatus();
+  }
+}
+
 // ---------- 한국어 조사 ----------
 function josa(word, [a, b]) {
   const ch = word[word.length - 1] || '';
@@ -42,9 +211,9 @@ function josa(word, [a, b]) {
 function relationValid(r) {
   if (!r) return true;
   if (r.type === 'bad') return Boolean(r.reason && r.reason.trim().length >= 2); // 안 좋은 사이는 직접 쓴 이유가 꼭 필요
-  return true;
+  return r.type === 'good';
 }
-function selectedCount() { return Object.keys(draft).length; }
+function selectedCount() { return Object.values(draft).filter((r) => r?.type === 'good' || r?.type === 'bad').length; }
 function countOf(type) { return Object.values(draft).filter((r) => r.type === type).length; }
 function mins() { return { good: data.room.minGood ?? 0, bad: data.room.minBad ?? 0 }; }
 function minsMet() { const m = mins(); return countOf('good') >= m.good && countOf('bad') >= m.bad; }
@@ -102,6 +271,7 @@ function neighborStep(dir) {
 function goTo(id) {
   step = stepList().includes(id) ? id : stepList()[0];
   stepError = null;
+  captureDraft();
   render();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -119,23 +289,12 @@ function initDrafts(which = 'all') {
     appErrors = {};
   }
 }
-// 마감되었거나(403) 새 회차가 시작됨(409) → 최신 상태로 다시 불러오되, 쓰던 내용은 지키기
-function roundChangedText(status) {
-  if (status === 403) return '선생님이 이번 조사를 마감했어. 지금까지 쓴 내용은 그대로 두었으니, 선생님이 다시 열면 저장할 수 있어.';
-  return '선생님이 새 조사를 시작했어. 지금까지 쓴 내용은 그대로 두었으니 다시 저장해 줘!';
-}
 async function reloadAfterRoundChange(status) {
-  try {
-    data = await api(`/api/student/${encodeURIComponent(token)}`);
-    draft = JSON.parse(JSON.stringify(data.relations || {}));
-    dirty = false;
-    // ①②에서 고치던 내용(profileDraft/appDraft)과 수정 표시는 그대로 두고, 손대지 않은 것만 서버 상태로 맞춤
-    if (!profileDirty) initDrafts('profile');
-    if (!appDirty) initDrafts('application');
-    else dropStaleChoices(appDraft);
-    stepError = roundChangedText(status);
+  await refreshStudent();
+  if (status === 403 && data.room.locked) {
+    stepError = '선생님이 조사를 마감했어. 쓴 내용은 임시 저장돼 있고, 다시 열리면 이어서 제출할 수 있어.';
     render();
-  } catch { /* ignore */ }
+  }
 }
 // 다시 그릴 때 키보드 포커스가 사라지지 않도록: 포커스된 요소를 data 속성으로 기억했다가 새 요소로 되돌려 줍니다.
 function redrawKeepingFocus(box, redraw) {
@@ -165,10 +324,12 @@ function render() {
   if (!stepList().includes(step)) step = stepList()[0];
 
   if (data.assignedRole) app.append(roleBanner(data.assignedRole));
+  app.append(draftBar());
   app.append(stepper());
   if (step === 'profile') renderProfile();
   else if (step === 'application') renderApplication();
   else renderRelations();
+  updateDraftStatus();
 }
 
 // 선생님이 발표한 이번 달 내 역할 (모든 단계에서 보임)
@@ -388,14 +549,11 @@ function renderProfile() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
+    const nextStep = neighborStep(1) || step;
     try {
-      data = await api(`/api/student/${encodeURIComponent(token)}/profile`, {
-        method: 'PUT',
-        body: { traits: [...pd.traits], partnerTraits: [...pd.partnerTraits], partnerText: pd.partnerText.trim(), body: pd.body, roundId: data.round?.id },
-      });
-      initDrafts('profile');
+      await submitSection('profile', { traits: [...pd.traits], partnerTraits: [...pd.partnerTraits], partnerText: pd.partnerText.trim(), body: pd.body });
       toast('저장했어! 🎉');
-      goTo(neighborStep(1) || step);
+      goTo(nextStep);
     } catch (err) {
       hello.showError(err.message);
       errBox.textContent = err.message;
@@ -625,11 +783,11 @@ function renderApplication() {
       return;
     }
     const choices = appDraft.filter((c) => c.roleId).map((c) => ({ roleId: c.roleId, reason: c.reason.trim(), helpClass: c.helpClass.trim(), helpSelf: c.helpSelf.trim() }));
+    const nextStep = neighborStep(1) || step;
     try {
-      data = await api(`/api/student/${encodeURIComponent(token)}/application`, { method: 'PUT', body: { choices, roundId: data.round?.id } });
-      initDrafts('application');
+      await submitSection('application', { choices });
       toast('지원서를 냈어! 🎉');
-      goTo(neighborStep(1) || step);
+      goTo(nextStep);
     } catch (err) {
       hello.showError(err.message);
       toast(err.message, 5000);
@@ -718,7 +876,7 @@ function mateButton(c, i = 0) {
   const invalid = r && !relationValid(r);
   const sub = r
     ? invalid
-      ? '⚠️ 이유를 꼭 적어 줘'
+      ? '⚠️ 관계와 이유를 확인해 줘'
       : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
     : '눌러서 표시하기';
   return el('button', {
@@ -743,7 +901,7 @@ function stickyBar() {
   const leftBad = Math.max(0, m.bad - countOf('bad'));
   const invalid = invalidNames();
   let status;
-  if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 안 좋은 사이인 이유를 적어 줘.`;
+  if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 어떤 관계인지, 이유를 다 적었는지 확인해 줘.`;
   else if (leftGood || leftBad) status = `${[leftGood ? `❤️ 좋은 사이 ${leftGood}명` : '', leftBad ? `⚡ 안 좋은 사이 ${leftBad}명` : ''].filter(Boolean).join(', ')} 더 골라 줘!`;
   else if (dirty) status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
   else if (data.submittedAt) status = '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
@@ -817,7 +975,7 @@ function drawMap(container) {
   const edges = svgEl('g');
   for (const c of mates) {
     const r = draft[c.id];
-    if (!r) continue;
+    if (!r?.type) continue;
     const p = pos[c.id];
     const start = circleEdge(me, ME_R + 4, p);
     const end = rectEdge(p, NODE_W, NODE_H, me);
@@ -836,7 +994,7 @@ function drawMap(container) {
     const g = svgEl('g', { class: `node ${r ? r.type : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': c.name });
     const rect = svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: NODE_H / 2 });
     g.append(rect, svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: shorten(c.name, 6), style: 'font-size:18px' }));
-    if (r) {
+    if (r?.type) {
       const badge = svgEl('g', { class: 'node-badge', transform: `translate(${NODE_W / 2 - 6},${-NODE_H / 2 + 2})` });
       badge.append(svgEl('circle', { r: 13, fill: '#fff', stroke: r.type === 'good' ? '#ff6b6b' : '#4a5568', 'stroke-width': 2.5 }));
       badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: r.type === 'good' ? '❤️' : '⚡', style: 'font-size:14px' }));
@@ -896,6 +1054,13 @@ function openEditor(id) {
   const mate = data.classmates.find((c) => c.id === id);
   const current = draft[id] ? JSON.parse(JSON.stringify(draft[id])) : null;
   const state = { type: current?.type || null, tags: new Set(current?.tags || []), reason: current?.reason || '' };
+  // The modal is part of the temporary draft, even before '완료'. Closing it keeps what was typed.
+  function record() {
+    if (state.type || state.reason) draft[id] = { type: state.type, tags: [...state.tags], reason: state.reason };
+    else delete draft[id];
+    dirty = true;
+    captureDraft();
+  }
 
   const backdrop = el('div', { class: 'modal-backdrop' });
   const modal = el('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' });
@@ -903,16 +1068,23 @@ function openEditor(id) {
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
-  function close() { document.removeEventListener('keydown', onKey); backdrop.remove(); }
+  function close(redraw = true) {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+    closeRelationEditor = null;
+    if (redraw) render();
+  }
+  closeRelationEditor = () => close(false);
 
   function draw() {
     modal.replaceChildren();
     modal.append(el('h2', { text: `${mate.name}${josa(mate.name, ['와', '과'])} 나는…` }));
+    modal.append(el('p', { class: 'muted', text: '쓰는 중에도 임시 저장돼. 닫아도 쓴 내용은 남아 있어. 다 쓴 뒤 관계 지도에서 제출해 줘.' }));
     const choice = el('div', { class: 'type-choice' }, [
-      el('button', { type: 'button', class: `type-btn good ${state.type === 'good' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'good' ? null : 'good'; state.tags.clear(); draw(); } }, [
+      el('button', { type: 'button', class: `type-btn good ${state.type === 'good' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'good' ? null : 'good'; state.tags.clear(); record(); draw(); } }, [
         el('span', { class: 'big', text: '❤️' }), '좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 골라도 되고 안 골라도 돼' }),
       ]),
-      el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'bad' ? null : 'bad'; state.tags.clear(); draw(); } }, [
+      el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'bad' ? null : 'bad'; state.tags.clear(); record(); draw(); } }, [
         el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유를 꼭 적어야 해' }),
       ]),
     ]);
@@ -926,12 +1098,12 @@ function openEditor(id) {
           type: 'button',
           class: `chip ${state.tags.has(t.id) ? `selected ${isBad ? 'bad-theme' : 'good-theme'}` : ''}`,
           text: `${t.emoji ? `${t.emoji} ` : ''}${t.label}`,
-          onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); draw(); },
+          onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); record(); draw(); },
         }))),
       ]));
       const ta = el('textarea', { placeholder: isBad ? '예: 지난주에 내 물건을 허락 없이 가져갔어요. 무슨 일이 있었는지 적어 줘.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
       ta.value = state.reason;
-      ta.addEventListener('input', () => { state.reason = ta.value; updateHint(); });
+      ta.addEventListener('input', () => { state.reason = ta.value; record(); updateHint(); });
       modal.append(el('div', { class: 'field' }, [
         el('label', {}, ['✏️ 이유 적기 ', isBad ? el('span', { class: 'req', text: '(꼭 적어 줘)' }) : el('span', { class: 'muted', text: '(선택)' })]),
         ta,
@@ -945,20 +1117,22 @@ function openEditor(id) {
     }
 
     modal.append(el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
-      el('button', { type: 'button', class: 'btn primary', text: '저장 ✓', onClick: save }),
-      current ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; dirty = true; close(); render(); } }) : null,
+      el('button', { type: 'button', class: 'btn primary', text: '완료 ✓', onClick: save }),
+      el('button', { type: 'button', class: 'btn', text: '임시 저장', onClick: async () => { captureDraft(); await draftStore.flush(); toast(draftMessage(), 4500); } }),
+      current || state.type || state.reason ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; dirty = true; captureDraft(); close(); } }) : null,
       el('button', { type: 'button', class: 'btn', text: '닫기', onClick: close }),
     ]));
   }
 
   function save() {
-    if (!state.type) { delete draft[id]; dirty = true; close(); render(); return; }
-    const r = { type: state.type, tags: [...state.tags], reason: state.reason.trim() };
+    if (!state.type && state.reason) { toast('어떤 관계인지 먼저 골라 줘. 쓴 이유는 임시 저장돼 있어.'); return; }
+    if (!state.type) { delete draft[id]; dirty = true; captureDraft(); close(); return; }
+    const r = { type: state.type, tags: [...state.tags], reason: state.reason };
     if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 줘! (2자 이상)'); return; }
     draft[id] = r;
     dirty = true;
+    captureDraft();
     close();
-    render();
   }
 
   draw();
@@ -969,9 +1143,8 @@ function openEditor(id) {
 async function submit() {
   if (!canSubmit()) return;
   try {
-    data = await api(`/api/student/${encodeURIComponent(token)}/relations`, { method: 'PUT', body: { relations: draft, roundId: data.round?.id } });
-    draft = JSON.parse(JSON.stringify(data.relations));
-    dirty = false;
+    await submitSection('relations', { relations: draft });
+    step = 'relations';
     render();
     toast('제출 완료! 정말 고마워 🎉');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -981,17 +1154,24 @@ async function submit() {
   }
 }
 
+// Delegation runs after each field/chip/role handler, including handlers that redraw their own nodes.
+for (const event of ['input', 'change', 'click']) app.addEventListener(event, captureDraft);
+function checkpoint() { captureDraft(); void draftStore?.flush({ keepalive: true }); }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') checkpoint();
+  else void refreshStudent();
+});
+window.addEventListener('pagehide', checkpoint);
+window.addEventListener('pageshow', (e) => { if (e.persisted) void refreshStudent(); });
+window.addEventListener('online', () => { void refreshStudent(); });
 window.addEventListener('beforeunload', (e) => {
-  if (dirty || profileDirty || appDirty) { e.preventDefault(); e.returnValue = ''; }
+  if (draftStore && !draftStore.getState().safeToLeave) { e.preventDefault(); e.returnValue = ''; }
 });
 
 // ---------- 시작 ----------
 (async () => {
   try {
-    data = await api(`/api/student/${encodeURIComponent(token)}`);
-    draft = JSON.parse(JSON.stringify(data.relations || {}));
-    initDrafts();
-    step = firstIncompleteStep();
+    initializeStudent(await api(`/api/student/${encodeURIComponent(token)}`));
     render();
   } catch (err) {
     app.replaceChildren(el('section', { class: 'card' }, [
