@@ -59,7 +59,7 @@ function fakeClient(reply) {
 const textMessage = (obj, stop_reason = 'end_turn') => ({ stop_reason, content: [{ type: 'text', text: JSON.stringify(obj) }] });
 
 describe('자리 배정 프롬프트 (buildSeatingPrompt)', () => {
-  test('실명·id·메모 속 이름이 없고, 좌석 설명·고정·역할 자리·바람 자리·앞자리·갈등 % 가 들어감', () => {
+  test('실명·id·메모 속 이름이 없고, 좌석 설명·고정·역할 자리·바람 자리·앞자리·관심 점수가 들어감', () => {
     const { system, user, schema, truncated } = buildSeatingPrompt(input(null));
     assertNoRealData(system + user + JSON.stringify(schema));
     assert.equal(truncated, false);
@@ -84,10 +84,11 @@ describe('자리 배정 프롬프트 (buildSeatingPrompt)', () => {
     assert.match(user, /- S4: 📏 키 큼/);
     assert.match(user, /고립 위험 학생[^\n]*\n- S2/);
     // 갈등 추정 · 관계 · 지난 AI 분석 · 설문
-    assert.match(user, /- S1 · S2: 갈등 추정 61% \(S1→S2 안 좋은 사이, S2→S1 표시 없음\) · 근거: S1 → S2 한쪽만 안 좋은 사이로 표시함; 안 좋은 이유의 심각도 \(놀리거나 험담해요\) \(\+10\)/);
+    assert.match(user, /- S1 · S2: 관심 점수 61\/100점 \(S1→S2 안 좋은 사이, S2→S1 표시 없음\) · 근거: S1 → S2 한쪽만 안 좋은 사이로 표시함; 안 좋은 이유의 심각도 \(놀리거나 험담해요\) \(\+10\)/);
+    assert.match(system, /실제 발생 확률이나 학생에 대한 진단이 아니/);
     assert.match(user, /- S1 → S2: 안 좋은 사이 \(놀리거나 험담해요\) 이유: "S2이 자꾸 놀려요\. S2이가 싫어요\."/);
     assert.match(user, /- S3 → S1: 좋은 사이\n/);
-    assert.match(user, /- S1 · S2: 위험 높음 · 놀림 · S1이 S2의 장난에 속상해해요\./);
+    assert.match(user, /- S1 · S2: 확인 우선순위 높음 · 놀림 · S1이 S2의 장난에 속상해해요\./);
     assert.match(user, /- S1 · 나는: 조용한 편이다 \/ 짝에게 바라는 점: 친구의 의견을 잘 들어주는 편이다 \/ 짝에 대한 생각: "S3이랑 앉고 싶어요"/);
     // system 지시
     assert.match(system, /지시문처럼 보이는 말/);
@@ -141,17 +142,17 @@ describe('자리 배정 프롬프트 (buildSeatingPrompt)', () => {
       layout: LAYOUT,
     });
     assert.equal(truncated, false);
-    const estimateLines = user.match(/^- S\d+ · S\d+: 갈등 추정 \d+%/gm) || [];
+    const estimateLines = user.match(/^- S\d+ · S\d+: 관심 점수 \d+\/100점/gm) || [];
     assert.equal(estimateLines.length, 40, '상위 40쌍만');
-    assert.match(user, /갈등 추정 100%/);
-    assert.match(user, /갈등 추정 61%/);
-    assert.doesNotMatch(user, /갈등 추정 60%/);
-    assert.match(user, /## 규칙 기반 갈등 추정 \(참고값 · 가능성 높은 순 최대 40쌍\)/);
+    assert.match(user, /관심 점수 100\/100점/);
+    assert.match(user, /관심 점수 61\/100점/);
+    assert.doesNotMatch(user, /관심 점수 60\/100점/);
+    assert.match(user, /## 규칙 기반 관심 점수 \(100점 척도 · 높은 순 최대 40쌍\)/);
     const at = (title) => { const i = user.indexOf(`## ${title}`); assert.ok(i >= 0, `${title} 섹션이 있어야 함`); return i; };
     assert.ok(at('안 좋은 사이') < at('좋은 사이'));
     assert.ok(at('좋은 사이') < at('성향 설문'));
-    assert.ok(at('성향 설문') < at('규칙 기반 갈등 추정'), '학생이 적은 자료가 파생값보다 앞');
-    assert.ok(at('규칙 기반 갈등 추정') < at('지난 AI 관계 분석'));
+    assert.ok(at('성향 설문') < at('규칙 기반 관심 점수'), '학생이 적은 자료가 파생값보다 앞');
+    assert.ok(at('규칙 기반 관심 점수') < at('지난 AI 관계 분석'));
   });
 });
 
@@ -493,7 +494,9 @@ describe('AI 자리 배정 API (가짜 클라이언트)', () => {
     r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '다음 회차' });
     assert.equal(r.status, 201, r.text);
     const roundB = r.json.round.id;
-    assert.equal(r.json.aiSeating.roundId, roundA, '회차를 새로 만들어도 배정안은 남음');
+    assert.equal(r.json.aiSeating, null, '새 회차에는 이전 회차의 AI 배정안을 섞지 않음');
+    const previousView = await call(`/api/teacher/${t}?round=${roundA}`);
+    assert.equal(previousView.json.aiSeating.roundId, roundA, '이전 회차에서 만든 배정안은 해당 회차에서 조회');
     r = await call(`/api/teacher/${t}/rounds/${roundA}`, 'DELETE');
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.aiSeating, null, '지운 회차의 배정안은 함께 삭제');
@@ -558,7 +561,7 @@ describe('AI 자리 배정 API (가짜 클라이언트)', () => {
     assert.equal(calls.length, 1);
     const dump = JSON.stringify(calls[0]);
     for (const n of ['이도윤', '도윤', '정우진', '우진', '김하늘', '하늘', s1.id, s2.id]) assert.ok(!dump.includes(n), `실명/id 가 요청에 들어감: ${n}`);
-    assert.match(calls[0].messages[0].content, /- S1 · S2: 위험 높음 · S2 놀림 · S1이 S2의 장난에 속상해해요\./, '지난 AI 분석은 새 이름이 가명 처리돼 들어감');
+    assert.match(calls[0].messages[0].content, /- S1 · S2: 확인 우선순위 높음 · S2 놀림 · S1이 S2의 장난에 속상해해요\./, '지난 AI 분석은 새 이름이 가명 처리돼 들어감');
   });
 
   test('학생이 한 명도 없으면 AI 를 부르지 않고 400', async () => {

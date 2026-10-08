@@ -161,7 +161,8 @@ describe('관계 분석 (aiAnalyzeRelationships)', () => {
     assert.match(user, /S1, S2, S3, S4/);
     assert.match(user, /S1 → S2: 안 좋은 사이/);
     assert.match(user, /S2이 자꾸 놀려요\. S2이가 싫어요\./);
-    assert.match(user, /갈등 추정 61%/);
+    assert.match(user, /관심 점수 61\/100점/);
+    assert.match(params.system, /실제 갈등 발생 확률이나 학생에 대한 진단이 아니/);
     assert.match(user, /S1 → S2 한쪽만 안 좋은 사이로 표시함/);
     assert.match(user, /정리정돈을 잘하는 편이다/);
     assert.match(user, /S2 말고 S3이랑 앉고 싶어요/);

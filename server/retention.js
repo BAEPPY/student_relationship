@@ -1,5 +1,5 @@
 // 데이터 보관 정책: 회차(조사) 응답은 마감 뒤 14개월이 지나면 자동 삭제됩니다.
-import { makeRound, monthName } from './rounds.js';
+import { makeRound, monthName, ensureRounds } from './rounds.js';
 
 export const RETENTION_MONTHS = Number.parseInt(process.env.RETENTION_MONTHS, 10) || 14;
 export const WARN_DAYS = 60;
@@ -28,6 +28,8 @@ export function roundLastActivity(round) {
   bump(round.roleAssignment?.updatedAt);
   bump(round.roleAssignment?.publishedAt);
   bump(round.aiAnalysis?.createdAt);
+  bump(round.aiSeating?.createdAt);
+  bump(round.seating?.updatedAt);
   return latest;
 }
 
@@ -119,7 +121,7 @@ export async function purgeAll(store, now = new Date()) {
   const rooms = await store.listRooms();
   for (const snapshot of rooms) {
     result.rooms++;
-    const probe = purgeExpired(structuredClone(snapshot), now);
+    const probe = purgeExpired(ensureRounds(structuredClone(snapshot)), now);
     if (!probe.changed) continue;
     if (probe.deleteRoom) {
       await store.deleteRoom(snapshot.id);
@@ -128,7 +130,7 @@ export async function purgeAll(store, now = new Date()) {
       continue;
     }
     let removedCount = 0;
-    await store.updateRoom(snapshot.id, (fresh) => { removedCount = purgeExpired(fresh, now).removed.length; });
+    await store.updateRoom(snapshot.id, (fresh) => { ensureRounds(fresh); removedCount = purgeExpired(fresh, now).removed.length; });
     result.deletedRounds += removedCount;
   }
   return result;

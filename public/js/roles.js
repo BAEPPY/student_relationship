@@ -556,6 +556,8 @@ function renderApplications() {
       ]),
       ai ? el('div', { class: 'profile-box ai-box' }, [
         el('div', { style: { fontWeight: 600, marginBottom: '4px' }, text: 'AI 분석 참고' }),
+        el('div', { class: 'muted', text: state.aiAnalysis?.context?.status === 'fresh' ? '분석 때와 입력 자료가 같아요.' : state.aiAnalysis?.context?.status === 'stale' ? '분석 후 자료가 변경됐어요. 선생님 페이지에서 다시 분석해 주세요.' : '이전 분석의 입력 기록이 없어 최신 여부를 확인할 수 없어요.' }),
+        state.aiAnalysis?.context?.inputCoverage ? el('div', { class: 'muted', text: `분석 당시 관계 제출 ${state.aiAnalysis.context.inputCoverage.submitted}/${state.aiAnalysis.context.inputCoverage.total}명${state.aiAnalysis.context.inputCoverage.complete ? '' : ' · 자료 부족: 미제출을 관계 없음으로 해석하지 마세요.'}` }) : null,
         ai.summary ? el('div', { text: ai.summary }) : null,
         (ai.roleFit || []).length ? el('ul', { style: { margin: '4px 0 0', paddingLeft: '18px' } }, ai.roleFit.map((f) => el('li', {}, [el('b', { text: roleById(f.roleId)?.name || f.roleId }), f.reason ? ` · ${f.reason}` : '']))) : null,
         state.aiAnalysis?.truncated ? el('div', { class: 'truncated-note', text: TRUNCATED_NOTICE }) : null,

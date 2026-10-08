@@ -1,5 +1,6 @@
 import { api, el, toast, setChildren, setupPageNav, fmtDate, TYPE_ICON } from './common.js';
 import { parseTeacherNotes } from './notes-parser.js';
+import { seatingMetrics, repairSeatAssignment, sameSeatConfig } from './seating-compare.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -32,6 +33,14 @@ let roleMode = false;            // 켜면 자리를 눌러 역할 자리를 지
 let roleModeRole = '';           // 역할 자리 지정 모드에서 고른 역할 id
 let aiSeating = null;            // 서버에 저장된 마지막 AI 자리 배정 결과 (teacherView.aiSeating)
 let aiBusy = false;              // AI 자리 배정 요청 중
+let saving = false;
+let skipUnload = false;
+let candidatePlans = [];         // 이 브라우저에서만 비교하는 후보안 (저장 전)
+let candidateSequence = 0;
+let compareKey = 'editing';
+let saveLabel = '';
+let appliedSource = 'manual';
+let sourceHistoryId = null;
 
 // 자리표 보는 방향 (화면·인쇄 전용, 좌석 id와 배정 데이터는 그대로)
 //  - student: 학생 시점, 칠판(교탁)이 위
@@ -106,7 +115,10 @@ function buildRelations() {
   aiSeating = data.aiSeating || null;
   aiProb = {};
   const known = new Set(data.students.map((s) => s.id));
-  for (const p of aiSeating?.pairs || []) if (known.has(p.a) && known.has(p.b) && p.a !== p.b) aiProb[pairKey(p.a, p.b)] = p;
+  // 오래되었거나 당시 자료를 확인할 수 없는 AI 점수는 자동 배정의 가중치로 쓰지 않아요.
+  if (aiSeating?.context?.status === 'fresh' && (!aiSeating.roundId || aiSeating.roundId === data.round.id)) {
+    for (const p of aiSeating.pairs || []) if (known.has(p.a) && known.has(p.b) && p.a !== p.b) aiProb[pairKey(p.a, p.b)] = p;
+  }
 }
 const rel = (a, b) => relType[a]?.[b] || 'none';
 const ruleOf = (a, b) => rules.find((r) => pairKey(r.a, r.b) === pairKey(a, b)) || null;
@@ -116,6 +128,121 @@ const blockRowsOf = (seatId) => layout.blocks[Number(seatId.slice(1).split('-')[
 /** 바람 자리가 지금 어떻게 느껴지는지: 냉방 중이면 '시원함', 난방 중이면 '따뜻함', 꺼져 있으면 null */
 const zoneFeel = (seatId) => (zones[seatId] === 'ac' && climate !== 'off' ? (climate === 'cool' ? 'cool' : 'warm') : null);
 const CLIMATE_LABEL = { cool: '냉방 중 · 바람 자리가 시원해요', warm: '난방 중 · 바람 자리가 따뜻해요', off: '냉난방기 꺼짐 · 바람 자리 영향 없음' };
+
+function currentPlan() {
+  return structuredClone({ layout, seats, pinned: [...pinned], options, zones, climate, roleSeats });
+}
+function aiConfig() {
+  const fixed = {};
+  for (const seatId of pinned) if (seats[seatId]) fixed[seatId] = seats[seatId];
+  return { layout, fixedSeats: fixed, zones, climate, roleSeats, options };
+}
+function aiContextChanged() {
+  return !aiSeating?.inputConfig || !sameSeatConfig(aiSeating.inputConfig, aiConfig());
+}
+function aiFreshForEditor() {
+  return aiSeating?.context?.status === 'fresh' && (!aiSeating.roundId || aiSeating.roundId === data.round.id)
+    && !aiContextChanged() && sameSeatConfig({ students: notes, rules }, { students: data.teacherNotes?.students || {}, rules: data.teacherNotes?.rules || [] });
+}
+function refreshAiWeights() {
+  aiProb = {};
+  if (!aiFreshForEditor()) return;
+  const known = new Set(data.students.map((s) => s.id));
+  for (const p of aiSeating.pairs || []) if (known.has(p.a) && known.has(p.b) && p.a !== p.b) aiProb[pairKey(p.a, p.b)] = p;
+}
+function rememberCandidate(plan, label, source = 'manual') {
+  const item = { id: `candidate-${++candidateSequence}`, label, source, plan: structuredClone(plan) };
+  candidatePlans = [item, ...candidatePlans].slice(0, 4);
+  compareKey = item.id;
+  return item;
+}
+function loadPlan(plan) {
+  const next = structuredClone(plan);
+  layout = next.layout;
+  layoutText = layout.blocks.map((b) => `${b.cols}x${b.rows}`).join(', ');
+  const valid = new Set(seatList().map((s) => s.id));
+  const known = new Set(data.students.map((s) => s.id));
+  const used = new Set();
+  seats = {};
+  for (const [seatId, sid] of Object.entries(next.seats || {})) if (valid.has(seatId) && known.has(sid) && !used.has(sid)) { seats[seatId] = sid; used.add(sid); }
+  pinned = new Set((next.pinned || []).filter((seatId) => valid.has(seatId) && seats[seatId]));
+  options = { friends: 'any', ...(next.options || {}) };
+  zones = Object.fromEntries(Object.entries(next.zones || {}).filter(([seatId]) => valid.has(seatId)));
+  climate = ['cool', 'warm'].includes(next.climate) ? next.climate : 'off';
+  roleSeats = Object.fromEntries(Object.entries(next.roleSeats || {}).filter(([seatId, roleId]) => valid.has(seatId) && roleOf(roleId)));
+  selected = null; zoneMode = false; roleMode = false;
+}
+function selectedComparison() {
+  if (compareKey === 'saved' && data.seating) return { label: '현재 저장안', plan: data.seating, source: 'restore', historyId: data.seating.versionId };
+  const candidate = candidatePlans.find((item) => item.id === compareKey);
+  if (candidate) return candidate;
+  const entry = (data.seatingHistory || []).find((item) => `history-${item.id}` === compareKey);
+  if (entry) return { label: entry.label || fmtDate(entry.savedAt), plan: entry.seating, source: 'restore', historyId: entry.id };
+  return { label: '편집 중인 안', plan: currentPlan(), source: 'manual' };
+}
+
+function planPreview(plan, title) {
+  return el('div', { class: 'seat-preview' }, [
+    el('h3', { text: title }),
+    !plan ? el('p', { class: 'muted', text: '이 회차에는 아직 저장한 자리표가 없어요.' }) : el('div', {}, [
+      el('div', { class: 'seat-preview-podium', text: '교탁 · 학생 시점' }),
+      el('div', { class: 'seat-preview-blocks' }, plan.layout.blocks.map((block, b) => el('div', {
+        class: 'seat-preview-block', style: { gridTemplateColumns: `repeat(${block.cols}, minmax(48px, 1fr))` },
+      }, Array.from({ length: block.rows * block.cols }, (_, index) => {
+        const id = `b${b}-r${Math.floor(index / block.cols)}-c${index % block.cols}`;
+        const sid = plan.seats?.[id];
+        return el('span', { class: `seat-preview-cell ${sid ? '' : 'empty'}`, text: sid ? nameOf(sid) : '빈 자리' });
+      })))),
+    ]),
+  ]);
+}
+
+function comparisonPanel() {
+  const choice = selectedComparison();
+  const context = { students: data.students, relations: data.relations, rules, notes, roleAssignment: data.roleAssignment?.assignments || {}, baseline: data.seating };
+  const plans = [data.seating, currentPlan(), choice.plan];
+  const metrics = plans.map((plan) => seatingMetrics(plan, context));
+  const rows = [
+    ['저장안 대비 자리 변경', 'moved', '명'], ['안 좋은 사이 응답 인접', 'badAdjacent', '쌍'],
+    ['분리·가까이 규칙 위반', 'ruleViolations', '건'], ['앞자리 지정 미충족', 'frontViolations', '명'],
+    ['역할 자리 미충족', 'roleViolations', '자리'], ['아직 자리 없음', 'unassigned', '명'],
+  ];
+  const selector = el('select', { id: 'seat-comparison-select', 'aria-label': '미리 볼 후보 또는 저장 이력' }, [
+    el('option', { value: 'editing', text: '편집 중인 안' }),
+    data.seating ? el('option', { value: 'saved', text: '현재 저장안으로 되돌리기' }) : null,
+    ...candidatePlans.map((item) => el('option', { value: item.id, text: `후보 · ${item.label}` })),
+    ...(data.seatingHistory || []).filter((entry) => entry.id !== data.seating?.versionId).map((entry) => el('option', {
+      value: `history-${entry.id}`, text: `저장 이력 · ${entry.label || '자리표'} · ${fmtDate(entry.savedAt)}`,
+    })),
+  ]);
+  selector.value = [...selector.options].some((option) => option.value === compareKey) ? compareKey : 'editing';
+  selector.addEventListener('change', () => { compareKey = selector.value; render(); });
+  const label = el('input', { id: 'seat-save-label', type: 'text', maxlength: 60, placeholder: '예: 창가 조정안', value: saveLabel, 'aria-label': '저장 이력 이름 (선택)' });
+  label.addEventListener('input', () => { saveLabel = label.value; });
+  return el('section', { class: 'card seating-comparison no-print', id: 'seating-comparison' }, [
+    el('div', { class: 'card-title' }, [el('h2', { text: '후보 비교 · 저장 이력' }), el('span', { class: 'muted', text: `${data.round.name} · 최근 ${data.seatingHistory?.length || 0}/10개 저장안` })]),
+    el('p', { class: 'muted', text: '후보와 이력을 먼저 비교하고 편집안에 적용하세요. 저장하기를 눌러야 이 회차 자리표가 바뀌어요. 후보는 현재 화면에만 남고, 저장 이력은 서버에 보관돼요.' }),
+    el('div', { class: 'btn-row' }, [selector,
+      el('button', { type: 'button', class: 'btn small', text: '편집안을 후보로 보관', onClick: () => { rememberCandidate(currentPlan(), `편집안 ${candidateSequence + 1}`); render(); } }),
+      el('button', { type: 'button', class: 'btn small primary', id: 'apply-seat-preview', text: '미리 본 안을 편집안에 적용', disabled: compareKey === 'editing' ? true : null, onClick: () => {
+        const selectedPlan = selectedComparison();
+        if (dirty) rememberCandidate(currentPlan(), '적용 전 편집안');
+        loadPlan(selectedPlan.plan);
+        appliedSource = selectedPlan.source || 'manual'; sourceHistoryId = selectedPlan.historyId || null;
+        dirty = true; compareKey = 'editing'; render();
+        toast('편집안에 적용했어요. 확인한 뒤 저장하기를 눌러 주세요.');
+      } }),
+    ]),
+    el('div', { class: 'seat-compare-table-wrap' }, [el('table', { class: 'seat-compare-table' }, [
+      el('thead', {}, [el('tr', {}, ['비교 항목', '현재 저장안', '편집 중인 안', '선택한 미리보기'].map((text) => el('th', { scope: 'col', text })))]),
+      el('tbody', {}, rows.map(([title, key, suffix]) => el('tr', {}, [el('th', { scope: 'row', text: title }), ...metrics.map((metric) => el('td', { text: metric?.[key] == null ? '—' : `${metric[key]}${suffix}` }))]))),
+    ])]),
+    el('p', { class: 'muted seat-metric-help', text: '세 안 모두 지금 보는 회차의 응답과 현재 메모·규칙으로 다시 계산해요. 인접은 짝꿍·앞뒤·대각선·통로 건너 자리예요. 자리 변경에는 신규 배정·미배정 전환도 포함해요. 지표만으로 더 좋은 안이라고 단정하지 않아요.' }),
+    metrics[2]?.layoutChanged ? el('div', { class: 'alert info', text: '미리보기는 저장안과 교실 배치가 달라요. 자리 변경 수는 자리 번호 기준이므로 아래 배치도도 함께 확인하세요.' }) : null,
+    el('div', { class: 'seat-preview-pair' }, [planPreview(data.seating, '현재 저장안'), planPreview(choice.plan, `미리보기 · ${choice.label}`)]),
+    el('div', { class: 'seat-save-label' }, [el('label', { for: 'seat-save-label', text: '다음 저장 이력 이름 (선택)' }), label]),
+  ]);
+}
 /** 학생이 고른 몸 특징의 짧은 표시 (예: ['👓 눈 나쁨', '❄️ 추위 잘 탐']) */
 function bodyLabels(sid) {
   const body = bodyOf(sid);
@@ -187,29 +314,33 @@ function pairCost(a, b) {
   return cost;
 }
 
-function totalCost(assign, pairs) {
+function singleSeatCost(seatId, sid) {
+  if (!sid) return 0;
+  const row = rowOf(seatId);
+  let sum = 0.8 * row;
+  if (needsFront(sid)) sum += row < FRONT_ROWS ? row * 8 : 60 + row * 30;
+  const body = bodyOf(sid);
+  if (body.sight === 'poor') sum += row < FRONT_ROWS ? row * 4 : 30 + row * 12;
+  if (body.height === 'short') sum += row * 3;
+  if (body.height === 'tall') sum += (blockRowsOf(seatId) - 1 - row) * 3;
+  const feel = zoneFeel(seatId);
+  if (feel === 'cool') { if (body.cold === 'yes') sum += 45; if (body.heat === 'yes') sum -= 12; }
+  if (feel === 'warm') { if (body.heat === 'yes') sum += 45; if (body.cold === 'yes') sum -= 12; }
+  return sum;
+}
+function totalCost(assign, pairs, cache = null) {
   let sum = 0;
-  for (const [x, y, w] of pairs) sum += w * pairCost(assign[x], assign[y]);
+  for (const [x, y, w] of pairs) sum += w * (cache ? cache.pairs[assign[x]]?.[assign[y]] || 0 : pairCost(assign[x], assign[y]));
   for (const [seatId, sid] of Object.entries(assign)) {
     if (!sid) continue;
-    const row = rowOf(seatId);
-    sum += 0.8 * row;                                   // 학생이 자리보다 적으면 앞줄부터
-    if (needsFront(sid)) sum += row < FRONT_ROWS ? row * 8 : 60 + row * 30;   // 앞자리 필요 학생 (교사 지정)
-    // 학생이 고른 몸 특징: 눈이 나쁘면 앞줄, 키가 작으면 앞쪽·크면 뒤쪽을 조금 선호
-    const body = bodyOf(sid);
-    if (body.sight === 'poor') sum += row < FRONT_ROWS ? row * 4 : 30 + row * 12;
-    if (body.height === 'short') sum += row * 3;
-    if (body.height === 'tall') sum += (blockRowsOf(seatId) - 1 - row) * 3;
-    // 냉난방기 바람 자리: 추위를 잘 타면 냉방 바람을, 더위를 잘 타면 난방 바람을 피하고 반대쪽은 조금 선호
-    const feel = zoneFeel(seatId);
-    if (feel === 'cool') { if (body.cold === 'yes') sum += 45; if (body.heat === 'yes') sum -= 12; }
-    if (feel === 'warm') { if (body.heat === 'yes') sum += 45; if (body.cold === 'yes') sum -= 12; }
+    sum += cache ? cache.seats[seatId][sid] : singleSeatCost(seatId, sid);
   }
   return sum;
 }
 
 // ---------- 자동 배정 (담금질 기법) ----------
-function autoAssign(message = '자동으로 배정했어요. 마음에 안 들면 "다른 배치"를 눌러 보세요.') {
+function autoAssign(message = '후보안을 만들었어요. 저장안과 비교한 뒤 편집안에 적용해 주세요.') {
+  refreshAiWeights();
   const all = seatList().map((s) => s.id);
   // 📌 고정 자리와 🎒 역할 자리(담당 학생)는 먼저 앉히고 나머지 자리만 섞어요
   const fixed = fixedSeats();
@@ -219,20 +350,26 @@ function autoAssign(message = '자동으로 배정했어요. 마음에 안 들�
   if (students.length > free.length) toast(`자리가 ${students.length - free.length}개 부족해요. 배치를 늘려 주세요.`, 4000);
 
   const pairs = neighborPairs();
+  // The inputs are constant within this run. Cache costs; retain the full-score objective and search.
+  const ids = data.students.map((s) => s.id);
+  const cache = {
+    pairs: Object.fromEntries(ids.map((a) => [a, Object.fromEntries(ids.map((b) => [b, pairCost(a, b)]))])),
+    seats: Object.fromEntries(all.map((seatId) => [seatId, Object.fromEntries(ids.map((sid) => [sid, singleSeatCost(seatId, sid)]))])),
+  };
   let best = null;
   let bestCost = Infinity;
   for (let restart = 0; restart < 6; restart++) {
     const assign = { ...fixed };
     const shuffled = [...students].sort(() => Math.random() - 0.5);
     free.forEach((id, i) => { assign[id] = shuffled[i] || null; });
-    let cost = totalCost(assign, pairs);
+    let cost = totalCost(assign, pairs, cache);
     let T = 40;
     for (let it = 0; it < 14000; it++) {
       const i = free[Math.floor(Math.random() * free.length)];
       const j = free[Math.floor(Math.random() * free.length)];
       if (i === j) continue;
       [assign[i], assign[j]] = [assign[j], assign[i]];
-      const next = totalCost(assign, pairs);
+      const next = totalCost(assign, pairs, cache);
       const delta = next - cost;
       if (delta <= 0 || Math.random() < Math.exp(-delta / T)) cost = next;
       else [assign[i], assign[j]] = [assign[j], assign[i]];
@@ -240,11 +377,9 @@ function autoAssign(message = '자동으로 배정했어요. 마음에 안 들�
     }
     if (cost < bestCost) { bestCost = cost; best = assign; }
   }
-  seats = {};
-  for (const [id, sid] of Object.entries(best)) if (sid) seats[id] = sid;
-  dirty = true;
-  selected = null;
-  staleNotice = false;
+  const result = {};
+  for (const [id, sid] of Object.entries(best)) if (sid) result[id] = sid;
+  rememberCandidate({ ...currentPlan(), seats: result }, `자동 배정 ${candidateSequence + 1}`, 'automatic');
   render();
   toast(message);
 }
@@ -347,10 +482,19 @@ function parseLayout(text) {
 }
 
 function render() {
+  refreshAiWeights();
   const ev = evaluate();
   const assigned = new Set(Object.values(seats));
   const unassigned = data.students.filter((s) => !assigned.has(s.id));
   const seatCount = seatList().length;
+  const roundSelect = el('select', { id: 'seating-round-select', 'aria-label': '자리표 회차' }, (data.rounds || []).map((round) => el('option', {
+    value: round.id, text: round.name, selected: round.id === data.round.id ? true : null,
+  })));
+  roundSelect.addEventListener('change', () => {
+    if ((dirty || candidatePlans.length) && !confirm('저장하지 않은 편집안·후보가 있어요. 다른 회차로 이동할까요?')) { roundSelect.value = data.round.id; return; }
+    skipUnload = true;
+    location.href = `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(roundSelect.value)}`;
+  });
 
   const layoutInput = el('input', { type: 'text', value: layoutText, placeholder: '예: 2x4, 2x5, 2x4', style: { minWidth: '200px' } });
   const friendsSelect = el('select', { class: 'select' }, [
@@ -397,15 +541,16 @@ function render() {
     el('div', { class: 'card-title' }, [
       el('div', {}, [el('h1', { text: `${data.room.name} 자리 배정` }), el('div', { class: 'muted', text: `${data.round.name} 응답 기준 (제출 ${data.analysis.submittedCount}/${data.students.length}명) · 자리 ${seatCount}개 · 교사 지정 규칙 ${rules.length}개` })]),
       el('div', { class: 'btn-row' }, [
-        el('button', { type: 'button', class: 'btn primary', text: '자동 배정', onClick: () => autoAssign() }),
-        el('button', { type: 'button', class: 'btn', text: '다른 배치', onClick: () => autoAssign() }),
+        el('button', { type: 'button', class: 'btn primary', id: 'generate-seat-candidate', text: '자동 배정 후보 만들기', onClick: () => autoAssign() }),
+        el('button', { type: 'button', class: 'btn', text: '다른 후보 만들기', onClick: () => autoAssign() }),
         aiBtn,
         el('button', { type: 'button', class: 'btn', text: '모두 비우기', onClick: () => { if (!confirm('고정한 자리를 포함해 모두 비울까요?')) return; seats = {}; pinned = new Set(); dirty = true; render(); } }),
-        el('button', { type: 'button', class: `btn ${dirty ? 'orange' : ''}`, text: dirty ? '저장하기 *' : '저장됨', onClick: save }),
+        el('button', { type: 'button', id: 'save-seating', class: `btn ${dirty ? 'orange' : ''}`, text: saving ? '저장 중…' : dirty ? '저장하기 *' : data.seating ? '저장됨' : '저장하기', disabled: saving ? true : null, onClick: save }),
         viewSelect,
         el('button', { type: 'button', class: 'btn', text: '인쇄', onClick: () => window.print() }),
       ]),
     ]),
+    el('div', { class: 'btn-row' }, [el('label', { for: 'seating-round-select', text: '자리표를 볼 회차' }), roundSelect]),
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, [
       el('form', { class: 'inline-form', onSubmit: (e) => {
         e.preventDefault();
@@ -422,12 +567,12 @@ function render() {
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, [zoneBtn, climateSelect]),
     el('div', { class: 'btn-row', style: { marginTop: '6px' } }, roleRow),
     el('p', { class: 'muted', style: { marginTop: '8px', marginBottom: 0 }, text: '배치는 "가로x세로" 블록을 쉼표로 나눠 적어요. 예: 2x4, 2x5, 2x4 는 2명씩 앉는 분단 세 개예요. 자리를 누른 뒤 다른 자리를 누르면 서로 바뀌고, 📍 을 누르면 자동 배정에서 그 자리를 고정해요. 👓 앞자리 필요(교사 지정 또는 눈이 나쁜 편), 📝 메모 있음, ❄️ 추위 잘 탐, 🔥 더위 잘 탐, 📏 키 큼, 🌱 키 작음.' }),
-    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🌀 바람 자리: 시스템 에어컨·히터 바람이 바로 닿는 자리를 표시해 두면, 냉방 중에는 추위를 잘 타는 학생을, 난방 중에는 더위를 잘 타는 학생을 자동 배정에서 그 자리에 앉히지 않아요. 학생이 "나는 이런 편이에요"에서 고른 몸 특징(눈·키·추위·더위)도 함께 참고해요.' }),
-    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🎒 역할 자리: 1인 1역에서 특정 역할(예: 칠판 지킴이)을 맡은 학생이 앉을 자리를 미리 정해 두면, 자동 배정과 AI 배정이 이번 회차 담당 학생을 그 자리에 앉혀요. 담당이 아직 없으면 보통 자리처럼 써요. 🤖 AI 자리 배정은 Claude 가 학생 관계·메모·몸 특징·성향 설문·1인 1역까지 종합해 배정안과 갈등 예측을 만들어 주는 기능으로, 실명 대신 가명을 보내고 30초~1분 정도 걸리며 API 비용이 들어요. 결과는 화면에서 확인한 뒤 저장해야 반영돼요.' }),
+    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🌀 바람 자리: 시스템 에어컨·히터 바람이 바로 닿는 자리를 표시하면, 냉방 중 추위를 잘 타는 학생과 난방 중 더위를 잘 타는 학생이 그 자리를 가능하면 피하도록 참고해요. 학생이 고른 눈·키·추위·더위 특징도 함께 참고하며, 배정 뒤 실제 자리와 참고 사항을 확인해 주세요.' }),
+    el('p', { class: 'muted', style: { marginTop: '4px', marginBottom: 0 }, text: '🎒 역할 자리: 1인 1역에서 특정 역할(예: 칠판 지킴이)을 맡은 학생이 앉을 자리를 미리 정해 두면, 자동 배정과 AI 배정이 이번 회차 담당 학생을 그 자리에 앉혀요. 담당이 아직 없으면 보통 자리처럼 써요. 🤖 AI는 관계·메모·몸 특징·성향 설문·1인 1역을 참고해 배정 후보와 먼저 살펴볼 관계를 제안해요. 관심 점수는 사건 발생 확률이 아니에요. 실명 대신 가명을 보내고 API 비용이 들어요. 비교 후 편집안에 적용하고 저장해 주세요.' }),
     el('p', { class: 'muted seat-view-hint', style: { marginTop: '4px', marginBottom: 0 }, text: '자리표는 "인쇄" 옆에서 보는 방향을 고를 수 있어요. 교사 시점은 교탁에서 학생들을 바라본 모습이라 위아래와 좌우가 모두 뒤집혀요. 방향은 화면과 인쇄에만 적용되고 배정 자체는 바뀌지 않아요.' }),
     staleNotice ? el('div', { class: 'alert warn', style: { marginTop: '12px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } }, [
       el('span', { style: { flex: 1 }, text: '자리를 저장한 뒤에 학생 응답이 새로 들어왔어요. 아래 경고 목록은 최신 응답 기준이에요. 고정한 자리는 그대로 두고 다시 배정할 수 있어요.' }),
-      el('button', { type: 'button', class: 'btn small primary', text: '최신 응답으로 다시 배정', onClick: () => autoAssign('최신 응답을 반영해 다시 배정했어요. 확인 후 저장해 주세요.') }),
+      el('button', { type: 'button', class: 'btn small primary', text: '최신 응답으로 후보 만들기', onClick: () => autoAssign('최신 응답으로 후보를 만들었어요. 비교한 뒤 편집안에 적용하고 저장해 주세요.') }),
       el('button', { type: 'button', class: 'btn small', text: '그대로 두기', onClick: () => { staleNotice = false; render(); } }),
     ]) : null,
   ]);
@@ -457,20 +602,20 @@ function render() {
   const memoStudents = data.students.filter((s) => notes[s.id]?.memo || notes[s.id]?.front);
   const side = el('section', { class: 'card no-print' }, [
     el('div', { class: 'stat-row' }, [
-      el('div', { class: 'stat' }, [el('div', { class: 'label', text: '가까이 앉은 갈등 쌍' }), el('div', { class: 'value', text: `${ev.warnings.length}쌍`, style: { color: ev.warnings.length ? '#d63d4f' : '#1e6b32' } })]),
+      el('div', { class: 'stat' }, [el('div', { class: 'label', text: '살펴볼 인접 관계' }), el('div', { class: 'value', text: `${ev.warnings.length}쌍`, style: { color: ev.warnings.length ? '#d63d4f' : '#1e6b32' } })]),
       el('div', { class: 'stat' }, [el('div', { class: 'label', text: '서로 좋은 사이 짝꿍' }), el('div', { class: 'value', text: `${ev.goodPairs}쌍` })]),
       el('div', { class: 'stat' }, [el('div', { class: 'label', text: '아직 자리 없음' }), el('div', { class: 'value', text: `${unassigned.length}명` })]),
     ]),
     ev.warnings.length ? el('div', { style: { marginTop: '12px' } }, [
-      el('h3', { text: '주의: 떨어뜨려야 할 학생이 가까이 있어요' }),
+      el('h3', { text: '가까운 자리에서 먼저 살펴볼 관계' }),
       el('ul', { style: { paddingLeft: '18px', margin: '6px 0' } }, ev.warnings.map((w) => el('li', {}, [
         el('b', { text: `${nameOf(w.a)} ↔ ${nameOf(w.b)}` }), ` · ${w.label} `,
         w.teacher
           ? el('span', { class: 'badge high', text: `교사 지정 분리${w.note ? ` · ${w.note}` : ''}` })
           : w.p !== null || w.aiP !== null ? el('span', { class: `badge ${badgeLevel(Math.max(w.p || 0, w.aiP || 0))}`, title: w.aiReason || null,
-            text: w.aiOnly ? `AI 예측 ${w.aiP}%` : [w.p !== null ? `갈등 ${w.p}%` : '', w.aiP !== null && w.aiP !== undefined ? `AI ${w.aiP}%` : ''].filter(Boolean).join(' · ') }) : null,
+            text: w.aiOnly ? `AI 관심 점수 ${w.aiP}/100점` : [w.p !== null ? `관심 점수 ${w.p}/100점` : '', w.aiP !== null && w.aiP !== undefined ? `AI ${w.aiP}/100점` : ''].filter(Boolean).join(' · ') }) : null,
         !w.teacher && !w.aiOnly ? el('span', { class: 'muted', text: ` ${w.ab === 'bad' ? `${nameOf(w.a)} ${TYPE_ICON.bad}→ ${nameOf(w.b)}` : ''} ${w.ba === 'bad' ? `${nameOf(w.b)} ${TYPE_ICON.bad}→ ${nameOf(w.a)}` : ''}` }) : null,
-        w.aiOnly ? el('span', { class: 'muted', text: ` 학생이 표시한 사이는 아니지만 AI 가 갈등 가능성을 봤어요${w.aiReason ? ` · ${w.aiReason}` : ''}` }) : null,
+        w.aiOnly ? el('span', { class: 'muted', text: ` 학생이 표시한 사이는 아니지만 AI가 먼저 살펴볼 관계로 제안했어요${w.aiReason ? ` · ${w.aiReason}` : ''}` }) : null,
       ]))),
     ]) : el('p', { class: 'muted', style: { marginTop: '10px' }, text: Object.keys(seats).length ? '가까운 자리에 안 좋은 사이나 분리 지정 쌍이 없어요. 👍' : '아직 배정된 자리가 없어요. "자동 배정"을 눌러 보세요.' }),
     ev.infos.length ? el('div', { style: { marginTop: '8px' } }, [
@@ -495,7 +640,7 @@ function render() {
     aiSeatingPanel(),
   ]);
 
-  setChildren(app, header, el('div', { class: 'grid-2 seat-layout' }, [chart, side]), notesSection());
+  setChildren(app, header, comparisonPanel(), el('div', { class: 'grid-2 seat-layout' }, [chart, side]), notesSection());
 }
 
 const badgeLevel = (p) => (p >= 70 ? 'high' : p >= 40 ? 'medium' : 'low');
@@ -507,6 +652,8 @@ function aiSeatingPanel() {
   if (!a) return null;
   const known = new Set(data.students.map((s) => s.id));
   const otherRound = a.roundId && a.roundId !== data.round.id;
+  const stale = a.context?.status !== 'fresh';
+  const configChanged = aiContextChanged();
   const pairs = (a.pairs || []).filter((p) => known.has(p.a) && known.has(p.b)).sort((p, q) => (q.probability || 0) - (p.probability || 0)).slice(0, 10);
   const explanations = Object.entries(a.explanations || {}).filter(([sid, text]) => known.has(sid) && text);
   const when = fmtDate(a.createdAt) || (a.createdAt ? new Date(a.createdAt).toLocaleString() : '');
@@ -514,14 +661,17 @@ function aiSeatingPanel() {
     el('h3', { text: '🤖 AI 자리 배정 메모' }),
     el('div', { class: 'muted', style: { fontSize: '13px' }, text: [when, otherRound ? `${a.roundName || '다른'} 회차 기준` : (a.roundName || data.round.name) + ' 회차', a.model ? `모델 ${a.model}` : ''].filter(Boolean).join(' · ') }),
     otherRound ? el('div', { class: 'alert warn', style: { marginTop: '6px', fontSize: '13px' }, text: `이 배정안은 ${a.roundName || '다른'} 회차 응답으로 만든 거예요. 지금 보는 ${data.round.name} 회차와 다를 수 있어요.` }) : null,
+    stale ? el('div', { class: 'alert warn', id: 'ai-seat-stale', text: a.context?.status === 'stale' ? 'AI 결과를 만든 뒤 응답·명단·메모 등 자료가 바뀌었어요. 이 점수는 현재 자동 배정에 사용하지 않아요. 새 자료로 AI 후보를 다시 만들 수 있어요.' : 'AI 결과를 만들 당시의 자료를 확인할 수 없어요. 이 점수는 현재 자동 배정에 사용하지 않아요.' }) : null,
+    configChanged ? el('div', { class: 'alert info', text: 'AI 생성 당시와 지금의 배치·고정·자리 환경이 달라요. 후보로 불러올 때 지금의 고정·역할 자리를 우선 반영해 보정해요.' }) : null,
+    !aiFreshForEditor() && !stale && !configChanged ? el('div', { class: 'alert info', text: '현재 편집 중인 메모·규칙이 AI 생성 당시와 달라요. AI 점수는 자동 배정에 사용하지 않아요.' }) : null,
     a.truncated ? el('div', { class: 'muted', id: 'ai-seat-truncated', style: { marginTop: '4px', fontSize: '13px' }, text: '⚠️ 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' }) : null,
     (a.warnings || []).length ? el('ul', { class: 'muted', style: { paddingLeft: '18px', margin: '6px 0', fontSize: '13px' } }, a.warnings.map((w) => el('li', { text: `⚠️ ${w}` }))) : null,
     a.notes ? el('p', { id: 'ai-seat-notes', style: { margin: '6px 0', fontSize: '14px' }, text: a.notes }) : null,
     pairs.length ? el('div', { style: { marginTop: '6px' } }, [
-      el('div', { style: { fontWeight: 600, fontSize: '14px' }, text: `AI 예측 갈등 가능성 (상위 ${pairs.length}쌍)` }),
+      el('div', { style: { fontWeight: 600, fontSize: '14px' }, text: `AI 관심 점수 (상위 ${pairs.length}쌍 · 사건 발생 확률이 아니에요)` }),
       el('ul', { id: 'ai-seat-pairs', style: { paddingLeft: '18px', margin: '4px 0', fontSize: '13.5px' } }, pairs.map((p) => el('li', {}, [
         el('b', { text: `${nameOf(p.a)} ↔ ${nameOf(p.b)}` }), ' ',
-        el('span', { class: `badge ${badgeLevel(p.probability || 0)}`, text: `${p.probability}%` }),
+        el('span', { class: `badge ${badgeLevel(p.probability || 0)}`, text: `${p.probability}/100점` }),
         p.reason ? el('span', { class: 'muted', text: ` · ${p.reason}` }) : null,
       ]))),
     ]) : null,
@@ -530,7 +680,7 @@ function aiSeatingPanel() {
       el('ul', { style: { paddingLeft: '18px', margin: '4px 0' } }, explanations.map(([sid, text]) => el('li', {}, [el('b', { text: nameOf(sid) }), el('span', { class: 'muted', text: ` · ${text}` })]))),
     ]) : null,
     el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
-      el('button', { type: 'button', class: 'btn small', id: 'ai-seat-reapply', text: 'AI 배정안 다시 적용', onClick: () => toast(aiApplyMessage('AI 배정안을 다시 적용했어요.', applyAiSeating()), 6000) }),
+      el('button', { type: 'button', class: 'btn small', id: 'ai-seat-reapply', text: 'AI안을 비교 후보로 불러오기', disabled: otherRound ? true : null, onClick: () => toast(aiApplyMessage('AI안을 비교 후보로 불러왔어요.', applyAiSeating()), 6000) }),
     ]),
   ]);
 }
@@ -542,40 +692,21 @@ function aiSeatingPanel() {
  */
 function applyAiSeating() {
   if (!aiSeating?.assignment) return { moved: 0, short: 0 };
-  const list = seatList();
-  const valid = new Set(list.map((s) => s.id));
-  const known = new Set(data.students.map((s) => s.id));
-  const used = new Set();
-  seats = {};
-  for (const [seatId, sid] of Object.entries(aiSeating.assignment)) {
-    if (!valid.has(seatId) || !known.has(sid) || used.has(sid)) continue;
-    seats[seatId] = sid;
-    used.add(sid);
-  }
-  const empty = list.filter((s) => !seats[s.id]).sort((x, y) => x.r - y.r || x.b - y.b || x.c - y.c).map((s) => s.id);
-  let moved = 0;
-  let short = 0;
-  for (const s of data.students) {
-    if (used.has(s.id)) continue;
-    const seatId = empty.shift();
-    if (!seatId) { short++; continue; }
-    seats[seatId] = s.id;
-    used.add(s.id);
-    moved++;
-  }
-  dirty = true;
-  selected = null;
-  staleNotice = false;
+  const fixed = {};
+  for (const seatId of pinned) if (seats[seatId]) fixed[seatId] = seats[seatId];
+  const repaired = repairSeatAssignment({ assignment: aiSeating.assignment, students: data.students, layout, fixedSeats: fixed, roleSeats,
+    roleAssignment: data.roleAssignment?.assignments || {} });
+  rememberCandidate({ ...currentPlan(), seats: repaired.seats }, `AI 후보 ${candidateSequence + 1}`, 'ai');
   render();
-  return { moved, short };
+  return { moved: repaired.adjusted, short: repaired.unassigned };
 }
 
 /** AI 배정안을 적용한 뒤 보여 줄 안내: 배정안과 다르게 앉힌 학생이 있으면 알려 줘요 */
 function aiApplyMessage(prefix, { moved = 0, short = 0 } = {}) {
   const bits = [prefix];
-  if (moved) bits.push(`배치나 명단이 달라 ${moved}명은 배정안과 다른 자리(앞줄 빈자리부터)에 앉혔어요.`);
+  if (moved) bits.push(`현재 배치·고정·역할 자리·명단에 맞춰 ${moved}자리의 배정을 보정했어요.`);
   if (short) bits.push(`${short}명은 자리가 모자라 앉히지 못했어요. 배치를 늘리거나 자동 배정을 눌러 주세요.`);
-  bits.push('확인 후 저장해 주세요.');
+  bits.push('비교한 뒤 편집안에 적용하고 저장해 주세요.');
   return bits.join(' ');
 }
 
@@ -599,7 +730,7 @@ async function aiAssign() {
     if (!aiSeating?.assignment) throw new Error('AI 배정 결과를 받지 못했어요.');
     const applied = applyAiSeating();
     const summary = (aiSeating.notes || '').trim();
-    toast(`${aiApplyMessage('AI 배정안을 적용했어요.', applied)}${summary ? ` ${summary.length > 80 ? `${summary.slice(0, 80)}…` : summary}` : ''}`, 6000);
+    toast(`${aiApplyMessage('AI 후보안을 만들었어요.', applied)}${summary ? ` ${summary.length > 80 ? `${summary.slice(0, 80)}…` : summary}` : ''}`, 6000);
   } catch (err) {
     aiBusy = false;
     render();
@@ -810,19 +941,32 @@ async function saveNotes() {
 }
 
 async function save() {
+  if (saving) return;
+  const roundId = data.round.id;
+  const plan = currentPlan();
+  const metadata = { roundId, expectedVersionId: data.seating?.versionId ?? null, label: saveLabel, source: appliedSource, sourceHistoryId };
+  saving = true;
+  render();
+  app.inert = true;
   try {
     await saveNotes();
-    await api(`${base}/seating`, { method: 'PUT', body: { layout, seats, pinned: [...pinned], options, zones, climate, roleSeats } });
-    data = await api(dataUrl);
+    data = await api(`${base}/seating?round=${encodeURIComponent(roundId)}`, { method: 'PUT', body: { ...plan, ...metadata } });
     buildRelations();
+    loadPlan(data.seating);
     dirty = false;
     staleNotice = false;
+    sourceHistoryId = null; appliedSource = 'manual'; saveLabel = ''; compareKey = 'editing';
     render();
-    toast('자리 배정과 메모를 저장했어요.');
-  } catch (err) { toast(err.message, 4000); }
+    toast(`${data.round.name} 자리표와 메모를 저장했어요. 이전 안은 최근 이력에서 다시 볼 수 있어요.`);
+  } catch (err) {
+    toast(err.status === 409 ? '다른 화면에서 자리표가 바뀌었어요. 편집안은 그대로 있어요. 저장안을 새로 확인한 뒤 비교해 주세요.' : err.message, 6000);
+    if (err.status === 409) {
+      try { data = await api(`${base}?round=${encodeURIComponent(roundId)}`); buildRelations(); } catch { /* keep the editor intact */ }
+    }
+  } finally { saving = false; app.inert = false; render(); }
 }
 
-window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', (e) => { if ((dirty || candidatePlans.length) && !skipUnload) { e.preventDefault(); e.returnValue = ''; } });
 
 function latestResponseAt() {
   let latest = null;
@@ -835,27 +979,14 @@ function latestResponseAt() {
   try {
     data = await api(dataUrl);
     buildRelations();
-    if (data.seating) {
-      layout = data.seating.layout;
-      layoutText = layout.blocks.map((b) => `${b.cols}x${b.rows}`).join(', ');
-      seats = { ...data.seating.seats };
-      pinned = new Set(data.seating.pinned || []);
-      options = { ...options, ...(data.seating.options || {}) };
-      zones = { ...(data.seating.zones || {}) };
-      climate = ['cool', 'warm', 'off'].includes(data.seating.climate) ? data.seating.climate : 'off';
-      // 역할 자리: 그 사이 지워진 역할은 뺀다 (저장할 때 서버가 없는 역할을 거절해요)
-      roleSeats = {};
-      for (const [seatId, roleId] of Object.entries(data.seating.roleSeats || {})) if (roleOf(roleId)) roleSeats[seatId] = roleId;
-    }
+    if (data.seating) loadPlan(data.seating);
     notes = { ...(data.teacherNotes?.students || {}) };
     rules = [...(data.teacherNotes?.rules || [])];
+    setupPageNav(adminToken, data.round.id);
     document.title = `${data.room.name} 자리 배정`;
     render();
     const hasSaved = Object.keys(seats).length > 0;
-    if (!hasSaved && data.students.length) {
-      // 저장된 자리가 없으면 지금 응답으로 바로 배정
-      autoAssign(`${data.round.name} 응답을 바탕으로 바로 배정했어요. 확인 후 저장해 주세요.`);
-    } else if (hasSaved && data.seating?.updatedAt) {
+    if (hasSaved && data.seating?.updatedAt) {
       const latest = latestResponseAt();
       if (latest && latest > data.seating.updatedAt) { staleNotice = true; render(); }
     }

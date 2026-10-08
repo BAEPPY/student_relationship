@@ -5,6 +5,8 @@ import { createApp } from '../server/app.js';
 import { FileStore } from '../server/store.js';
 import { extractDocument, documentToText } from '../server/docfiles.js';
 import { reportDocument } from '../server/report.js';
+import { captureAnalysisContext } from '../server/analysis-context.js';
+import { makeDocxDocument, makeHwpxDocument } from '../server/export-docs.js';
 
 // AI 분석을 흉내 내는 가짜 클라이언트 (실제 API 호출 없음)
 const fakeClient = {
@@ -63,7 +65,7 @@ describe('학급 종합 보고서 API', () => {
     assert.match(doc.subtitle, /만든 날짜 \d{4}\.\d{2}\.\d{2} · 응답 11\/12명/);
     assert.deepEqual(doc.round, { id: roundId, name: view.json.round.name });
     assert.equal(doc.rounds.length, 3, '회차 목록도 함께');
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석', '4. 회차별 변화'], '자리·역할·AI 는 아직 없으니 번호가 이어짐');
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수', '4. 회차별 변화'], '자리·역할·AI 는 아직 없으니 번호가 이어짐');
     const stats = doc.blocks.find((b) => b.type === 'stats');
     assert.deepEqual(stats.items.map((i) => i.label), ['제출', '좋은 사이', '안 좋은 사이', '주의가 필요한 관계', '고립 위험']);
     assert.equal(stats.items[0].value, '11 / 12명');
@@ -111,7 +113,7 @@ describe('학급 종합 보고서 API', () => {
     r = await call(`/api/teacher/${t}/report.json?round=${roundId}`);
     assert.equal(r.status, 200, r.text);
     let doc = r.json;
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석', '4. AI 분석', '5. 자리 배정', '6. 1인 1역', '7. 회차별 변화']);
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수', '4. AI 분석', '5. 자리 배정', '6. 1인 1역', '7. 회차별 변화']);
     // AI
     const summary = doc.blocks.find((b) => b.type === 'paragraph' && /가깝고, .+ 조용한 편이에요\.$/.test(b.text));
     assert.ok(summary, 'AI 요약 문단');
@@ -201,7 +203,7 @@ describe('학급 종합 보고서 API', () => {
     r = await call(`/api/teacher/${t}/report.json?round=${roundId}`);
     assert.equal(r.status, 200, r.text);
     const doc = r.json;
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석', '4. AI 분석', '5. 자리 배정', '6. 1인 1역', '7. 회차별 변화'], '섹션 번호는 그대로');
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수', '4. AI 분석', '5. 자리 배정', '6. 1인 1역', '7. 회차별 변화'], '섹션 번호는 그대로');
     // 자리표 블록: roles 가 cells 와 같은 모양, 배치 밖 역할 자리는 없음
     const seatmap = doc.blocks.find((x) => x.type === 'seatmap');
     assert.deepEqual(seatmap.blocks[0].roles, [['', roles[2].name], ['', '']]);
@@ -227,31 +229,32 @@ describe('학급 종합 보고서 API', () => {
     assert.equal(aiIntro.style, 'muted');
     assert.match(aiIntro.text, /^2026-10-06에 AI가 만든 자리 배정안의 메모예요\(이번 회차 기준 · claude-test-model\)\./);
     assert.match(aiIntro.text, /일부가 생략됐어요/);
-    assert.equal(doc.blocks[aiHead + 2].text, '확인할 점: 자리가 7개 부족해요.');
-    assert.equal(doc.blocks[aiHead + 3].text, '떨어뜨리기 쌍은 다른 분단에 두었어요.');
-    const aiTable = tableByCaption(doc, /AI 예측 갈등 가능성/);
-    assert.equal(aiTable, doc.blocks[aiHead + 4]);
+    assert.match(doc.blocks[aiHead + 2].text, /분석 당시 근거 확인 불가/);
+    assert.ok(doc.blocks.some((block) => block.text === '확인할 점: 자리가 7개 부족해요.'));
+    assert.ok(doc.blocks.some((block) => block.text === '떨어뜨리기 쌍은 다른 분단에 두었어요.'));
+    const aiTable = tableByCaption(doc, /AI 관계 관심 점수/);
+    assert.ok(doc.blocks.indexOf(aiTable) > aiHead);
     assert.match(aiTable.caption, /높은 순, 2쌍\)$/);
-    assert.deepEqual(aiTable.columns.map((x) => x.label), ['학생', '가능성', '이유']);
+    assert.deepEqual(aiTable.columns.map((x) => x.label), ['학생', '관심 점수', '이유']);
     assert.deepEqual(aiTable.rows.map((row) => row.map(cellText)), [
-      [`${a.name} ↔ ${b.name}`, '72%', '서로 안 좋은 사이로 표시했어요.'],
-      [`${c.name} ↔ ${d.name}`, '35%', `${c.name}와 ${d.name}는 장난이 잦아요.`],
+      [`${a.name} ↔ ${b.name}`, '72/100점', '서로 안 좋은 사이로 표시했어요.'],
+      [`${c.name} ↔ ${d.name}`, '35/100점', `${c.name}와 ${d.name}는 장난이 잦아요.`],
     ]);
-    // 다른 회차 보고서: 자리표와 역할 자리는 보이지만(담당은 그 회차 기준) AI 메모는 없음
+    // 다른 회차 보고서에는 현재 회차 자리표·역할 자리·AI 메모를 섞지 않습니다.
     const other = doc.rounds.find((x) => x.id !== roundId);
     r = await call(`/api/teacher/${t}/report.json?round=${other.id}`);
     assert.equal(r.status, 200, r.text);
     assert.ok(!r.json.blocks.some((x) => x.type === 'heading' && x.text === 'AI 자리 배정 메모'));
-    assert.equal(tableByCaption(r.json, /AI 예측 갈등 가능성/), undefined);
-    const otherMemo = r.json.blocks.find((x) => x.type === 'list' && x.items.some((i) => /역할 자리/.test(i)));
-    assert.ok(otherMemo.items.includes(`🎒 역할 자리: ${roles[1].name} → 2분단 1번째 줄 1번째 자리 (담당: 아직 없음)`), '그 회차에는 배정이 없으니 담당 없음');
+    assert.equal(tableByCaption(r.json, /AI 관계 관심 점수/), undefined);
+    assert.equal(r.json.blocks.find((x) => x.type === 'seatmap'), undefined);
+    assert.equal(r.json.blocks.find((x) => x.type === 'list' && x.items.some((i) => /역할 자리/.test(i))), undefined);
     // 한글 · 워드: 역할 자리 줄, 자리표 칸 둘째 줄 "(역할명)", AI 메모 글
     for (const kind of ['hwpx', 'docx']) {
       r = await call(`/api/teacher/${t}/report.${kind}?round=${roundId}`);
       assert.equal(r.status, 200, `${kind}: ${r.text.slice(0, 200)}`);
       const file = extractDocument(r.buf, `report.${kind}`);
       const text = documentToText(file);
-      for (const needle of ['AI 자리 배정 메모', '떨어뜨리기 쌍은 다른 분단에 두었어요.', '확인할 점: 자리가 7개 부족해요.', `역할 자리: ${roles[1].name} → 2분단 1번째 줄 1번째 자리 (담당: ${c.name})`, `${a.name} ↔ ${b.name} | 72% | 서로 안 좋은 사이로 표시했어요.`]) {
+      for (const needle of ['AI 자리 배정 메모', '떨어뜨리기 쌍은 다른 분단에 두었어요.', '확인할 점: 자리가 7개 부족해요.', `역할 자리: ${roles[1].name} → 2분단 1번째 줄 1번째 자리 (담당: ${c.name})`, `${a.name} ↔ ${b.name} | 72/100점 | 서로 안 좋은 사이로 표시했어요.`]) {
         assert.ok(text.includes(needle), `${kind} 에 "${needle}" 없음`);
       }
       const flat = (cell) => (Array.isArray(cell) ? cell.join('\n') : String(cell ?? ''));
@@ -277,12 +280,82 @@ describe('학급 종합 보고서 API', () => {
 });
 
 describe('보고서 문서 모델 (직접 호출)', () => {
+  function reviewFixture() {
+    const students = [{ id: 'a', name: '가학생' }, { id: 'b', name: '나학생' }, { id: 'c', name: '다학생' }];
+    const submission = { submittedAt: '2026-10-01T09:00:00Z' };
+    const relation = { type: 'bad', tags: ['tease'], reason: '장난이 불편해요', updatedAt: submission.submittedAt };
+    const seating = (id) => ({ layout: { blocks: [{ cols: 1, rows: 1 }] }, seats: { 'b0-r0-c0': id }, updatedAt: submission.submittedAt });
+    const previous = { id: 'r0', name: '이전 조사', startedAt: '2026-09-01T00:00:00Z', closedAt: '2026-10-01T00:00:00Z', relations: { a: { b: relation }, c: { b: relation } }, submissions: { a: submission, b: submission, c: submission }, seating: seating('a') };
+    const selected = { id: 'r1', name: '선택한 조사', startedAt: '2026-10-01T00:00:00Z', closedAt: null, relations: { c: { b: relation } }, submissions: { b: submission, c: submission }, seating: seating('b') };
+    const future = { id: 'r2', name: '미래 조사 표시 금지', startedAt: '2026-11-01T00:00:00Z', relations: {}, submissions: {}, seating: seating('c') };
+    const room = { name: '검토반', students, rounds: [previous, selected, future], currentRoundId: future.id };
+    selected.aiAnalysis = { createdAt: submission.submittedAt, summary: '선택한 회차의 AI 요약', pairs: [], students: [], provenance: captureAnalysisContext(room, selected) };
+    const inputConfig = { layout: selected.seating.layout, seats: {}, pinned: [] };
+    selected.aiSeating = {
+      roundId: selected.id, roundName: selected.name, createdAt: submission.submittedAt,
+      notes: '선택 회차의 AI 자리 메모', pairs: [{ a: 'b', b: 'c', probability: 72, reason: '입력 관계를 참고함' }],
+      inputConfig, provenance: captureAnalysisContext(room, selected, { kind: 'seating', extra: inputConfig }),
+    };
+    room.aiSeating = { roundId: selected.id, notes: '이전 형식의 메모를 중복 표시하면 안 됨' };
+    return { room, selected };
+  }
+
+  test('선택한 회차의 자리와 그때까지의 변화만 보고서에 넣고 판단보류를 설명한다', () => {
+    const { room, selected } = reviewFixture();
+    const doc = reportDocument({ room, round: selected });
+    const dump = JSON.stringify(doc);
+    assert.deepEqual(doc.blocks.find((block) => block.type === 'seatmap').blocks[0].cells, [['나학생']]);
+    assert.equal(tableByCaption(doc, /회차별 추세/).rows.length, 2);
+    assert.doesNotMatch(dump, /미래 조사 표시 금지|이전 형식의 메모를 중복/);
+    assert.match(dump, /판단 보류 관계 1쌍/);
+    assert.match(dump, /가학생 ↔ 나학생: .*아직 응답하지 않아 해소 판단을 보류/);
+    assert.match(dump, /학생 변화 판단 보류/);
+    assert.match(dump, /두 회차의 응답자가 달라/);
+    const table = tableByCaption(doc, /주의가 필요한 관계/);
+    assert.match(cellText(table.rows[0][1]), /^\d+\/100점$/);
+    assert.match(dump, /자료 부족/);
+    assert.match(dump, /실제 갈등 발생 확률을 뜻하지 않아요/);
+    assert.match(dump, /선택 회차의 AI 자리 메모/);
+  });
+
+  test('AI 분석과 자리 분석의 최신·입력 변경·기존 근거 없음 상태와 입력 제출률을 구분한다', () => {
+    const { room, selected } = reviewFixture();
+    let doc = reportDocument({ room, round: selected });
+    let notes = doc.blocks.filter((block) => block.type === 'paragraph' && block.text.startsWith('AI 분석 상태:'));
+    assert.equal(notes.length, 2);
+    assert.ok(notes.every((note) => note.text.includes('현재 입력과 일치')));
+    assert.ok(notes.every((note) => note.text.includes('분석 당시 제출 2/3명(67%)')));
+    assert.match(JSON.stringify(doc), /분석 근거: 관계 설문 제출 2건 · 관계 표시 1건/);
+    room.teacherNotes = { students: { a: { memo: '새 관찰 내용' } }, rules: [], updatedAt: '2026-10-02T00:00:00Z' };
+    selected.submissions.a = { submittedAt: '2026-10-02T00:00:00Z' };
+    doc = reportDocument({ room, round: selected });
+    notes = doc.blocks.filter((block) => block.type === 'paragraph' && block.text.startsWith('AI 분석 상태:'));
+    assert.ok(notes.every((note) => note.text.includes('입력 변경 · 재분석 필요')));
+    assert.ok(notes.every((note) => note.text.includes('분석 당시 제출 2/3명(67%)') && note.text.includes('현재 제출 3/3명(100%)')));
+    delete selected.aiAnalysis.provenance;
+    delete selected.aiSeating.provenance;
+    notes = reportDocument({ room, round: selected }).blocks.filter((block) => block.type === 'paragraph' && block.text.startsWith('AI 분석 상태:'));
+    assert.ok(notes.every((note) => note.text.includes('분석 당시 근거 확인 불가')));
+  });
+
+  test('한글·워드 내보내기에도 관심 점수·AI 최신성·자료부족·판단보류가 남는다', () => {
+    const { room, selected } = reviewFixture();
+    room.teacherNotes = { students: { a: { memo: '분석 후 새 메모' } }, rules: [] };
+    const doc = reportDocument({ room, round: selected });
+    for (const [kind, make] of [['hwpx', makeHwpxDocument], ['docx', makeDocxDocument]]) {
+      const parsed = extractDocument(make(doc), `review.${kind}`);
+      const text = documentToText(parsed);
+      for (const expected of ['관계 관심 점수', '72/100점', '입력 변경 · 재분석 필요', '분석 당시 제출 2/3명(67%)', '분석 근거:', '자료 부족', '판단 보류 관계 1쌍', '해소 판단을 보류', '학생 변화 판단 보류']) assert.ok(text.includes(expected), `${kind}: ${expected}`);
+      assert.doesNotMatch(text, /72%|미래 조사 표시 금지/);
+    }
+  });
+
   test('학생이 없는 빈 교실도 깨지지 않는다', () => {
     const round = { id: 'r1', name: '2026년 10월', relations: {}, submissions: {} };
     const doc = reportDocument({ room: { name: '빈 반', students: [], rounds: [round], currentRoundId: 'r1' }, round, now: new Date('2026-10-05T03:00:00Z') });
     assert.equal(doc.title, '빈 반 2026년 10월 학급 종합 보고서');
     assert.match(doc.subtitle, /만든 날짜 2026\.10\.05 · 응답 0\/0명/);
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석']);
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수']);
     assert.ok(doc.blocks.some((b) => b.type === 'paragraph' && /안 좋은 사이로 표시된 관계가 아직 없어요/.test(b.text)));
   });
 
@@ -302,17 +375,17 @@ describe('보고서 문서 모델 (직접 호출)', () => {
     const memo = doc.blocks.find((b) => b.type === 'list');
     assert.deepEqual(memo.items, ['🎒 역할 자리: 빗자루의 마법사 → 1분단 1번째 줄 2번째 자리 (담당: 김하늘)']);
     assert.ok(doc.blocks.some((b) => b.type === 'heading' && b.level === 3 && b.text === 'AI 자리 배정 메모'));
-    const table = doc.blocks.find((b) => b.type === 'table' && /AI 예측 갈등 가능성/.test(b.caption));
-    assert.deepEqual(table.rows[0].map(cellText), ['김하늘 ↔ 이도윤', '49%', '장난이 잦아요.']);
+    const table = doc.blocks.find((b) => b.type === 'table' && /AI 관계 관심 점수/.test(b.caption));
+    assert.deepEqual(table.rows[0].map(cellText), ['김하늘 ↔ 이도윤', '49/100점', '장난이 잦아요.']);
     assert.ok(!doc.blocks.some((b) => b.type === 'paragraph' && /생략됐어요|확인할 점/.test(b.text)), '잘림 · 경고가 없으면 그 문단도 없음');
     // 자리표가 없어도 같은 회차의 AI 배정안이면 "자리 배정" 섹션을 만들어 메모를 넣음
     doc = reportDocument({ room: { ...room, seating: null }, round, now: new Date('2026-10-05T03:00:00Z') });
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석', '4. 자리 배정', '5. 1인 1역']);
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수', '4. 자리 배정', '5. 1인 1역']);
     assert.ok(doc.blocks.some((b) => b.type === 'paragraph' && /아직 저장한 자리표가 없어요/.test(b.text)));
     assert.ok(doc.blocks.some((b) => b.type === 'heading' && b.text === 'AI 자리 배정 메모'));
     // 다른 회차의 배정안이면 메모도, 자리 배정 섹션도 없음
     doc = reportDocument({ room: { ...room, seating: null, aiSeating: { ...aiSeating, roundId: 'r0' } }, round, now: new Date('2026-10-05T03:00:00Z') });
-    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 갈등 가능성 분석', '4. 1인 1역']);
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수', '4. 1인 1역']);
     assert.ok(!doc.blocks.some((b) => b.type === 'heading' && b.text === 'AI 자리 배정 메모'));
   });
 });

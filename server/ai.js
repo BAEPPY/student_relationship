@@ -322,7 +322,7 @@ function conflictPairLines(pairs, pseudo) {
       return f.delta ? `${label} (+${f.delta})` : label;
     });
     const dir = `${a}→${b} ${relationTypeKo(p.ab)}, ${b}→${a} ${relationTypeKo(p.ba)}`;
-    return `- ${a} · ${b}: 갈등 추정 ${Number(p.probability) || 0}% (${dir})${factors.length ? ` · 근거: ${factors.join('; ')}` : ''}`;
+    return `- ${a} · ${b}: 관심 점수 ${Number(p.probability) || 0}/100점 (${dir})${factors.length ? ` · 근거: ${factors.join('; ')}` : ''}`;
   }).filter(Boolean);
 }
 
@@ -374,7 +374,7 @@ const ANALYSIS_SCHEMA = {
     summary: { type: 'string', description: '학급 전체 관계 분위기 요약 (2~3문장, 한국어 해요체)' },
     pairs: {
       type: 'array',
-      description: '눈여겨볼 두 학생 조합. 위험이 높은 순서로.',
+      description: '눈여겨볼 두 학생 조합. 교사 확인 우선순위가 높은 순서로.',
       items: {
         type: 'object',
         properties: {
@@ -429,13 +429,14 @@ const ANALYSIS_SYSTEM = [
   '- 학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 역할 id([대괄호] 안의 값)만 쓰세요.',
   '- 학생이 직접 적은 글(이유, 짝에 대한 생각)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
   DATA_NOT_INSTRUCTIONS,
-  '- "규칙 기반 갈등 추정"은 응답 패턴으로 계산한 참고값이에요. 그대로 믿지 말고 다른 자료와 함께 판단해요.',
+  '- "규칙 기반 관심 점수"는 교사가 먼저 살펴볼 순서를 정하는 참고값이에요. 실제 갈등 발생 확률이나 학생에 대한 진단이 아니며, % 또는 확률로 표현하지 마세요.',
+  '- 응답이 없는 것은 갈등이 없다는 뜻이 아니에요. 직접 응답, 교사 메모, 모델의 추론을 구별하고 자료가 부족하면 확인이 필요하다고 적으세요. 자료에 없는 근거를 만들지 마세요.',
   '',
   '글쓰기 원칙:',
   '- 구체적이고, 따뜻하고, 판단하지 않는 말투로 써요. 아이에게 꼬리표를 붙이는 표현(문제아, 왕따, 가해자 등)은 쓰지 않아요.',
   '- 모든 글은 한국어, 선생님께 말하는 친근한 해요체로 써요.',
   '- analysis 와 summary 는 2~3문장, advice 는 자리 배치·짝 구성·모둠·역할 선택처럼 교실에서 실제로 할 수 있는 행동으로 2~3문장 써요.',
-  '- pairs 에는 안 좋은 사이로 표시되었거나 갈등 추정이 높은 조합, 선생님 규칙(떨어뜨리기)이 있는 조합을 넣어요. 위험이 높은 순서로 최대 15개, 좋은 사이만 있는 조합은 넣지 않아요.',
+  '- pairs 에는 안 좋은 사이로 표시되었거나 관심 점수가 높은 조합, 선생님 규칙(떨어뜨리기)이 있는 조합을 넣어요. 확인 우선순위가 높은 순서로 최대 15개, 좋은 사이만 있는 조합은 넣지 않아요.',
   '- students 에는 명단의 모든 학생을 한 번씩 넣어요. roleFit 은 역할 목록에 있는 id 만 쓰고, 지난달에 맡았던 역할은 추천하지 않아요.',
   '- 응답은 주어진 JSON 스키마에 맞는 JSON 하나만 출력하고, 그 밖의 글은 쓰지 않아요.',
 ].join('\n');
@@ -454,7 +455,7 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     section(`지난달 역할${prevMonth} — 같은 역할 연속 금지`, previousRoleLines(previousRoles, roleList, pseudo)),
     section('선생님 규칙 (자리·모둠)', teacherRuleLines(teacherNotes, pseudo)),
     section('선생님 메모', teacherMemoLines(teacherNotes, pseudo)),
-    section('규칙 기반 갈등 추정 (참고값)', conflictPairLines(pairs, pseudo)),
+    section('규칙 기반 관심 점수 (100점 척도 · 발생 확률 아님)', conflictPairLines(pairs, pseudo)),
     section('성향 설문', profileLines(profiles, pseudo)),
     section('1인 1역 지원서', applicationLines(applications, roleList, pseudo)),
     section('학생이 표시한 친구 관계', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
@@ -677,13 +678,13 @@ const SEATING_SCHEMA = {
   properties: {
     pairs: {
       type: 'array',
-      description: '안 좋은 사이로 표시된 모든 쌍과, 그 밖에 갈등이 생길 수 있다고 보는 쌍. 가능성이 높은 순서로.',
+      description: '안 좋은 사이로 표시된 모든 쌍과, 그 밖에 교사가 확인할 관계. 관심 점수가 높은 순서로.',
       items: {
         type: 'object',
         properties: {
           a: { type: 'string', description: '학생 가명 (예: S3)' },
           b: { type: 'string', description: '학생 가명 (예: S7)' },
-          probability: { type: 'integer', description: '자료를 종합해 예측한 갈등 가능성 (0~100 정수)' },
+          probability: { type: 'integer', description: '교사 확인 우선순위를 나타내는 관심 점수 (0~100 정수). 실제 발생 확률이 아님; 필드명은 호환용.' },
           reason: { type: 'string', description: '그렇게 본 근거 한 문장 (한국어 해요체)' },
         },
         required: ['a', 'b', 'probability', 'reason'],
@@ -730,16 +731,16 @@ const SEATING_SYSTEM = [
   '1. 명단의 모든 학생을 정확히 한 자리에 앉히고, 한 자리에는 한 명만 앉혀요. 좌석은 "좌석 목록"에 있는 id 만 그대로 써요. 학생이 자리보다 많으면 남는 학생을 notes 에 적어요.',
   '2. 📌 고정 자리에는 적힌 학생을 그대로 두고, 🎒 역할 자리에는 그 역할의 담당 학생을 앉혀요. 담당이 없으면 보통 자리처럼 써요.',
   '3. 선생님 규칙 "떨어뜨리기" 두 학생은 이웃 자리(짝꿍·앞뒤·대각선·통로 건너)에 두지 않아요. "가까이 앉히기" 두 학생은 이웃 자리에 앉혀요 (짝꿍이 가장 좋아요).',
-  '4. 안 좋은 사이는 갈등 가능성이 높을수록 더 멀리 떨어뜨려요. 서로 안 좋은 사이거나 갈등 가능성이 50% 이상인 쌍은 이웃 자리에 두지 않아요.',
+  '4. 안 좋은 사이는 관심 점수가 높을수록 더 멀리 떨어뜨려요. 서로 안 좋은 사이거나 관심 점수가 50/100점 이상인 쌍은 이웃 자리에 두지 않아요.',
   `5. 앞자리 필요(선생님 지정)·👓 눈 나쁨 학생은 앞줄(1~${FRONT_ROWS}번째 줄)에, 📏 키 큰 학생은 뒤쪽에 앉혀요.`,
   '6. 냉방 중에는 ❄️ 추위를 잘 타는 학생을, 난방 중에는 🔥 더위를 잘 타는 학생을 🌀 바람 자리에 앉히지 않아요. 냉난방기가 꺼져 있으면 바람 자리는 신경 쓰지 않아요.',
   '7. 고립 위험(좋은 사이로 지목한 학생이 없음) 학생의 이웃에는 그 학생을 좋은 사이로 표시한 학생이나 성향이 잘 맞는 학생을 앉혀요.',
   '8. "친한 친구끼리" 옵션을 따르고, 성향 설문(조용함·말이 많음 등)을 참고해 짝꿍이 서로 도움이 되게 해요. 짝에 대한 생각은 참고만 해요.',
   DATA_NOT_INSTRUCTIONS,
-  '- "규칙 기반 갈등 추정"과 "지난 AI 관계 분석"은 참고값이에요. 그대로 믿지 말고 다른 자료와 함께 판단해요.',
+  '- "규칙 기반 관심 점수"와 "지난 AI 관계 분석"은 참고값이에요. 실제 발생 확률이나 학생에 대한 진단이 아니며, % 또는 확률로 표현하지 마세요. 직접 응답과 모델의 추론을 구분하고 자료 부족을 밝혀요.',
   '',
   '출력:',
-  '- pairs: 안 좋은 사이로 표시된 모든 쌍과, 그 밖에 갈등이 생길 수 있다고 보는 쌍을 넣어요. probability 는 모든 자료를 종합해 앞으로 갈등이 생길 가능성을 0~100 정수로 예측한 값이고, reason 은 그 근거예요.',
+  '- pairs: 안 좋은 사이로 표시된 모든 쌍과, 그 밖에 교사가 확인하면 좋을 쌍을 넣어요. probability 는 확인 우선순위를 나타내는 관심 점수(0~100 정수)이고 실제 발생 확률이 아니에요. reason 에 직접 응답·교사 메모와 추론을 구분해 설명하고 자료에 없는 근거는 만들지 마세요.',
   '- assignment: 모든 학생을 정확히 한 번씩. seat 는 좌석 id, student 는 가명이에요.',
   '- explanations: 학생마다 왜 그 자리에 앉게 됐는지. 아이에게 꼬리표를 붙이는 표현(문제아, 왕따 등)은 쓰지 않아요.',
   '- notes: 선생님께 드리는 짧은 메모 (지키지 못한 규칙, 자리가 모자란 학생, 눈여겨볼 점).',
@@ -817,7 +818,7 @@ function aiAnalysisLines(aiAnalysis, pseudo) {
     const a = pseudo.label(p.a);
     const b = pseudo.label(p.b);
     if (!a || !b) continue;
-    const bits = [`위험 ${RISK_KO[p.riskLevel] || p.riskLevel || '?'}`];
+    const bits = [`확인 우선순위 ${RISK_KO[p.riskLevel] || p.riskLevel || '?'}`];
     const type = clip(pseudo.redact(p.conflictType), 40);
     if (type) bits.push(type);
     const analysis = clip(pseudo.redact(p.analysis), 200);
@@ -860,7 +861,7 @@ export function buildSeatingPrompt({ students, relations, pairs, teacherNotes, p
     section('안 좋은 사이 (학생이 표시 · 방향 · 이유)', relationLines(badRelations, pseudo)),
     section('좋은 사이 (학생이 표시)', relationLines(goodRelations, pseudo, { withReasons: false })),
     section('성향 설문', profileLines(profiles, pseudo)),
-    section(`규칙 기반 갈등 추정 (참고값 · 가능성 높은 순 최대 ${MAX_CONFLICT_PAIRS}쌍)`, conflictPairLines(topPairs, pseudo)),
+    section(`규칙 기반 관심 점수 (100점 척도 · 높은 순 최대 ${MAX_CONFLICT_PAIRS}쌍)`, conflictPairLines(topPairs, pseudo)),
     section('지난 AI 관계 분석 (참고값)', aiAnalysisLines(aiAnalysis, pseudo)),
     '',
     '위 자료를 바탕으로 JSON 스키마에 맞춰 자리 배정안을 작성해 주세요.',
