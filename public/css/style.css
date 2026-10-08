@@ -363,9 +363,6 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 /* 뒤집은 시점에서는 블록 높이가 달라도 앞줄(r0)이 교탁 쪽에 나란히 오도록 좌석을 칸 아래쪽에 붙여요 (학생 시점은 칸 위쪽) */
 .seat-chart[data-view="teacher"] .seat-block > .seat, .seat-chart[data-view="flipV"] .seat-block > .seat { align-self: end; }
 .seat-view-select { max-width: 100%; }
-.seat-history-list { list-style: none; margin: 6px 0; padding: 0; font-size: 13.5px; }
-.seat-history-list li { padding: 3px 0; border-top: 1px solid var(--gray-200); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.seat-history-list li:first-child { border-top: 0; }
 .print-view-label { font-weight: 500; color: var(--gray-700); }
 @media print { .seat-chart { break-inside: avoid; page-break-inside: avoid; } }
 

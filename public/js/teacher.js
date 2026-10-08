@@ -39,7 +39,7 @@ const HELP = {
   csv: '엑셀·구글 시트로 바로 열리는 표예요. 학생이 표시한 관계만 들어가요: 회차 · 보낸 학생 · 받은 학생 · 관계 · 선택한 이유 · 직접 쓴 이유 · 수정 시각. 관계를 정렬하거나 필터로 볼 때 좋아요.',
   json: '모든 자료를 한 파일에 통째로 담은 보관용 파일이에요. 모든 회차의 관계와 갈등 분석, 회차별 변화, 선생님 메모·규칙, 자리 배정, 1인 1역(역할·달별 기록·설문·지원서·배정), AI 분석까지 들어가요. 엑셀로 보기엔 불편하지만 14개월 뒤 자동 삭제 전에 보관하거나 다른 프로그램에 넣을 때 써요. 학생 링크(토큰)는 들어 있지 않아요.',
   minCount: '학생이 제출하려면 꼭 표시해야 하는 수예요. 반 인원이 적으면 자동으로 줄어들어요.',
-  analysis: '응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 더해 2~97%로 어림해요. 판단 근거가 아니라 먼저 살펴볼 관계를 찾는 참고용이에요.',
+  analysis: '응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 더한 관심 점수예요(100점 척도, 현재 계산 범위 2~97점). 실제 갈등 발생 확률이나 진단이 아니에요. 먼저 살펴볼 관계를 정할 때 원래 응답과 함께 확인해요.',
   ai: '학생 이름을 S1, S2 같은 가명으로 바꿔 보내고 결과만 저장해요. 한 번에 30초~1분, 사용량(비용)이 들어요.',
   report: '관계도 분석 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서로 모아요. 화면에서 바로 인쇄하거나 PDF로 저장하고, 한글(.hwpx)·워드(.docx) 파일로도 내려받을 수 있어요.',
 };
@@ -463,7 +463,7 @@ function renderSummary() {
   const high = badPairs.filter((p) => p.level === 'high').length;
   const medium = badPairs.filter((p) => p.level === 'medium').length;
   const tile = ({ cls = '', id = null, label, value, unit = '', sub = null, onClick = null, extra = null }) => el(onClick ? 'button' : 'div', {
-    type: onClick ? 'button' : null, class: `tile ${cls}`, id, title: onClick ? '누르면 갈등 가능성 분석으로 이동해요' : null, onClick,
+    type: onClick ? 'button' : null, class: `tile ${cls}`, id, title: onClick ? '누르면 관계 관심 점수로 이동해요' : null, onClick,
   }, [
     el('div', { class: 'tile-label', text: label }),
     el('div', { class: 'tile-value' }, [String(value), unit ? el('small', { text: unit }) : null]),
@@ -560,10 +560,10 @@ function renderSidePanel() {
     section('내가 좋은 사이로 표시한 친구', st.outGood.map((t) => line(id, t))),
     section('내가 안 좋은 사이로 표시한 친구', st.outBad.map((t) => line(id, t))),
     myPairs.length ? el('div', {}, [
-      el('div', { class: 'section-label', text: '갈등 가능성' }),
+      el('div', { class: 'section-label', text: '관계 관심 점수' }),
       el('ul', {}, myPairs.map((p) => el('li', {}, [
         el('a', { href: '#', text: `${nameOf(p.a === id ? p.b : p.a)}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], id); } }),
-        ' ', el('span', { class: `badge ${p.level}`, text: `${p.probability}% · ${LEVEL_LABEL[p.level]}` }),
+        ' ', el('span', { class: `badge ${p.level}`, text: `${p.probability}/100점 · ${LEVEL_LABEL[p.level]}` }),
       ]))),
     ]) : null,
   );
@@ -640,6 +640,7 @@ function rolesInfoBox(sid) {
     assignedBlock,
     aiStudent ? el('div', { class: 'ai-mini' }, [
       el('div', { class: 'ai-mini-title', text: '🤖 AI 요약' }),
+      state.aiAnalysis?.context?.status !== 'fresh' ? el('div', { class: 'muted', text: state.aiAnalysis?.context?.status === 'stale' ? '분석 후 자료가 변경됐어요. AI 분석 카드에서 다시 확인해 주세요.' : '이전 분석의 입력 기록이 없어 최신 여부를 확인할 수 없어요.' }) : null,
       aiStudent.summary ? el('div', { text: aiStudent.summary }) : null,
       aiStudent.watch ? el('div', { class: 'muted', style: { marginTop: '2px' }, text: `👀 ${aiStudent.watch}` }) : null,
       (aiStudent.roleFit || []).length ? el('div', { class: 'muted', style: { marginTop: '2px' }, text: `추천 역할: ${aiStudent.roleFit.map((f) => roleNameOf(f.roleId)).join(', ')}` }) : null,
@@ -648,7 +649,55 @@ function rolesInfoBox(sid) {
   ]);
 }
 
-// ---------- 갈등 분석 ----------
+function coverageText(coverage) {
+  return coverage ? `제출 ${coverage.submitted}/${coverage.total}명 (${coverage.percent}%)` : '제출 자료 확인 불가';
+}
+
+function analysisDataNotice(context = state.analysis?.context, { ai = false } = {}) {
+  const current = ai ? context?.currentCoverage : context?.coverage;
+  const partial = !current?.complete || Boolean(ai && context?.inputCoverage && !context.inputCoverage.complete);
+  const status = ai ? context?.status || 'unknown' : 'fresh';
+  const freshness = status === 'stale' ? '분석 후 입력 자료가 바뀌었어요. 다시 분석해 주세요.'
+    : status === 'unknown' ? '이전 분석의 입력 기록이 없어 최신 여부를 확인할 수 없어요. 다시 분석하면 기록이 남아요.'
+      : ai ? '분석 때와 입력 자료가 같아요.' : `${state.round.name} 회차의 현재 제출 자료예요.`;
+  return el('div', { class: `alert ${partial || status !== 'fresh' ? 'warn' : 'info'} prose`, 'data-analysis-context': ai ? 'ai' : 'rules' }, [
+    el('div', { text: freshness }),
+    el('div', { text: `${coverageText(current)}${!current?.complete ? ' · 자료 부족: 미제출을 관계 없음으로 해석하지 마세요.' : ' · 모두 제출했어도 내용 확인은 필요해요.'}` }),
+    ai && context?.inputCoverage ? el('div', { class: 'muted', text: `분석 당시 ${coverageText(context.inputCoverage)} · 입력 확인 ${fmtDate(context.capturedAt)}` }) : null,
+    ai && context?.inputCoverage && !context.inputCoverage.complete ? el('div', { text: '이 분석은 응답이 모두 모이기 전에 만들어졌어요. 자료가 부족한 부분을 확인해 주세요.' }) : null,
+    !ai && context?.sourceUpdatedAt ? el('div', { class: 'muted', text: `최근 응답·메모 기록 ${fmtDate(context.sourceUpdatedAt)}` }) : null,
+    current?.missingStudentIds?.length ? el('div', { class: 'muted', text: `미제출: ${current.missingStudentIds.map(nameOf).join(', ')}` }) : null,
+  ]);
+}
+
+/** References are created by the server. Text below is explicitly the currently saved response. */
+function pairEvidence(p, context, { ai = false } = {}) {
+  const ids = [p.a, p.b];
+  const refs = (context?.evidence || []).filter((entry) => entry.studentIds?.some((id) => ids.includes(id)));
+  const relations = (state.relations || []).filter((r) => (r.from === p.a && r.to === p.b) || (r.from === p.b && r.to === p.a));
+  const notes = ids.filter((id) => state.teacherNotes?.students?.[id]?.memo);
+  const rules = (state.teacherNotes?.rules || []).filter((rule) => ids.includes(rule.a) && ids.includes(rule.b));
+  const refKinds = { submission: '관계 제출', relation: '관계 응답', profile: '성향 설문', application: '지원서', 'teacher-note': '교사 메모', 'teacher-rule': '교사 지정 규칙' };
+  return el('div', { class: 'pair-evidence' }, [
+    ai ? el('p', { class: 'muted', text: '서버가 연결한 입력 자료의 참조 항목이에요. AI 문장의 정확한 인용을 뜻하지 않으며, 아래 내용은 현재 응답이에요.' }) : null,
+    el('div', { class: 'section-label', text: '현재 응답과 교사 기록' }),
+    el('div', { class: 'muted', text: ids.map((id) => `${nameOf(id)}: ${state.stats[id]?.submitted ? `제출 ${fmtDate(state.stats[id].submittedAt)}` : '미제출'}`).join(' · ') }),
+    relations.length ? el('ul', {}, relations.map((r) => el('li', {}, [
+      el('b', { text: `${nameOf(r.from)} → ${nameOf(r.to)} · ${TYPE_LABEL[r.type] || r.type}` }),
+      el('div', { text: [...(r.tagLabels || []), r.reason].filter(Boolean).join(' · ') || '이유를 적지 않았어요.' }),
+      r.updatedAt ? el('small', { class: 'muted', text: `응답 수정 ${fmtDate(r.updatedAt)}` }) : null,
+    ]))) : el('p', { class: 'muted', text: '이 두 학생 사이에 직접 표시한 관계 응답이 없어요. 관계가 없다는 뜻은 아니에요.' }),
+    ...notes.map((id) => el('p', { text: `교사 메모 · ${nameOf(id)}: ${state.teacherNotes.students[id].memo}` })),
+    ...rules.map((rule) => el('p', { text: `교사 규칙 · ${rule.type === 'apart' ? '떨어뜨리기' : '가까이 앉히기'}${rule.note ? `: ${rule.note}` : ''}` })),
+    ai && refs.length ? el('details', {}, [
+      el('summary', { text: `분석 당시 입력 참조 ${refs.length}개` }),
+      el('ul', {}, refs.map((ref) => el('li', { text: `${refKinds[ref.kind] || '입력 자료'} · ${(ref.studentIds || []).map(nameOf).join(' / ')}${ref.updatedAt ? ` · ${fmtDate(ref.updatedAt)}` : ''}` }))),
+    ]) : null,
+    el('div', { class: 'btn-row' }, ids.map((id) => el('a', { href: '#', text: `${nameOf(id)} 전체 응답 보기`, onClick: (e) => { e.preventDefault(); setHighlight([id], id); scrollToGraph(); } }))),
+  ]);
+}
+
+// ---------- 관계 관심 점수 ----------
 function renderAnalysis() {
   const card = document.getElementById('analysis-card');
   const a = state.analysis;
@@ -674,9 +723,9 @@ function renderAnalysis() {
       el('div', { class: 'pair-main' }, [
         el('a', { href: '#', class: 'pair-names', title: '관계도에서 두 학생만 보기', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
         el('span', { class: `badge ${p.level}`, text: LEVEL_LABEL[p.level] }),
-        el('span', { class: 'pair-pct', text: `${p.probability}%` }),
+        el('span', { class: 'pair-pct', text: `${p.probability}/100점` }),
       ]),
-      el('div', { class: 'pair-bar', role: 'img', 'aria-label': `갈등 가능성 ${p.probability}%` }, [el('div', { style: { width: `${p.probability}%` } })]),
+      el('div', { class: 'pair-bar', role: 'img', 'aria-label': `관심 점수 ${p.probability}/100점` }, [el('div', { style: { width: `${p.probability}%` } })]),
       el('div', { class: 'pair-reason', title: reason, text: reason || '적힌 이유가 없어요.' }),
       el('details', {
         class: 'pair-more', open: ui.openPairs.has(key) ? true : null,
@@ -685,6 +734,7 @@ function renderAnalysis() {
         el('summary', {}, [el('span', { class: 'when-closed', text: '이유 보기 ▾' }), el('span', { class: 'when-open', text: '이유 접기 ▴' })]),
         el('div', { class: 'pair-arrows', text: arrowText(p) }),
         el('ul', { class: 'pair-factors' }, p.factors.map((f) => el('li', { text: f.delta ? `${f.label} (+${f.delta})` : f.label }))),
+        pairEvidence(p, a.context),
       ]),
     ]);
   };
@@ -693,9 +743,10 @@ function renderAnalysis() {
     items.length ? el('ul', {}, items) : el('p', { class: 'muted', text: empty }),
   ];
   setChildren(card,
-    cardTitle('갈등 가능성 분석', '안 좋은 사이로 표시된 관계마다 앞으로 갈등이 생길 가능성을 어림해요. 가능성이 높은 순서로 보여 주고, 이름을 누르면 관계도에서 두 학생만 강조돼요.',
+    cardTitle('관계 관심 점수', '교사가 먼저 살펴볼 관계를 100점 척도로 정리해요. 점수가 높은 순서로 보여 주고, 이름을 누르면 관계도에서 두 학생만 강조돼요.',
       el('span', { class: 'badge gray', text: `${a.submittedCount}명 응답 기준` }), HELP.analysis),
-    el('div', { class: 'alert info prose', text: '학생들의 응답(관계 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부)을 바탕으로 한 참고용 수치예요. 학생을 판단하는 근거가 아니라, 먼저 관심을 기울일 관계를 찾는 도구로 활용해 주세요.' }),
+    analysisDataNotice(a.context),
+    el('p', { class: 'muted prose', text: '관심 점수는 응답에 정해진 가중치를 더한 참고값이며 실제 갈등 발생 확률이나 진단이 아니에요. 제출률도 분석 정확도를 뜻하지 않아요. 원래 응답을 읽고 교사가 확인해 주세요.' }),
     el('div', { class: 'grid-2 analysis-grid' }, [
       el('div', {}, [
         el('div', { class: 'sub-head' }, [
@@ -715,10 +766,10 @@ function renderAnalysis() {
         ]),
         fold('analysis-method', '계산 방식', null, [
           el('ul', { class: 'method-list' }, [
-            el('li', { text: '서로 안 좋은 사이 78% · 한쪽만 안 좋은 사이 48% · 한쪽은 좋고 한쪽은 안 좋음 40% 에서 시작' }),
+            el('li', { text: '서로 안 좋은 사이 78점 · 한쪽만 안 좋은 사이 48점 · 한쪽은 좋고 한쪽은 안 좋음 40점에서 시작 (100점 척도)' }),
             el('li', { text: '이유의 심각도(때리거나 괴롭힘, 따돌림, 험담, 싸움 등)에 따라 최대 +25' }),
             el('li', { text: '공통 친구가 많으면 +4/명 (최대 +12), 3명 이상에게 안 좋게 지목된 학생 +6, 고립 위험 학생 +5' }),
-            el('li', { text: '70% 이상 높음 · 40% 이상 주의 · 그 미만 낮음' }),
+            el('li', { text: '70점 이상 높음 · 40점 이상 주의 · 그 미만 낮음: 교사 확인 우선순위예요.' }),
           ]),
         ]),
       ]),
@@ -771,7 +822,7 @@ function renderAiPanel() {
     ])
     : el('div', { class: 'alert info prose', id: 'ai-disabled', style: { marginBottom: a ? '12px' : 0 } }, [
       el('div', { class: 'alert-title', text: 'AI 분석은 아직 꺼져 있어요.' }),
-      el('div', { text: '서버 환경 변수 ANTHROPIC_API_KEY 를 설정하면 학생들의 관계·성향·지원서를 함께 읽고, 갈등 가능성과 어울리는 역할을 풀어서 설명해 줘요. 그 전까지는 위의 규칙 기반 갈등 분석을 사용해요.' }),
+      el('div', { text: '서버 환경 변수 ANTHROPIC_API_KEY 를 설정하면 학생들의 관계·성향·지원서를 함께 읽고, 살펴볼 관계와 어울리는 역할을 풀어서 설명해 줘요. 그 전까지는 위의 규칙 기반 관심 점수를 사용해요.' }),
       el('div', { style: { marginTop: '4px', fontSize: '14px' }, text: '설정 방법은 README 참고' }),
     ]);
 
@@ -785,6 +836,7 @@ function renderAiPanel() {
       ]),
       p.analysis ? el('p', { class: 'ai-text', text: p.analysis }) : el('p', { class: 'ai-text muted', text: '설명이 비어 있어요.' }),
       p.advice ? el('div', { class: 'ai-advice' }, [el('div', { class: 'ai-advice-label', text: '💡 이렇게 해 보세요' }), el('div', { text: p.advice })]) : null,
+      el('details', {}, [el('summary', { text: '입력 근거와 현재 응답 확인' }), pairEvidence(p, a.context, { ai: true })]),
     ]);
   };
 
@@ -814,6 +866,7 @@ function renderAiPanel() {
   };
 
   const results = a ? [
+    analysisDataNotice(a.context, { ai: true }),
     el('div', { class: 'ai-meta muted', id: 'ai-meta' }, [
       `분석 ${fmtDate(a.createdAt)}${a.model ? ` · 모델 ${a.model}` : ''} · ${state.round.name} 회차`,
       a.truncated ? el('span', { class: 'ai-truncated', id: 'ai-truncated', text: ' · ⚠️ 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' }) : null,
@@ -866,7 +919,7 @@ function renderHistory() {
   const c = h.changes;
   const arrow = (d) => (d > 0 ? `▲${d}` : d < 0 ? `▼${-d}` : '－');
   const trendTable = el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
-    el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '갈등 높음 쌍', '고립 위험'].map((t) => el('th', { text: t })))]),
+    el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '관심 점수 높음 쌍', '고립 위험'].map((t) => el('th', { text: t })))]),
     el('tbody', {}, h.trend.map((t, i) => {
       const prev = h.trend[i - 1];
       const cell = (v, key) => el('td', { class: 'num' }, [String(v), prev ? el('span', { class: 'muted delta', text: arrow(v - prev[key]) }) : null]);
@@ -881,7 +934,8 @@ function renderHistory() {
   const pairList = (items, empty) => items.length
     ? el('ul', { class: 'change-list' }, items.map((p) => el('li', {}, [
       el('a', { href: '#', text: `${p.aName} ↔ ${p.bName}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
-      p.probability !== null ? el('span', { class: `badge ${p.probability >= 70 ? 'high' : p.probability >= 40 ? 'medium' : 'low'}`, style: { marginLeft: '6px' }, text: `${p.probability}%` }) : null,
+      p.probability != null ? el('span', { class: `badge ${p.probability >= 70 ? 'high' : p.probability >= 40 ? 'medium' : 'low'}`, style: { marginLeft: '6px' }, text: `${p.probability}/100점` }) : null,
+      p.reason ? el('div', { class: 'muted', text: p.reason }) : null,
     ])))
     : el('p', { class: 'muted', style: { margin: '4px 0 12px' }, text: empty });
 
@@ -900,8 +954,10 @@ function renderHistory() {
       stat('새로 생긴 갈등', `${c.newConflicts.length}쌍`, '지난 회차에는 없던 안 좋은 사이'),
       stat('계속되는 갈등', `${c.persistent.length}쌍`, '두 회차 모두 있는 안 좋은 사이'),
       stat('해소된 갈등', `${c.resolved.length}쌍`, '이번 회차에 사라진 안 좋은 사이'),
+      stat('관계 판단 보류', `${(c.pending || []).length}쌍`, '비교에 필요한 응답이 부족한 관계'),
       stat('관심이 필요한 학생', `${c.worsened.length}명`, '받은 ⚡가 늘거나 ❤️가 줄어든 학생'),
       stat('좋아진 학생', `${c.improved.length}명`, '받은 ❤️가 늘거나 ⚡가 줄어든 학생'),
+      stat('학생 변화 판단 보류', `${(c.studentPending || []).length}명`, '응답자가 달라 직접 비교할 수 없는 학생'),
     ]),
     fold('history-trend', '학급 추세 표', `${h.trend.length}개 회차`, [trendTable]),
     fold('history-changes', '갈등·학생 변화 목록', `새로 생김 ${c.newConflicts.length} · 계속 ${c.persistent.length} · 해소 ${c.resolved.length}`, [
@@ -913,6 +969,8 @@ function renderHistory() {
           pairList(c.persistent, '없어요.'),
           el('h3', { text: `해소된 갈등 (${c.resolved.length})` }),
           pairList(c.resolved, '없어요.'),
+          el('h3', { text: `관계 판단 보류 (${(c.pending || []).length})` }),
+          pairList(c.pending || [], '없어요.'),
         ]),
         el('div', {}, [
           el('h3', { text: '관심이 필요한 학생' }),
@@ -925,9 +983,14 @@ function renderHistory() {
             el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } }),
             el('span', { class: 'muted', text: ` · 받은 ❤️ ${arrow(s.inGoodDelta)} · 받은 ⚡ ${arrow(s.inBadDelta)}${s.recovered ? ' · 고립 위험 벗어남' : ''}` }),
           ]))) : el('p', { class: 'muted', text: '아직 없어요.' }),
+          el('h3', { text: `학생 변화 판단 보류 (${(c.studentPending || []).length})` }),
+          (c.studentPending || []).length ? el('ul', { class: 'change-list' }, c.studentPending.map((s) => el('li', {}, [
+            el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } }),
+            el('div', { class: 'muted', text: s.reason }),
+          ]))) : el('p', { class: 'muted', text: '없어요.' }),
         ]),
       ]),
-      el('p', { class: 'muted prose', style: { marginTop: '12px', marginBottom: 0 }, text: '"새로 생긴 갈등"은 지난 회차에 없던 안 좋은 사이가 이번 회차에 생긴 쌍, "해소된 갈등"은 지난 회차에 있던 안 좋은 사이가 이번 회차에 사라진 쌍이에요. 응답이 없는 학생의 관계는 변화로 세지 않아요.' }),
+      el('p', { class: 'muted prose', style: { marginTop: '12px', marginBottom: 0 }, text: '갈등 해소는 이전에 안 좋은 사이로 표시했던 학생들이 이번에 모두 응답했을 때만 표시해요. 신규 여부를 비교할 이전 응답이 없거나, 학생별 변화의 응답자가 달라지면 판단을 보류해요. 표의 원래 지목 수는 제출 인원과 함께 읽어 주세요.' }),
     ]),
     fold('history-students', '학생별 받은 ❤️ / ⚡ 표', `${h.students.length}명 · ${h.trend.length}개 회차`, [
       el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [

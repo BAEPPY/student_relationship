@@ -1,4 +1,5 @@
 import { newId } from './tokens.js';
+import { ensureSeatingHistory } from './seating-history.js';
 
 /** 한국 시간 기준 "2026년 10월" 형태의 회차 이름 */
 export function monthName(date = new Date()) {
@@ -35,6 +36,12 @@ export function ensureRounds(room, now = new Date().toISOString()) {
     if (r.closedAt === undefined) r.closedAt = null;
   }
   if (!room.rounds.some((r) => r.id === room.currentRoundId)) room.currentRoundId = room.rounds[room.rounds.length - 1].id;
+  ensureSeatingHistory(room);
+  if (room.aiSeating) {
+    const sourceRound = room.rounds.find((r) => r.id === room.aiSeating.roundId);
+    if (sourceRound && !sourceRound.aiSeating) sourceRound.aiSeating = structuredClone(room.aiSeating);
+    delete room.aiSeating;
+  }
   return room;
 }
 

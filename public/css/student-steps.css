@@ -227,3 +227,20 @@ body.kid .wish-slot.stale { border-color: var(--kid-orange); }
 .rank-dot { display: inline-block; padding: 1px 9px; border-radius: 999px; font-family: var(--font-kid); font-size: 13px; color: #fff; background: var(--kid-coral); }
 .rank-dot.rank-2 { background: #f4b400; color: #4a3b2f; }
 .rank-dot.rank-3 { background: var(--kid-grass); }
+
+/* Temporary-save state stays visible without redrawing the student's active text field. */
+.draft-bar {
+  position: sticky; top: 8px; z-index: 12; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; padding: 10px 14px; margin: 0 0 14px;
+  background: #f4fff0; border: 2px solid #c7dfb5; border-radius: 16px; box-shadow: 0 3px 10px #40332012;
+}
+.draft-info { min-width: 0; }
+#draft-status { font-weight: 700; line-height: 1.45; }
+.draft-info small { display: block; color: #615d54; line-height: 1.4; margin-top: 3px; }
+.draft-bar .btn-row { flex-shrink: 0; }
+.draft-bar.draft-warning { background: #fff8df; border-color: #e6cd81; }
+@media (max-width: 600px) {
+  .draft-bar { position: static; flex-wrap: wrap; }
+  .draft-bar .btn-row { width: 100%; justify-content: flex-end; }
+}
+@media print { .draft-bar { display: none; } }

@@ -9,7 +9,7 @@
 //   ⑤ 학생이 고른 몸 특징: 눈 나쁨 최대 12+줄×5, 키 줄×1.5, 바람 자리 불일치 25 — 지난 자리표가 없는 처음 자리표에서만 자연히 앞줄로 가요
 //
 // buildPastPenalty(list) → { [a]: { [b]: { mate, near, block } } }   지난 자리표 목록(최신이 앞)에서 쌍별 페널티 합 (양방향 같은 객체)
-// makeCostModel(ctx) → { pairCost(a, b, rule?), totalCost(assign, pairs, groups?) }   ctx 는 화면 상태를 그때그때 읽는 함수들
+// makeCostModel(ctx) → { pairCost(a, b, rule?), seatCost(seatId, sid), varietyCost(assign, pairs, groups?), totalCost(assign, pairs, groups?) }   ctx 는 화면 상태를 그때그때 읽는 함수들
 import { seatedPairs } from './seat-geometry.js';
 
 export const COST = Object.freeze({
@@ -112,28 +112,24 @@ export function makeCostModel(ctx = {}) {
     return cost;
   }
 
-  /**
-   * 자리표 전체의 비용. assign: seatId → studentId | null, pairs: neighborPairs(layout), groups: 분단별 좌석 id 묶음(같은 분단 반복 페널티용, 없으면 생략)
-   */
-  function totalCost(assign, pairs, groups = null) {
-    let sum = 0;
+  /** ④ 다양한 짝 비용: 지난 자리표에서 짝꿍/이웃/같은 분단이었던 쌍이 다시 그렇게 앉을 때. pairs: neighborPairs(layout), groups: 분단별 좌석 id 묶음(없으면 같은 분단 항은 생략) */
+  function varietyCost(assign, pairs, groups = null) {
     const past = c.pastPenalty();
+    if (!past) return 0;
+    let sum = 0;
     for (const [x, y, w, label] of pairs) {
       const a = assign[x];
       const b = assign[y];
       if (!a || !b) continue;
-      const rule = c.rule(a, b);
-      sum += w * pairCost(a, b, rule);
-      // ④ 다양한 짝: 지난 자리표에서 짝꿍이었던 쌍을 다시 짝꿍으로 두면 크게, 이웃(앞뒤 등)이었던 쌍을 다시 이웃에 두면 조금 비용을 더해요.
-      //    선생님이 가까이 앉히기로 정한 쌍은 지난 짝꿍이어도 그대로 둬요 (① > ④)
-      if (!past || rule?.type === 'together') continue;
+      // 선생님이 가까이 앉히기로 정한 쌍은 지난 짝꿍이어도 그대로 둬요 (① > ④)
+      if (c.rule(a, b)?.type === 'together') continue;
       const p = past[a]?.[b];
       if (!p) continue;
-      if (label === '짝꿍') sum += p.mate || p.near / 2;
-      else sum += p.near * w;
+      if (label === '짝꿍') sum += p.mate || p.near / 2;     // 짝꿍 반복은 강하게 (짝꿍은 아니었지만 이웃이었다면 그 절반)
+      else sum += p.near * w;                                // 앞뒤·대각선·통로 건너 반복은 약하게
     }
     // 같은 분단 반복은 그보다 더 약하게: 지난 자리표에서 같은 분단이었던 두 학생이 다시 같은 분단에 앉으면 조금만 더해요
-    if (past && groups) {
+    if (groups) {
       for (const ids of groups) {
         for (let x = 0; x < ids.length; x++) {
           const a = assign[ids[x]];
@@ -147,24 +143,42 @@ export function makeCostModel(ctx = {}) {
         }
       }
     }
-    for (const [seatId, sid] of Object.entries(assign)) {
-      if (!sid) continue;
-      const row = rowOf(seatId);
-      sum += 0.8 * row;                                   // 학생이 자리보다 적으면 앞줄부터
-      if (c.needsFront(sid)) sum += teacherFrontCost(row);   // ③ 앞자리 필요 학생 (교사 지정) — 지난 짝꿍 반복보다 먼저
-      // ⑤ 학생이 고른 몸 특징: 눈이 나쁘면 앞줄, 키가 작으면 앞쪽·크면 뒤쪽을 조금 선호.
-      //    다양한 짝(지난 짝꿍 페널티 80)보다 낮게 둬서, 지난 자리표가 없는 처음 자리표에서만 자연히 앞줄로 가요
-      const body = c.body(sid);
-      if (body.sight === 'poor') sum += sightCost(row);
-      if (body.height === 'short') sum += row * 1.5;
-      if (body.height === 'tall') sum += (c.blockRows(seatId) - 1 - row) * 1.5;
-      // 냉난방기 바람 자리: 추위를 잘 타면 냉방 바람을, 더위를 잘 타면 난방 바람을 피하고 반대쪽은 조금 선호
-      const feel = c.zoneFeel(seatId);
-      if (feel === 'cool') { if (body.cold === 'yes') sum += COST.ZONE_MISMATCH; if (body.heat === 'yes') sum -= COST.ZONE_PREFER; }
-      if (feel === 'warm') { if (body.heat === 'yes') sum += COST.ZONE_MISMATCH; if (body.cold === 'yes') sum -= COST.ZONE_PREFER; }
-    }
     return sum;
   }
 
-  return { pairCost, totalCost };
+  /** 한 자리에 한 학생이 앉을 때의 비용 (줄·앞자리 필요·몸 특징·바람 자리) */
+  function seatCost(seatId, sid) {
+    if (!sid) return 0;
+    const row = rowOf(seatId);
+    let sum = 0.8 * row;                                   // 학생이 자리보다 적으면 앞줄부터
+    if (c.needsFront(sid)) sum += teacherFrontCost(row);   // ③ 앞자리 필요 학생 (교사 지정) — 지난 짝꿍 반복보다 먼저
+    // ⑤ 학생이 고른 몸 특징: 눈이 나쁘면 앞줄, 키가 작으면 앞쪽·크면 뒤쪽을 조금 선호.
+    //    다양한 짝(지난 짝꿍 페널티 80)보다 낮게 둬서, 지난 자리표가 없는 처음 자리표에서만 자연히 앞줄로 가요
+    const body = c.body(sid);
+    if (body.sight === 'poor') sum += sightCost(row);
+    if (body.height === 'short') sum += row * 1.5;
+    if (body.height === 'tall') sum += (c.blockRows(seatId) - 1 - row) * 1.5;
+    // 냉난방기 바람 자리: 추위를 잘 타면 냉방 바람을, 더위를 잘 타면 난방 바람을 피하고 반대쪽은 조금 선호
+    const feel = c.zoneFeel(seatId);
+    if (feel === 'cool') { if (body.cold === 'yes') sum += COST.ZONE_MISMATCH; if (body.heat === 'yes') sum -= COST.ZONE_PREFER; }
+    if (feel === 'warm') { if (body.heat === 'yes') sum += COST.ZONE_MISMATCH; if (body.cold === 'yes') sum -= COST.ZONE_PREFER; }
+    return sum;
+  }
+
+  /**
+   * 자리표 전체의 비용. assign: seatId → studentId | null, pairs: neighborPairs(layout), groups: 분단별 좌석 id 묶음(같은 분단 반복 페널티용, 없으면 생략)
+   */
+  function totalCost(assign, pairs, groups = null) {
+    let sum = 0;
+    for (const [x, y, w] of pairs) {
+      const a = assign[x];
+      const b = assign[y];
+      if (a && b) sum += w * pairCost(a, b);
+    }
+    sum += varietyCost(assign, pairs, groups);
+    for (const [seatId, sid] of Object.entries(assign)) if (sid) sum += seatCost(seatId, sid);
+    return sum;
+  }
+
+  return { pairCost, seatCost, varietyCost, totalCost };
 }

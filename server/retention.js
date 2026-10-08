@@ -1,6 +1,5 @@
 // 데이터 보관 정책: 회차(조사) 응답은 마감 뒤 14개월이 지나면 자동 삭제됩니다.
-// 1인 1역 달별 기록(roleHistory)과 보관된 지난 자리표(seatingHistory)도 같은 기간이 지나면 지웁니다.
-import { makeRound, monthName } from './rounds.js';
+import { makeRound, monthName, ensureRounds } from './rounds.js';
 
 export const RETENTION_MONTHS = Number.parseInt(process.env.RETENTION_MONTHS, 10) || 14;
 export const WARN_DAYS = 60;
@@ -24,10 +23,13 @@ export function roundLastActivity(round) {
   for (const sub of Object.values(round.submissions || {})) bump(sub?.submittedAt);
   for (const p of Object.values(round.profiles || {})) bump(p?.updatedAt);
   for (const a of Object.values(round.applications || {})) bump(a?.updatedAt);
+  for (const draft of Object.values(round.studentDrafts || {})) bump(draft?.updatedAt);
   bump(round.roleAssignment?.createdAt);
   bump(round.roleAssignment?.updatedAt);
   bump(round.roleAssignment?.publishedAt);
   bump(round.aiAnalysis?.createdAt);
+  bump(round.aiSeating?.createdAt);
+  bump(round.seating?.updatedAt);
   return latest;
 }
 
@@ -74,12 +76,8 @@ export function purgeExpired(room, now = new Date(), months = RETENTION_MONTHS) 
   // 1인 1역 달별 기록도 같은 기간이 지나면 지웁니다. (저장 시각이 없는 옛 기록은 그대로 둠)
   const history = room.roleHistory || [];
   const keptHistory = history.filter((h) => !(h?.updatedAt && h.updatedAt < cutoff));
-  let historyChanged = keptHistory.length !== history.length;
+  const historyChanged = keptHistory.length !== history.length;
   if (historyChanged) room.roleHistory = keptHistory;
-  // 보관된 지난 자리표(seatingHistory)도 보관 시각(savedAt)이 같은 기간을 넘기면 지웁니다. 자리표 보관은 교실 활동으로 세지 않아요.
-  const seatHistory = room.seatingHistory || [];
-  const keptSeatHistory = seatHistory.filter((h) => !(h?.savedAt && h.savedAt < cutoff));
-  if (keptSeatHistory.length !== seatHistory.length) { room.seatingHistory = keptSeatHistory; historyChanged = true; }
   if (!removed.length) {
     const seatingChanged = dropStaleAiSeating(room);   // 회차가 이미 없는 배정안이 남아 있으면 정리
     return { changed: historyChanged || seatingChanged, deleteRoom: false, removed };
@@ -123,7 +121,7 @@ export async function purgeAll(store, now = new Date()) {
   const rooms = await store.listRooms();
   for (const snapshot of rooms) {
     result.rooms++;
-    const probe = purgeExpired(structuredClone(snapshot), now);
+    const probe = purgeExpired(ensureRounds(structuredClone(snapshot)), now);
     if (!probe.changed) continue;
     if (probe.deleteRoom) {
       await store.deleteRoom(snapshot.id);
@@ -132,7 +130,7 @@ export async function purgeAll(store, now = new Date()) {
       continue;
     }
     let removedCount = 0;
-    await store.updateRoom(snapshot.id, (fresh) => { removedCount = purgeExpired(fresh, now).removed.length; });
+    await store.updateRoom(snapshot.id, (fresh) => { ensureRounds(fresh); removedCount = purgeExpired(fresh, now).removed.length; });
     result.deletedRounds += removedCount;
   }
   return result;
