@@ -136,6 +136,13 @@ test('cached auto-assignment objective matches direct calculation across candida
     const blockRowsOf=()=>3;
     const zoneFeel=(id)=>id==='b0-r0-c0'?'cool':id==='b0-r2-c0'?'warm':null;
     const pairCost=(a,b)=>!a||!b?0:((a==='a'&&b==='b')||(a==='b'&&b==='a'))?400:-8;
+    // seats.js 는 비용 모델(seat-cost.js)에 위임하므로 자리 비용과 다양한 짝 비용을 흉내 내요
+    const costModel={
+      seatCost:(seatId,sid)=>{ if(!sid) return 0; const row=rowOf(seatId); let sum=0.8*row; if(needsFront(sid)) sum+=row<FRONT_ROWS?row*8:60+row*30;
+        const body=bodyOf(sid); if(body.sight==='poor') sum+=row<FRONT_ROWS?row*2:12+row*5; if(body.height==='short') sum+=row*1.5; if(body.height==='tall') sum+=(blockRowsOf(seatId)-1-row)*1.5;
+        const feel=zoneFeel(seatId); if(feel==='cool'){ if(body.cold==='yes') sum+=25; if(body.heat==='yes') sum-=6; } if(feel==='warm'){ if(body.heat==='yes') sum+=25; if(body.cold==='yes') sum-=6; } return sum; },
+      varietyCost:(assign,pairs)=>pairs.reduce((n,[x,y])=>n+(assign[x]&&assign[y]?1:0),0),
+    };
     ${costs}
     return {singleSeatCost,totalCost,pairCost};
   `)();

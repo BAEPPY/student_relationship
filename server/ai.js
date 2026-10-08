@@ -9,9 +9,10 @@
 // aiAssignRoles({ ai, students, roles, applications, excluded, relations, apartPairs, profiles, previousRoles })
 //   → { assignments: { [roleId]: [studentId] }, explanations: { [studentId]: string }, notes: string }
 // aiAssignSeats({ ai, students, relations, pairs, teacherNotes, profiles, bodies, roles, roleAssignment, aiAnalysis,
-//                 layout, fixedSeats, zones, climate, roleSeats, options, isolated })
+//                 layout, fixedSeats, zones, climate, roleSeats, options, isolated, pastDeskmates })
 //   → { pairs: [{ a, b, probability(2~97), reason }], assignment: { [seatId]: studentId }, explanations: { [studentId]: string }, notes, truncated }
 //   (buildSeatingPrompt(input) 은 같은 입력으로 { system, user, schema, pseudo, truncated } 를 만듭니다)
+//   pastDeskmates: [{ roundName, pairs: [[sidA, sidB], …] }] 지난 회차 자리표의 짝꿍 (최근 순, 최대 3개). options.variety 가 'off' 면 프롬프트에 넣지 않아요.
 //
 // 개인정보: 학생 실명·id 는 절대 API 로 보내지 않습니다. 모든 학생은 S1, S2… 가명으로 바꾸고,
 // 자유 서술(이유, 메모, 짝 희망 등)에 들어 있는 반 친구 이름도 가명으로 바꾼 뒤 보냅니다.
@@ -727,15 +728,18 @@ const SEATING_SYSTEM = [
   '당신은 한국 초등학교 담임 선생님의 교실 자리 배정을 돕는 도우미예요.',
   '학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 좌석 id, 역할 id([대괄호] 안의 값)만 쓰세요.',
   '',
-  '배정 규칙 (위에 있을수록 중요해요):',
+  '우선순위 (위에 있을수록 중요해요): ① 📌 고정·🎒 역할 자리·선생님 규칙(떨어뜨리기/가까이) ② 안 좋은 사이 떨어뜨리기(관심 점수 높을수록 멀리) ③ 선생님이 표시한 앞자리 필요 ④ 지난 회차 자리표와 다른 짝꿍(다양한 짝) ⑤ 학생 몸 특징(시력·추위·더위·키)은 그 다음 — 지난 자리표가 없는 처음 자리표면 시력 나쁜 학생을 앞줄에.',
+  '',
+  '배정 규칙:',
   '1. 명단의 모든 학생을 정확히 한 자리에 앉히고, 한 자리에는 한 명만 앉혀요. 좌석은 "좌석 목록"에 있는 id 만 그대로 써요. 학생이 자리보다 많으면 남는 학생을 notes 에 적어요.',
   '2. 📌 고정 자리에는 적힌 학생을 그대로 두고, 🎒 역할 자리에는 그 역할의 담당 학생을 앉혀요. 담당이 없으면 보통 자리처럼 써요.',
   '3. 선생님 규칙 "떨어뜨리기" 두 학생은 이웃 자리(짝꿍·앞뒤·대각선·통로 건너)에 두지 않아요. "가까이 앉히기" 두 학생은 이웃 자리에 앉혀요 (짝꿍이 가장 좋아요).',
   '4. 안 좋은 사이는 관심 점수가 높을수록 더 멀리 떨어뜨려요. 서로 안 좋은 사이거나 관심 점수가 50/100점 이상인 쌍은 이웃 자리에 두지 않아요.',
-  `5. 앞자리 필요(선생님 지정)·👓 눈 나쁨 학생은 앞줄(1~${FRONT_ROWS}번째 줄)에, 📏 키 큰 학생은 뒤쪽에 앉혀요.`,
-  '6. 냉방 중에는 ❄️ 추위를 잘 타는 학생을, 난방 중에는 🔥 더위를 잘 타는 학생을 🌀 바람 자리에 앉히지 않아요. 냉난방기가 꺼져 있으면 바람 자리는 신경 쓰지 않아요.',
-  '7. 고립 위험(좋은 사이로 지목한 학생이 없음) 학생의 이웃에는 그 학생을 좋은 사이로 표시한 학생이나 성향이 잘 맞는 학생을 앉혀요.',
-  '8. "친한 친구끼리" 옵션을 따르고, 성향 설문(조용함·말이 많음 등)을 참고해 짝꿍이 서로 도움이 되게 해요. 짝에 대한 생각은 참고만 해요.',
+  `5. 앞자리 필요(선생님 지정) 학생은 앞줄(1~${FRONT_ROWS}번째 줄)에 앉혀요.`,
+  '6. 다양한 짝: "지난 자리표의 짝꿍"에 적힌 두 학생은 다시 짝꿍으로 앉히지 않아요 (최근 회차일수록 더 중요). 그 두 학생을 앞뒤·대각선·통로 건너 이웃에 두는 것은 약하게 피하고, 같은 분단에 두는 것은 그보다 더 약하게만 피해요(다른 조건이 같을 때만). 그 섹션이 없거나 비어 있으면 신경 쓰지 않아요.',
+  `7. 학생 몸 특징은 그 다음이에요: 👓 눈 나쁨은 앞줄(1~${FRONT_ROWS}번째 줄), 📏 키 큼은 뒤쪽, 📏 키 작음은 앞쪽을 선호하고, 냉방 중에는 ❄️ 추위를 잘 타는 학생을, 난방 중에는 🔥 더위를 잘 타는 학생을 🌀 바람 자리에 앉히지 않아요 (냉난방기가 꺼져 있으면 바람 자리는 신경 쓰지 않아요). 지난 자리표가 없는 처음 자리표면 눈 나쁜 학생을 꼭 앞줄에 앉히고, 지난 자리표가 있으면 다양한 짝(6)을 먼저 지키되 눈 나쁜 학생은 앞줄에 가깝게 두려고 해요.`,
+  '8. 고립 위험(좋은 사이로 지목한 학생이 없음) 학생의 이웃에는 그 학생을 좋은 사이로 표시한 학생이나 성향이 잘 맞는 학생을 앉혀요.',
+  '9. "친한 친구끼리" 옵션을 따르고, 성향 설문(조용함·말이 많음 등)을 참고해 짝꿍이 서로 도움이 되게 해요. 짝에 대한 생각은 참고만 해요.',
   DATA_NOT_INSTRUCTIONS,
   '- "규칙 기반 관심 점수"와 "지난 AI 관계 분석"은 참고값이에요. 실제 발생 확률이나 학생에 대한 진단이 아니며, % 또는 확률로 표현하지 마세요. 직접 응답과 모델의 추론을 구분하고 자료 부족을 밝혀요.',
   '',
@@ -811,6 +815,28 @@ function bodyLines(bodies, pseudo) {
   return lines;
 }
 
+/** 지난 회차 자리표의 짝꿍: 회차마다 한 줄 "- 2026년 9월: S1·S2, S3·S4" (최근 순 최대 3개). 회차 이름 속 실명도 가명으로. */
+function pastDeskmateLines(pastDeskmates, pseudo) {
+  const lines = [];
+  for (const entry of Array.isArray(pastDeskmates) ? pastDeskmates : []) {
+    if (lines.length >= 3) break;
+    const pairs = [];
+    const seen = new Set();
+    for (const p of Array.isArray(entry?.pairs) ? entry.pairs : []) {
+      const a = pseudo.label(p?.[0]);
+      const b = pseudo.label(p?.[1]);
+      if (!a || !b || a === b) continue;
+      const key = [a, b].sort().join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push(`${a}·${b}`);
+    }
+    if (!pairs.length) continue;
+    lines.push(`- ${clip(pseudo.redact(entry?.roundName || '지난 자리표'), 40)}: ${pairs.join(', ')}`);
+  }
+  return lines;
+}
+
 /** 지난 AI 관계 분석의 쌍 (위험도·갈등 성격·분석). 글 속 실명은 가명으로. */
 function aiAnalysisLines(aiAnalysis, pseudo) {
   const lines = [];
@@ -829,18 +855,22 @@ function aiAnalysisLines(aiAnalysis, pseudo) {
 }
 
 /** 자리 배정용 system/user 프롬프트와 스키마. 실명·학생 id 는 포함되지 않습니다. */
-export function buildSeatingPrompt({ students, relations, pairs, teacherNotes, profiles, bodies, roles, roleAssignment, aiAnalysis, layout, fixedSeats, zones, climate, roleSeats, options, isolated } = {}) {
+export function buildSeatingPrompt({ students, relations, pairs, teacherNotes, profiles, bodies, roles, roleAssignment, aiAnalysis, layout, fixedSeats, zones, climate, roleSeats, options, isolated, pastDeskmates } = {}) {
   const pseudo = pseudonymize(students);
   const roleList = roles || [];
   const safeLayout = { blocks: Array.isArray(layout?.blocks) ? layout.blocks : [] };
   const badRelations = (relations || []).filter((r) => r.type === 'bad');
   const goodRelations = (relations || []).filter((r) => r.type === 'good');
   const isolatedLines = (Array.isArray(isolated) ? isolated : []).map((sid) => pseudo.label(sid)).filter(Boolean).map((lab) => `- ${lab}`);
+  const variety = options?.variety !== 'off';   // 다양한 짝: 지난 회차 자리표와 같은 짝꿍 피하기 (기본 켜짐)
   const settings = [
     `자리 수: ${layoutSeats(safeLayout).length}개, 학생 수: ${pseudo.roster.length}명`,
     `친한 친구(좋은 사이)끼리: ${FRIENDS_KO[options?.friends] || FRIENDS_KO.any}`,
+    `지난 자리와 다른 짝(다양한 짝): ${variety ? '우선' : '상관없음'}`,
     `냉난방기: ${CLIMATE_KO[climate] || CLIMATE_KO.off}`,
   ];
+  // 지난 회차 자리표의 짝꿍 (다양한 짝이 켜져 있을 때만). 없으면 처음 자리표라고 알려 몸 특징을 그대로 반영하게 해요
+  const pastSection = variety ? [section('지난 자리표의 짝꿍 (다양한 짝: 같은 짝은 피하기)', pastDeskmateLines(pastDeskmates, pseudo), '(없음 · 처음 자리표라 몸 특징을 그대로 반영해요)')] : [];
 
   // 규칙 기반 추정은 응답에서 계산한 파생값이라 가능성 높은 순으로 상위 몇 쌍만 넣어요 (큰 반에서 학생이 직접 적은 자료를 밀어내지 않게)
   const topPairs = [...(pairs || [])].sort((x, y) => (Number(y.probability) || 0) - (Number(x.probability) || 0)).slice(0, MAX_CONFLICT_PAIRS);
@@ -856,6 +886,7 @@ export function buildSeatingPrompt({ students, relations, pairs, teacherNotes, p
     section('선생님 규칙 (떨어뜨리기 / 가까이 앉히기)', teacherRuleLines(teacherNotes, pseudo, { together: '가까이 앉히기' })),
     section('앞자리 필요 · 선생님 메모', teacherMemoLines(teacherNotes, pseudo)),
     section('1인 1역 배정 (역할 id · 이름: 담당)', roleAssignmentLines(roleList, roleAssignment, pseudo)),
+    ...pastSection,
     section('학생 몸 특징 (학생이 직접 고름)', bodyLines(bodies, pseudo)),
     section('고립 위험 학생 (좋은 사이로 지목한 학생이 없음)', isolatedLines),
     section('안 좋은 사이 (학생이 표시 · 방향 · 이유)', relationLines(badRelations, pseudo)),

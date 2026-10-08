@@ -12,7 +12,7 @@ import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeati
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
 import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles, aiAssignSeats } from './ai.js';
-import { repairSeating } from './seating.js';
+import { repairSeating, deskmatePairs } from './seating.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
@@ -232,12 +232,29 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       catalog: REASON_CATALOG,
       notice: storageNotice,
       ...seatingView(room, round),
+      pastSeatings: pastSeatings(room, round),   // 지난 회차의 저장 자리표 (다양한 짝: 같은 짝꿍 피하기용, 최신이 앞)
       aiSeating: aiSeatingView(room, round),
       teacherNotes: room.teacherNotes || { students: {}, rules: [] },
       followupSummary: followupSummary(room),
       retention: retentionView(room),
       ...rolesView(room, round),
     };
+  }
+
+  /**
+   * 지난 회차(지금 보는 회차보다 앞선 회차)의 저장된 자리표. 최신 회차가 앞, 최대 limit 개.
+   * 자동 배정과 AI 배정이 "지난 자리표와 같은 짝꿍"을 피하는 데 써요. 비어 있는 자리표는 뺍니다.
+   */
+  function pastSeatings(room, round, limit = 6) {
+    const rounds = room.rounds || [];
+    const idx = rounds.findIndex((r) => r.id === round.id);
+    const out = [];
+    for (let i = (idx < 0 ? rounds.length : idx) - 1; i >= 0 && out.length < limit; i--) {
+      const seating = seatingView(room, rounds[i]).seating;
+      if (!seating?.layout?.blocks?.length || !Object.keys(seating.seats || {}).length) continue;
+      out.push({ roundId: rounds[i].id, roundName: rounds[i].name, savedAt: seating.updatedAt || null, layout: seating.layout, seats: seating.seats });
+    }
+    return out;
   }
 
   function aiAnalysisView(room, round) {
@@ -681,7 +698,12 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       seats[seatId] = studentId;
     }
     const pinned = [...new Set((Array.isArray(body.pinned) ? body.pinned : []).filter((id) => validSeat.test(id)))];
-    const options = { friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any' };
+    // options.variety: 지난 회차 자리표와 다른 짝을 우선할지 ('on' 기본) — 자동 배정(화면)과 AI 배정이 같이 씀
+    if (body.options?.variety !== undefined && !['on', 'off'].includes(body.options.variety)) throw bad('지난 자리와 다른 짝 옵션은 우선(on) 또는 상관없음(off)이어야 해요.');
+    const options = {
+      friends: ['near', 'any', 'apart'].includes(body.options?.friends) ? body.options.friends : 'any',
+      variety: body.options?.variety === 'off' ? 'off' : 'on',
+    };
     // 자리 환경: 냉난방기 바람이 닿는 자리(zones: seatId → 'ac') 와 지금 냉방/난방 중인지(climate)
     const zones = {};
     for (const [seatId, zone] of Object.entries(body.zones || {})) {
@@ -1156,6 +1178,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const ai = makeAi();
     const inputConfig = { layout, fixedSeats, zones, climate, roleSeats, options };
     const provenance = captureAnalysisContext(found, round, { kind: 'seating', extra: inputConfig });
+    // 지난 회차 자리표의 짝꿍 (다양한 짝): 최근 3개 회차, 짝꿍이 하나도 없는 자리표는 뺌
+    const pastDeskmates = pastSeatings(found, round, 3)
+      .map((p) => ({ roundName: p.roundName || '지난 자리표', pairs: deskmatePairs(p.layout, p.seats) }))
+      .filter((p) => p.pairs.length);
     const result = await aiAssignSeats({
       ai,
       students,
@@ -1174,6 +1200,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       climate,
       roleSeats,
       options,
+      pastDeskmates,
     });
     const repaired = repairSeating({ assignment: result.assignment, students, layout, fixedSeats, roleSeats, roleAssignment });
     const room = await mutateRoom(found, (room) => {
