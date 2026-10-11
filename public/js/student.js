@@ -21,8 +21,13 @@ let draftStatus = null;
 let submitting = false;
 let refreshPromise = null;
 let closeRelationEditor = null;
+let closedModal = null;     // 열려 있는 마감 창 { close, focus } (선생님이 조사를 마감했을 때)
+let pollTimer = null;       // 화면이 보이는 동안 마감 여부를 주기적으로 확인하는 타이머
 
 const PARTNER_MAX = 3;      // 짝에게 바라는 점은 3개까지
+const POLL_MS = 60000;      // 화면을 켜 둔 채로 있어도 1분 안에 마감 창이 뜨게 확인하는 간격
+const CLOSED_TITLE = '이번 달은 마감되었습니다! 🙏';
+const REOPENED_TEXT = '선생님이 조사를 다시 열었어. 이어서 할 수 있어.';
 const REASON_MIN = 10;      // 하고 싶은 이유 최소 글자 수
 const TEXT_MAX = 600;       // 지원서 글 최대 글자 수 (서버와 동일)
 const PARTNER_TEXT_MAX = 300;
@@ -144,16 +149,20 @@ async function refreshStudent({ explicit = false } = {}) {
         stepError = '새 조사가 시작됐어. 이전 조사에서 쓴 내용을 새 조사로 옮기지 않았어.';
         render();
         toast(stepError, 5500);
+        syncClosedModal();
         return;
       }
-      if ((next.draft?.revision || 0) < store.getState().revision) return;
+      // 임시 저장 내용을 들여오지 못하는 상태여도 마감·다시 열림만은 화면에 반영합니다.
+      if ((next.draft?.revision || 0) < store.getState().revision) { applyLockChange(next); return; }
       const previous = store.getState();
       const changed = store.reconcile(next.draft);
       if (store.getState().conflict) {
-        if (!explicit || !confirm('다른 화면에서 저장했거나 선생님이 응답을 초기화했어. 지금 화면의 임시 내용을 바꾸고 최신 내용으로 불러올까?')) return;
+        if (!explicit || !confirm('다른 화면에서 저장했거나 선생님이 응답을 초기화했어. 지금 화면의 임시 내용을 바꾸고 최신 내용으로 불러올까?')) { applyLockChange(next); return; }
         store.adopt(next.draft);
       }
       const lockedChanged = Boolean(next.room.locked) !== Boolean(data.room.locked);
+      const openerId = lockedChanged ? document.activeElement?.id || null : null;   // 다시 그리기 전에 기억해 두고, 마감 창을 닫으면 그 자리로 포커스 복원
+      if (lockedChanged && !next.room.locked) stepError = null;   // 다시 열렸으면 마감 안내 말풍선은 지움
       data = next;
       // Same-revision local edits, including an open relation editor, remain untouched.
       if (changed || previous.conflict || (previous.revision !== store.getState().revision && !store.getState().pending)) {
@@ -164,7 +173,8 @@ async function refreshStudent({ explicit = false } = {}) {
         closeRelationEditor?.();
         render();
       }
-      if (explicit) toast(data.room.locked ? '조사가 마감됐어. 쓴 내용은 임시 저장해 둘게.' : '최신 상태를 확인했어. 이어서 쓸 수 있어.');
+      if (lockedChanged) syncClosedModal({ announce: true, openerId });
+      else if (explicit) toast(data.room.locked ? '조사가 마감됐어. 쓴 내용은 임시 저장해 둘게.' : '최신 상태를 확인했어. 이어서 쓸 수 있어.');
     } catch (err) {
       if (explicit) toast(`상태를 확인하지 못했어. ${err.message}`, 4500);
     } finally {
@@ -290,10 +300,13 @@ function initDrafts(which = 'all') {
   }
 }
 async function reloadAfterRoundChange(status) {
+  // 폴링·visibilitychange 로 먼저 시작된 확인은 마감 '전' 응답일 수 있으니 끝까지 기다린 뒤 지금 상태를 새로 받아 와요
+  if (refreshPromise) await refreshPromise.catch(() => {});
   await refreshStudent();
   if (status === 403 && data.room.locked) {
     stepError = '선생님이 조사를 마감했어. 쓴 내용은 임시 저장돼 있고, 다시 열리면 이어서 제출할 수 있어.';
     render();
+    openClosedModal();  // 제출하려다 마감을 알게 된 것도 새 사건이라 (닫아 둔 적이 있어도) 다시 띄움
   }
 }
 // 다시 그릴 때 키보드 포커스가 사라지지 않도록: 포커스된 요소를 data 속성으로 기억했다가 새 요소로 되돌려 줍니다.
@@ -1139,6 +1152,88 @@ function openEditor(id) {
   document.body.append(backdrop);
 }
 
+// ---------- 마감 창 ----------
+// 선생님이 조사를 마감하면 전체 화면 창으로 알립니다. 페이지를 처음 열 때, 확인 중에 마감으로 바뀐 때,
+// 제출이 403(마감)으로 막힌 때 띄우고, 학생이 닫으면 가만히 있는 동안은 다시 뜨지 않습니다.
+function openClosedModal({ openerId = null } = {}) {
+  if (closedModal) { closedModal.focus(); return; }
+  closeRelationEditor?.();
+  const opener = document.activeElement;
+  const restoreId = openerId || opener?.id || null;   // 다시 그려서 요소가 바뀌어도 같은 id 의 새 요소로 돌아가게
+  // id 가 없는 요소(성향 칩·단계 알약 등)는 data-* 속성 셀렉터로 기억해 두고, 그것도 없으면 늘 있는 요소로 돌아가요
+  const dataParts = opener && opener !== document.body ? Object.entries(opener.dataset || {}).map(([k, v]) => `[data-${k.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}="${CSS.escape(v)}"]`) : [];
+  const restoreSelector = dataParts.length ? `${opener.tagName.toLowerCase()}${dataParts.join('')}` : null;
+  const ok = el('button', { type: 'button', class: 'btn primary', id: 'closed-modal-ok', text: '확인 · 내가 낸 내용 보기', onClick: () => close() });
+  const modal = el('div', { class: 'modal closed-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'closed-modal-title', 'aria-describedby': 'closed-modal-desc', tabindex: '-1' }, [
+    el('div', { class: 'closed-emoji', 'aria-hidden': 'true', text: '🙏' }),
+    el('h2', { id: 'closed-modal-title', text: CLOSED_TITLE }),
+    el('p', { id: 'closed-modal-desc', text: `선생님이 ${data.round?.name || '이번'} 조사를 마감했어. 지금은 더 제출하거나 고칠 수 없고, 내가 낸 내용은 잘 저장돼 있어. 선생님이 다음 조사를 시작하면 다시 할 수 있어.` }),
+    ok,
+  ]);
+  const backdrop = el('div', { class: 'modal-backdrop closed-backdrop', id: 'closed-modal' }, [modal]);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  // Esc 로 닫고, Tab 은 창 안에서만 돌게 (간단한 포커스 트랩)
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = [...modal.querySelectorAll('button:not(:disabled), a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) { e.preventDefault(); modal.focus(); return; }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener('keydown', onKey);
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+    document.body.classList.remove('modal-open');
+    app.inert = false;
+    closedModal = null;
+    // 이전 포커스 복원: 다시 그려서 요소가 바뀌었으면 같은 id 의 새 요소로
+    const usable = (node) => node?.isConnected && node !== document.body && node !== document.documentElement && !node.disabled && typeof node.focus === 'function';
+    const candidates = [restoreId ? document.getElementById(restoreId) : null, restoreSelector ? app.querySelector(restoreSelector) : null, opener, app.querySelector('.step-pill.active'), document.getElementById('refresh-student')];
+    const restore = candidates.find(usable);
+    if (restore) restore.focus({ preventScroll: true });
+  }
+  closedModal = { close, focus: () => ok.focus() };
+  document.body.classList.add('modal-open');
+  app.inert = true;        // 뒤의 버튼이 눌리거나 포커스를 받지 않게
+  document.body.append(backdrop);
+  ok.focus();
+}
+function closeClosedModal() { closedModal?.close(); }
+// 마감 상태에 맞춰 창을 열거나 닫습니다. announce 면 다시 열렸을 때 토스트로 알리고,
+// openerId 는 다시 그리기 전에 포커스가 있던 요소의 id(창을 닫으면 그 자리로 돌아감)입니다.
+function syncClosedModal({ announce = false, openerId = null } = {}) {
+  if (data.room.locked) { openClosedModal({ openerId }); return; }
+  closeClosedModal();
+  if (announce) toast(REOPENED_TEXT, 4500);
+}
+// 임시 저장 충돌 등으로 최신 내용을 들여오지 못할 때도, 마감·다시 열림만은 화면에 반영합니다.
+function applyLockChange(next) {
+  if (Boolean(next.room.locked) === Boolean(data.room.locked)) return;
+  const openerId = document.activeElement?.id || null;
+  if (!next.room.locked) stepError = null;   // 다시 열렸으면 마감 안내 말풍선은 지움
+  data = next;
+  closeRelationEditor?.();
+  render();
+  syncClosedModal({ announce: true, openerId });
+}
+
+// ---------- 주기 확인 ----------
+// 화면이 보이는 동안 1분마다 마감 여부를 확인합니다. 숨겨지면 멈추고, 다시 보이면 visibilitychange 가 바로 확인한 뒤 다시 시작합니다.
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && !refreshPromise) void refreshStudent();
+  }, POLL_MS);
+}
+function stopPolling() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
 // ---------- 제출 ----------
 async function submit() {
   if (!canSubmit()) return;
@@ -1158,8 +1253,8 @@ async function submit() {
 for (const event of ['input', 'change', 'click']) app.addEventListener(event, captureDraft);
 function checkpoint() { captureDraft(); void draftStore?.flush({ keepalive: true }); }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') checkpoint();
-  else void refreshStudent();
+  if (document.visibilityState === 'hidden') { checkpoint(); stopPolling(); }
+  else { void refreshStudent(); startPolling(); }
 });
 window.addEventListener('pagehide', checkpoint);
 window.addEventListener('pageshow', (e) => { if (e.persisted) void refreshStudent(); });
@@ -1173,6 +1268,8 @@ window.addEventListener('beforeunload', (e) => {
   try {
     initializeStudent(await api(`/api/student/${encodeURIComponent(token)}`));
     render();
+    if (data.room.locked) openClosedModal();   // 처음 열 때부터 마감이면 바로 알림
+    if (document.visibilityState === 'visible') startPolling();
   } catch (err) {
     app.replaceChildren(el('section', { class: 'card' }, [
       el('h1', { text: '페이지를 열 수 없어요' }),

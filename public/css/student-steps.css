@@ -244,3 +244,29 @@ body.kid .wish-slot.stale { border-color: var(--kid-orange); }
   .draft-bar .btn-row { width: 100%; justify-content: flex-end; }
 }
 @media print { .draft-bar { display: none; } }
+
+/* ---------- 마감 창 (선생님이 조사를 마감했을 때 전체 화면으로 알림) ---------- */
+body.modal-open { overflow: hidden; }
+/* 관계 고르기 시트와 달리 모바일에서도 가운데 카드 */
+.modal-backdrop.closed-backdrop { align-items: center; justify-content: center; padding: 16px; z-index: 110; }
+body.kid .modal.closed-modal {
+  width: 100%; max-width: 440px; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px);
+  border-radius: 30px; padding: 30px 22px 24px; text-align: center;
+  border: 3px solid #fff; background: #fffdf9;
+  box-shadow: 0 2px 6px rgba(74, 59, 47, .08), 0 18px 40px rgba(74, 59, 47, .28);
+  animation: closed-pop .2s ease-out;
+}
+.closed-modal .closed-emoji { font-size: 60px; line-height: 1; margin: 0 0 12px; filter: drop-shadow(0 4px 6px rgba(74, 59, 47, .15)); }
+body.kid .closed-modal h2 { font-size: 25px; line-height: 1.3; margin: 0 0 10px; word-break: keep-all; color: var(--kid-brown); }
+.closed-modal p { margin: 0 0 20px; font-size: 16px; line-height: 1.6; color: #5a4632; word-break: keep-all; }
+body.kid .closed-modal .btn.primary { width: 100%; min-height: 56px; padding: 13px 20px; font-size: 19px; }
+body.kid .closed-modal .btn.primary:focus-visible { outline: 3px solid rgba(74, 59, 47, .4); outline-offset: 3px; }
+@keyframes closed-pop { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
+@media (max-width: 480px) {
+  body.kid .modal.closed-modal { padding: 26px 18px 20px; }
+  .closed-modal .closed-emoji { font-size: 52px; }
+  body.kid .closed-modal h2 { font-size: 22px; }
+  .closed-modal p { font-size: 15px; }
+}
+@media (prefers-reduced-motion: reduce) { body.kid .modal.closed-modal { animation: none; } }
+@media print { .closed-backdrop { display: none !important; } }
