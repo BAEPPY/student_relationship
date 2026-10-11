@@ -108,6 +108,7 @@ export const teacher = `<!doctype html>
   <title>선생님 페이지 · 학생 관계 마인드맵</title>
   <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/followups.css">
 </head>
 <body class="teacher">
   <header class="topbar">
@@ -174,6 +175,8 @@ export const print = `<!doctype html>
         <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
         <a class="btn small active" data-nav="print" target="_blank" href="#" aria-current="page">🖨️ QR 인쇄</a>
         <a class="btn small" data-nav="report" href="#">📑 보고서</a>
+        <a class="btn small" data-nav="groups" href="#">👥 모둠·짝</a>
+        <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
       </nav>
       <span class="spacer"></span>
       <button type="button" class="btn" id="toggle-links">링크 목록 보기</button>
@@ -231,6 +234,8 @@ export const seats = `<!doctype html>
         <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
         <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
         <a class="btn small" data-nav="report" href="#">📑 보고서</a>
+        <a class="btn small" data-nav="groups" href="#">👥 모둠·짝</a>
+        <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
       </nav>
     </div>
   </header>
@@ -264,6 +269,8 @@ export const roles = `<!doctype html>
         <a class="btn small green active" data-nav="roles" href="#" aria-current="page">🎒 1인 1역</a>
         <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
         <a class="btn small" data-nav="report" href="#">📑 보고서</a>
+        <a class="btn small" data-nav="groups" href="#">👥 모둠·짝</a>
+        <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
       </nav>
     </div>
   </header>
@@ -295,6 +302,8 @@ export const report = `<!doctype html>
         <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
         <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
         <a class="btn small active" data-nav="report" href="#" aria-current="page">📑 보고서</a>
+        <a class="btn small" data-nav="groups" href="#">👥 모둠·짝</a>
+        <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
       </nav>
       <span class="spacer"></span>
       <button type="button" class="btn primary" id="print-btn">🖨️ 인쇄 / PDF</button>
@@ -309,3 +318,38 @@ export const report = `<!doctype html>
 </body>
 </html>
 `;
+
+function teacherToolPage(title, script) {
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title} · 학생 관계 마인드맵</title>
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/${script}.css">
+</head>
+<body class="teacher ${script}-page">
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="badge blue">${title}</span>
+      <span class="spacer"></span>
+      <nav class="page-nav" aria-label="선생님 페이지 이동">
+        <a class="btn small" data-nav="dashboard" href="#">🗺️ 관계도</a>
+        <a class="btn small" data-nav="groups" href="#" ${script === 'groups' ? 'aria-current="page"' : ''}>👥 모둠·짝</a>
+        <a class="btn small" data-nav="followups" href="#" ${script === 'followups' ? 'aria-current="page"' : ''}>📝 상담·후속 확인</a>
+        <a class="btn small orange" data-nav="seats" href="#">🪑 자리 배정</a>
+        <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
+        <a class="btn small" data-nav="report" href="#">📑 보고서</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container" id="app"><div class="card" id="loading">불러오는 중…</div></main>
+  <script type="module" src="/js/${script}.js"></script>
+</body>
+</html>`;
+}
+export const groups = teacherToolPage('모둠·짝 편성', 'groups');
+export const followups = teacherToolPage('상담·후속 확인', 'followups');

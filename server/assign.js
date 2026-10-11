@@ -5,6 +5,7 @@
 //   정성 보너스  '하고 싶은 이유'가 60자 이상 +20, 30자 이상 +10
 //               '우리 반에 도움 되는 점'을 적으면 +5, '나에게 도움 되는 점'을 적으면 +5
 //   역할 이해    이유에 역할 이름·설명과 겹치는 낱말(한글 2자 이상, 조사·흔한 말 제외)이 있으면 +5
+//   선택 사항    balancePriority가 있으면 확인된 학기 희망 외 배정을 참고해 지망한 역할에만 최대 +20
 // ■ 감점 (점수에서 뺌)
 //   사이가 안 좋은 두 학생(한쪽이라도 '안 좋은 사이'로 표시) 또는 선생님이 떨어뜨리기로 한 쌍이
 //   같은 역할(정원 2명 이상)에 함께 들어가면 쌍마다 −80
@@ -196,6 +197,12 @@ function buildProblem(input = {}) {
   for (const p of Array.isArray(input.apartPairs) ? input.apartPairs : []) if (Array.isArray(p) && p.length >= 2) addPair(p[0], p[1]);
 
   const apps = new Map();
+  const balancePriority = new Map();
+  for (const s of students) {
+    const value = input.balancePriority?.[s.id];
+    const bonus = Math.max(0, Math.min(20, Number(value?.bonus) || 0));
+    if (bonus) balancePriority.set(s.id, { ...value, bonus });
+  }
   const applicants = new Map(roles.map((r) => [r.id, 0]));
   const scores = new Map();
   for (const s of students) {
@@ -211,7 +218,7 @@ function buildProblem(input = {}) {
       seenRoles.add(roleId);
       const detail = scoreApplication(i, c, role);
       const isExcluded = Boolean(excluded.get(s.id)?.has(roleId));
-      choices.push({ roleId, index: i, score: detail.score, detail, excluded: isExcluded });
+      choices.push({ roleId, index: i, score: detail.score + (balancePriority.get(s.id)?.bonus || 0), detail, excluded: isExcluded });
       if (!isExcluded) applicants.set(roleId, applicants.get(roleId) + 1);
     });
     if (!choices.length) continue;
@@ -220,7 +227,7 @@ function buildProblem(input = {}) {
     scores.set(s.id, new Map(valid.map((c) => [c.roleId, c])));
   }
 
-  return { students, studentIndex, roles, roleIndex, excluded, conflicts, apps, applicants, scores };
+  return { students, studentIndex, roles, roleIndex, excluded, conflicts, apps, applicants, scores, balancePriority };
 }
 
 // ---------- 상태 ----------
@@ -544,6 +551,8 @@ function buildResult(P, state, { explanations: previous = {}, keep = new Set(), 
   for (const s of P.students) {
     const prev = previous?.[s.id];
     explanations[s.id] = keep.has(s.id) && typeof prev === 'string' && prev.trim() ? prev : explain(P, state, s.id);
+    const balance = P.balancePriority.get(s.id);
+    if (balance) explanations[s.id] += ` · ${balance.semesterLabel || '선택 학기'} 희망 외 배정 ${balance.nonWishCount || 0}회(최근 연속 ${balance.consecutiveNonWishCount || 0}회)를 희망 역할 배정에서 추가로 고려했어요. 정원·제외 역할은 지키고 친구 관계도 함께 고려해요.`;
     const app = P.apps.get(s.id);
     if (!app) stats.noApplication++;
     const roleId = state.roleOf.get(s.id);

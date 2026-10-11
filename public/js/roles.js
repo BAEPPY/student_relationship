@@ -1,5 +1,6 @@
 // 선생님 1인 1역 페이지: 역할 목록 · 지난달 현황 · 지원 현황 · 자동 배정/수정/확정 · 내보내기
 import { api, el, toast, setChildren, fmtDate, copyText, setupPageNav } from './common.js';
+import { renderRoleBalance } from './role-balance.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -19,7 +20,8 @@ const MANUAL_EXPLANATION = '직접 옮김';
 let state = null;                 // 교사 API 응답 (teacherView)
 let badPairs = new Set();         // 'a|b' (정렬) — 안 좋은 사이 표시가 있는 쌍
 const ui = {
-  open: { roles: true, history: true, apps: true, board: true, export: true },
+  open: { roles: true, history: true, balance: true, apps: true, board: true, export: true },
+  balance: { semester: null, summary: null, busy: false, request: 0, preference: false },
   roles: { draft: [], dirty: false, notice: null, busy: false },
   export: { reasons: false },
   history: { month: null, text: '', preview: null, expanded: new Set(), busy: false, notice: null },
@@ -58,6 +60,13 @@ function input(tag, attrs, value, onInput) {
 
 // ---------- 데이터 ----------
 function afterState() {
+  // 저장/공개 뒤에는 그 이전에 시작한 학기 조회가 새 집계를 덮어쓰지 않게 합니다.
+  ui.balance.request++;
+  ui.balance.busy = false;
+  if (!ui.balance.semester || state.roleBalance?.semester?.id === ui.balance.semester) {
+    ui.balance.summary = state.roleBalance || null;
+    ui.balance.semester = state.roleBalance?.semester?.id || ui.balance.semester;
+  }
   buildRelations();
   if (!ui.roles.dirty) ui.roles.draft = state.roles.map((r) => ({ ...r }));
   if (ui.history.month === null) ui.history.month = prevMonthName(state.round.name);
@@ -93,6 +102,28 @@ async function applyState(next) {
   state = (!state || next.round?.id === state.round?.id) ? next : await api(dataUrl);
   afterState();
   renderAll();
+  if (ui.balance.semester && state.roleBalance?.semester?.id !== ui.balance.semester) await loadRoleBalance(ui.balance.semester);
+}
+
+async function loadRoleBalance(semester) {
+  const request = ++ui.balance.request;
+  const roundId = state.round.id;
+  ui.balance.busy = true;
+  renderAll();
+  try {
+    const next = await api(`${base}/roles/balance?round=${encodeURIComponent(roundId)}&semester=${encodeURIComponent(semester)}`);
+    if (request !== ui.balance.request || state.round.id !== roundId) return;
+    ui.balance.summary = next.roleBalance;
+    ui.balance.semester = next.roleBalance.semester.id;
+  } catch (error) {
+    if (request === ui.balance.request) toast(error.message, 4000);
+  } finally {
+    if (request === ui.balance.request) { ui.balance.busy = false; renderAll(); }
+  }
+}
+
+function renderBalance() {
+  return sectionCard('balance', '학기 누적 역할 배정 균형', '확정한 기록으로 역할 경험과 희망 반영을 살펴봐요', () => [renderRoleBalance(ui.balance.summary, { busy: ui.balance.busy || Boolean(ui.board.busy), onSemesterChange: loadRoleBalance })], { id: 'role-balance-card', cls: 'no-print' });
 }
 
 async function action(promise, okMessage, onSuccess) {
@@ -112,8 +143,8 @@ async function action(promise, okMessage, onSuccess) {
 function renderAll() {
   const y = window.scrollY;
   const sections = state.roles.length
-    ? [renderHeader(), renderRoles(), renderHistory(), renderApplications(), renderBoard(), renderExport()]
-    : [renderHeader(), renderOnboarding(), renderRoles()];
+    ? [renderHeader(), renderRoles(), renderHistory(), renderBalance(), renderApplications(), renderBoard(), renderExport()]
+    : [renderHeader(), renderOnboarding(), renderRoles(), renderBalance()];
   setChildren(app, ...sections);
   window.scrollTo(0, y);
 }
@@ -763,14 +794,15 @@ function slotChip(sid, roleId) {
 }
 
 async function runAssign(method, seed) {
-  if (ui.board.busy) return;
+  if (ui.board.busy || ui.balance.busy) return;
+  if (method === 'ai' && ui.balance.preference) return toast('학기 균형 우선 고려는 규칙 배정에서만 지원해요. AI 배정을 쓰려면 먼저 체크를 해제해 주세요.', 4000);
   if (method === 'ai' && !state.ai?.enabled) return toast('서버에 ANTHROPIC_API_KEY 를 설정하면 쓸 수 있어요.', 4000);
   if (state.roleAssignment?.published && !confirm('이미 확정·공개된 배정이 있어요. 새로 배정하면 공개가 취소되고 초안으로 바뀌어요. 계속할까요?')) return;
   if (!state.roleAssignment?.published && ui.board.dirty && !confirm('수정 중인 배정이 있어요. 자동 배정 결과로 바꿀까요?')) return;
   ui.board.busy = method;
   renderAll();
   try {
-    const next = await api(`${base}/roles/assign`, { method: 'POST', body: { method, roundId: state.round.id, seed } });
+    const next = await api(`${base}/roles/assign`, { method: 'POST', body: { method, roundId: state.round.id, seed, balancePreference: method === 'rules' && ui.balance.preference, semester: ui.balance.semester || undefined } });
     ui.board.seed = seed;
     ui.board.dirty = false;
     ui.board.selected = null;
@@ -846,10 +878,14 @@ function renderBoard() {
   const statTile = (label, value, color) => el('div', { class: 'stat' }, [el('div', { class: 'label', text: label }), el('div', { class: 'value', text: `${value}명`, style: color ? { color } : null })]);
 
   const body = () => [
+    el('div', { class: 'role-balance-preference no-print' }, [
+      el('label', {}, [el('input', { type: 'checkbox', checked: ui.balance.preference ? true : null, disabled: busy || ui.balance.busy ? true : null, onChange: (event) => { ui.balance.preference = event.target.checked; renderAll(); } }), ' 희망 역할을 못 맡은 학생 우선 고려']),
+      el('div', { class: 'muted', text: `${ui.balance.summary?.semester?.label || '선택 학기'}의 이번 회차 이전에 희망 역할을 맡지 못했던 기록을 추가로 고려해요. 자료 없는 기록은 제외해요. 규칙 배정에만 적용하며 정원·지난달 제외 규칙은 지키고 친구 관계도 함께 고려해요.` }),
+    ]),
     el('div', { class: 'board-toolbar no-print' }, [
-      el('button', { type: 'button', class: 'btn primary', text: '규칙 배정', disabled: busy ? true : null, onClick: () => runAssign('rules', 1) }),
-      el('button', { type: 'button', class: 'btn', text: '다시 섞기', disabled: busy ? true : null, title: '다른 순서로 규칙 배정을 다시 해요', onClick: () => runAssign('rules', (ui.board.seed || 1) + 1) }),
-      el('button', { type: 'button', class: 'btn', text: busy === 'ai' ? 'AI가 배정하는 중…' : 'AI 배정', disabled: busy || !state.ai?.enabled ? true : null, title: state.ai?.enabled ? '지원서·성향·관계를 읽고 AI가 배정해요 (30~60초)' : '서버에 ANTHROPIC_API_KEY 를 설정하면 쓸 수 있어요', onClick: () => runAssign('ai') }),
+      el('button', { type: 'button', class: 'btn primary', text: '규칙 배정', disabled: busy || ui.balance.busy ? true : null, onClick: () => runAssign('rules', 1) }),
+      el('button', { type: 'button', class: 'btn', text: '다시 섞기', disabled: busy || ui.balance.busy ? true : null, title: '다른 순서로 규칙 배정을 다시 해요', onClick: () => runAssign('rules', (ui.board.seed || 1) + 1) }),
+      el('button', { type: 'button', class: 'btn', text: busy === 'ai' ? 'AI가 배정하는 중…' : 'AI 배정', disabled: busy || ui.balance.preference || !state.ai?.enabled ? true : null, title: ui.balance.preference ? '학기 균형 우선 고려는 규칙 배정에서만 지원해요. 체크를 해제하면 AI 배정을 쓸 수 있어요.' : state.ai?.enabled ? '지원서·성향·관계를 읽고 AI가 배정해요 (30~60초)' : '서버에 ANTHROPIC_API_KEY 를 설정하면 쓸 수 있어요', onClick: () => runAssign('ai') }),
       el('span', { style: { flex: 1 } }),
       el('button', { type: 'button', class: 'btn', text: '모두 비우기', disabled: busy ? true : null, onClick: () => { if (!hasAny || !confirm('배정을 모두 비울까요? 저장하기 전까지는 서버에 반영되지 않아요.')) return; for (const k of Object.keys(ui.board.assignments)) ui.board.assignments[k] = []; ui.board.explanations = {}; ui.board.explain = new Set(); ui.board.dirty = true; ui.board.selected = null; renderAll(); } }),
       el('button', { type: 'button', class: `btn ${ui.board.dirty ? 'orange' : ''}`, text: ui.board.dirty ? '초안 저장 *' : '초안 저장', disabled: busy ? true : null, onClick: () => saveAssignment(false) }),
