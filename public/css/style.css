@@ -265,7 +265,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .qr-card .url { font-size: 10.5px; color: var(--gray-500); word-break: break-all; margin-top: 6px; }
 .qr-card .note { font-size: 12px; color: var(--gray-700); margin-top: 6px; }
 @media print {
-  .no-print { display: none !important; }
+  .no-print, .toast { display: none !important; }
   body { background: #fff; }
   .container { max-width: none; padding: 0; }
   .cards { grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -362,7 +362,6 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .seat-chart.role-mode .seat { cursor: copy; }
 .seat-chart.role-mode .seat.role-seat { background: #e6f6ea; border-color: #2f8a4c; }
 .seat-chart.role-mode .seat.empty.role-seat { background: #e6f6ea; }
-@media print { .seat .seat-role { font-size: 8px; padding: 0 2px; background: #eef7f0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 #notes-card .body-cell { white-space: normal; }
 #notes-card .body-badge { margin: 1px 4px 1px 0; font-weight: 500; }
 .rule-item { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); font-size: 14px; }
@@ -376,6 +375,15 @@ kbd.token { font-family: monospace; font-size: 12px; background: var(--gray-100)
 .seat-view-select { max-width: 100%; }
 .print-view-label { font-weight: 500; color: var(--gray-700); }
 @media print { .seat-chart { break-inside: avoid; page-break-inside: avoid; } }
+/* 인쇄: 학생에게 나눠 주는 자리표라서 선생님이 표시한 색(갈등 빨강 · 바람 자리 파랑/주황 · 역할 초록 · 고정 주황 · 선택 테두리)과
+   교사용 표시(👓❄️🔥📏🌱📝 · 🌀 · 🎒)를 모두 빼고 회색 네모에 이름만 찍어요. 화면 색은 그대로예요 */
+@media print {
+  .seat-chart .seat { background: #efefef !important; border: 1.5px solid #9a9a9a !important; color: #111 !important; box-shadow: none !important; outline: none !important; transition: none !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .seat-chart .seat.empty { background: #fff !important; border-style: dashed !important; color: #888 !important; }
+  .seat-chart .seat .seat-marks, .seat-chart .seat .seat-zone, .seat-chart .seat .seat-role { display: none !important; }
+  /* 교탁: 인쇄 창에서 '배경 그래픽'을 꺼도 사라지지 않도록 테두리 있는 회색 상자 + 검정 글자 */
+  .seat-chart .podium { background: #e4e4e4 !important; color: #111 !important; border: 1.5px solid #9a9a9a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
 
 /* 붙여넣기 자동 분류 */
 .paste-panel { background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; }
