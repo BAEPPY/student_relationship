@@ -1,5 +1,5 @@
 import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, helpTip, TYPE_LABEL, TYPE_ICON } from './common.js';
-import { RelationGraph } from './graph.js';
+import { RelationGraph, GRAPH_MOTION_KEY } from './graph.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -207,6 +207,7 @@ function buildSkeleton() {
       el('div', { class: 'legend' }, [
         el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
         el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
+        el('span', {}, [el('span', { class: 'line both' }), '서로 표시한 사이']),
         el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
         el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
       ]),
@@ -215,7 +216,7 @@ function buildSkeleton() {
         el('div', { class: 'graph-wrap', id: 'graph-container' }),
         el('div', { class: 'side-panel', id: 'side-panel' }),
       ]),
-      el('p', { class: 'muted graph-help', text: '학생 상자에 마우스를 올리면 연결된 친구만 밝게 보여요. 누르면 그 학생이 가운데로 모이고, 끌어서 놓으면 출렁이며 자리를 잡아요. 화살표를 누르면 이유를 볼 수 있어요. 빈 곳을 끌면 이동, 휠로 확대·축소. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
+      el('p', { class: 'muted graph-help', text: '학생 상자에 마우스를 올리면 연결된 친구만 밝게 보여요. 누르면 그 학생이 가운데로 모이고, 끌어서 놓으면 출렁이며 자리를 잡아요. 화살표를 누르면 이유를 볼 수 있어요. 서로 표시한 사이는 양쪽 화살표 하나로 보여요. 빈 곳을 끌면 이동, 휠로 확대·축소. 상자 오른쪽 위 숫자는 받은·준 관계 수예요(서로 표시한 사이는 2로 세요). 움직임이 없으면 툴바의 🫧 움직임 버튼을 켜 보세요(윈도우 애니메이션 효과를 끈 컴퓨터는 처음에 꺼져 있어요).' }),
     ]),
     el('section', { class: 'card', id: 'analysis-card' }),
     el('section', { class: 'card ai-panel', id: 'ai-card' }),
@@ -225,10 +226,14 @@ function buildSkeleton() {
     el('section', { class: 'card', id: 'danger-card' }),
   );
   const container = document.getElementById('graph-container');
+  // 오류 카드로 덮였다가 다시 그릴 때는 이전 그래프의 리스너를 떼어 떼어진 SVG 가 계속 움직이지 않게 해요
+  graph?.destroy();
   graph = new RelationGraph(container, {
     onEdgeClick: (edge, pt) => { ui.selectedEdge = `${edge.from}>${edge.to}`; graph.setSelectedEdge(ui.selectedEdge); showEdgePopover(edge, pt); },
     onNodeClick: (id) => { closePopover(); ui.selectedEdge = null; setHighlight(ui.highlight?.length === 1 && ui.highlight[0] === id ? null : [id], id); },
     onBackgroundClick: () => { closePopover(); ui.selectedEdge = null; graph.setSelectedEdge(null); },
+    // 운영체제의 "애니메이션 줄이기" 설정이 바뀌어 그래프가 스스로 따라가면 버튼 글도 맞춰요
+    onMotionChange: () => renderToolbar(),
   });
   renderToolbar();
   // 그래프 컨테이너가 화면에 보일 때 크기가 잡히므로 한 번 더 맞춤
@@ -341,9 +346,19 @@ function renderToolbar() {
     el('button', { type: 'button', class: 'btn small', text: '＋', title: '확대', 'aria-label': '확대', onClick: () => graph.zoom(0.8) }),
     el('button', { type: 'button', class: 'btn small', text: '화면에 맞추기', onClick: () => graph.fit() }),
     el('button', { type: 'button', class: 'btn small', text: '🔀 흔들어 정리', title: '관계도를 한 번 흔들어 다시 정리해요', onClick: () => graph.shake() }),
+    el('button', {
+      type: 'button', class: 'btn small', id: 'graph-motion', text: graph.isMotion() ? '🫧 움직임 켬' : '🫧 움직임 끔', 'aria-pressed': graph.isMotion() ? 'true' : 'false',
+      title: '관계도가 출렁이며 움직이는 효과를 켜거나 꺼요. 브라우저·운영체제의 "애니메이션 줄이기" 설정이 켜져 있으면 처음엔 꺼져 있어요',
+      onClick: () => { const on = !graph.isMotion(); graph.setMotion(on); saveGraphMotion(on); renderToolbar(); },
+    }),
     el('button', { type: 'button', class: 'btn small', text: '배치 다시 계산', onClick: () => graph.resetLayout() }),
     el('button', { type: 'button', class: 'btn small', text: '강조 해제', onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight(null); } }),
   );
+}
+
+/** 움직임 켬/끔 선택을 이 브라우저에 남겨요. 저장이 막혀 있어도(시크릿 창 등) 토글 자체는 동작해요. */
+function saveGraphMotion(on) {
+  try { localStorage.setItem(GRAPH_MOTION_KEY, on ? 'on' : 'off'); } catch { /* 저장 못 해도 보는 데는 지장 없음 */ }
 }
 
 // ---------- 헤더 ----------

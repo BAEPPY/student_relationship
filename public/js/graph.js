@@ -2,9 +2,15 @@
 // 화살표는 스프링처럼 당겨서 연결이 많은 학생일수록 가운데에 모입니다.
 // - 상자에 마우스를 올리면 연결된 친구만 밝게(이웃 강조), 누르면 그 학생이 가운데로 모이고(focusNode),
 //   끌어서 놓으면 출렁이며 자리를 다시 잡습니다.
-// - 공개 API: setData / setFilter / setHighlight / setSelectedEdge / resetLayout / fit / zoom / focusNode / shake
+// - 서로 표시한 사이(둘 다 좋은 사이 또는 둘 다 안 좋은 사이)는 화살표 두 개 대신 양쪽에 화살촉이 있는 곧은 선 하나(.edge.mutual)로 그려요.
+// - 움직임(출렁임)은 setMotion(on/off) 으로 켜고 끌 수 있어요. 기본값은 localStorage 'relmap.graphMotion'('on'|'off'), 없으면
+//   운영체제·브라우저의 "애니메이션 줄이기"(prefers-reduced-motion) 설정을 따라요 — 윈도우 '애니메이션 효과' 를 끈 컴퓨터의 Edge 는 처음에 꺼져 있어요.
+// - 공개 API: setData / setFilter / setHighlight / setSelectedEdge / resetLayout / fit / zoom / focusNode / shake / setMotion / isMotion / destroy
 import { svgEl } from './common.js';
 import { createSimulation } from './force-layout.js';
+
+/** 움직임 켬/끔 저장 키 (선생님 페이지 툴바가 저장하고, 그래프는 처음 만들 때 읽어요) */
+export const GRAPH_MOTION_KEY = 'relmap.graphMotion';
 
 const NODE_W = 104;
 const NODE_H = 40;
@@ -14,11 +20,12 @@ const X_STRETCH = 1.3;
 const DRAG_ALPHA_TARGET = 0.3;
 
 export class RelationGraph {
-  constructor(container, { onEdgeClick, onNodeClick, onBackgroundClick } = {}) {
+  constructor(container, { onEdgeClick, onNodeClick, onBackgroundClick, onMotionChange } = {}) {
     this.container = container;
     this.onEdgeClick = onEdgeClick;
     this.onNodeClick = onNodeClick;
     this.onBackgroundClick = onBackgroundClick;
+    this.onMotionChange = onMotionChange;
     this.students = [];
     this.relations = [];
     this.stats = {};
@@ -35,13 +42,29 @@ export class RelationGraph {
     this.edgeEls = new Map();
     this.raf = null;
     this.drag = null;
-    this.reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // this.reduced = "움직임 꺼짐": 저장된 선택이 있으면 그 값, 없으면 운영체제·브라우저의 "애니메이션 줄이기" 설정
+    const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+    const saved = readMotionPref();
+    this.reduced = saved ? saved === 'off' : !!mq?.matches;
     this.svg = svgEl('svg', { xmlns: 'http://www.w3.org/2000/svg' });
     this.container.append(this.svg);
     this.vb = { x: -500, y: -300, w: 1000, h: 600 };
     this.bindPanZoom();
     this.bindHover();
-    document.addEventListener('visibilitychange', () => { if (document.hidden) this.stopLoop(); else if (this.sim?.isActive()) this.startLoop(); });
+    // 운영체제 설정이 바뀌면(저장된 선택이 없을 때만) 따라가요. 화면에서 떼어진 그래프(오류 카드가 앱을 덮은 뒤 등)는 무시해
+    // 사라진 툴바를 다시 그리려다 오류가 나지 않게 해요. 리스너는 필드에 두어 destroy() 에서 뗄 수 있어요.
+    this.mq = mq;
+    this.onMqChange = (e) => { if (this.svg.isConnected && !readMotionPref()) this.setMotion(!e.matches); };
+    mq?.addEventListener?.('change', this.onMqChange);
+    this.onVisibility = () => { if (document.hidden) this.stopLoop(); else if (this.sim?.isActive()) this.startLoop(); };
+    document.addEventListener('visibilitychange', this.onVisibility);
+  }
+
+  /** 그래프를 버릴 때(선생님 페이지가 뼈대를 다시 만들 때) 루프를 멈추고 document·matchMedia 리스너를 떼요 — 떼어진 SVG 가 몰래 계속 움직이지 않게 */
+  destroy() {
+    this.stopLoop();
+    this.mq?.removeEventListener?.('change', this.onMqChange);
+    document.removeEventListener('visibilitychange', this.onVisibility);
   }
 
   setData({ students, relations, stats }) {
@@ -98,6 +121,28 @@ export class RelationGraph {
 
   /** 그래프를 한 번 흔들어 다시 정리합니다("🔀 흔들어 정리" 버튼). */
   shake(v = 0.8) { if (!this.sim) return; this.sim.reheat(v); this.animate(); }
+
+  /** 움직임(출렁임)이 켜져 있는지. 꺼져 있으면 드래그·센터링·흔들기 결과를 애니메이션 없이 바로 그려요. */
+  isMotion() { return !this.reduced; }
+
+  /**
+   * 움직임을 켜거나 꺼요("🫧 움직임" 버튼). 켜면 살짝 데워 출렁이며 자리를 잡고, 끄면 루프를 멈추고 안정된 결과를 한 번에 그려요.
+   * 저장(localStorage)은 호출하는 쪽(툴바)이 해요 — 운영체제 설정 변화로 따라갈 때는 저장하지 않기 위해서예요.
+   */
+  setMotion(enabled) {
+    const on = !!enabled;
+    if (on === !this.reduced) return;
+    this.reduced = !on;
+    if (this.sim) {
+      if (on) {
+        // 상자를 끌던 중에 켜지면(터치로 끌며 🫧 버튼 클릭, OS 설정 변화) 드래그용 alphaTarget 도 같이 켜야 놓을 때까지 루프가 살아 상자가 포인터를 따라와요
+        if (this.drag?.id) this.sim.alphaTarget(DRAG_ALPHA_TARGET);
+        this.sim.reheat(0.3);
+        this.startLoop();
+      } else { this.stopLoop(); this.sim.alphaTarget(0); this.sim.settle(); this.updatePositions(); }
+    }
+    this.onMotionChange?.(on);
+  }
 
   // ---------- 물리 시뮬레이션 ----------
   sortedByDegree() {
@@ -174,11 +219,11 @@ export class RelationGraph {
       const p = this.pos[id];
       if (p) g.setAttribute('transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
     }
-    for (const [key, { r, line, hit }] of this.edgeEls) {
+    for (const { r, line, hit, mutual } of this.edgeEls.values()) {
       const pa = this.pos[r.from];
       const pb = this.pos[r.to];
       if (!pa || !pb) continue;
-      const d = curvePath(pa, pb);
+      const d = mutual ? straightPath(pa, pb) : curvePath(pa, pb);
       line.setAttribute('d', d);
       hit.setAttribute('d', d);
     }
@@ -349,9 +394,10 @@ export class RelationGraph {
       g.classList.toggle('selected', !!hl?.includes(id));
       g.classList.toggle('hover', id === this.hoverId);
     }
-    for (const [key, { r, g }] of this.edgeEls) {
+    // 양쪽 화살표 선은 두 방향 키 중 어느 쪽을 골라도 같은 선이 선택돼요. dim 은 양쪽 끝이 같으니 첫 방향(r) 기준이면 충분해요
+    for (const { r, g, keys } of this.edgeEls.values()) {
       g.classList.toggle('dim', !edgeInFocus(r));
-      g.classList.toggle('selected', key === this.selectedEdgeKey);
+      g.classList.toggle('selected', keys.includes(this.selectedEdgeKey));
     }
   }
 
@@ -370,18 +416,34 @@ export class RelationGraph {
     svg.append(defs);
     svg.append(svgEl('rect', { x: -100000, y: -100000, width: 200000, height: 200000, fill: 'transparent' }));
 
+    // 보이는 관계만 모은 뒤, 두 방향이 모두 보이고 종류가 같으면(서로 좋은 사이·서로 안 좋은 사이) 양쪽 화살촉이 있는 선 하나로 합쳐요.
+    // 종류가 다르면(한쪽 좋음·한쪽 안 좋음) 지금처럼 서로 반대쪽으로 휘는 곡선 화살표 두 개예요.
     const edges = svgEl('g');
-    for (const r of this.relations) {
-      if (!this.edgeVisible(r)) continue;
-      if (!this.pos[r.from] || !this.pos[r.to]) continue;
+    const visible = this.relations.filter((r) => this.edgeVisible(r) && this.pos[r.from] && this.pos[r.to]);
+    const byKey = new Map(visible.map((r) => [`${r.from}>${r.to}`, r]));
+    const done = new Set();
+    for (const r of visible) {
       const key = `${r.from}>${r.to}`;
-      const g = svgEl('g', { class: `edge ${r.type}` });
+      if (done.has(key)) continue;
+      done.add(key);
+      const key2 = `${r.to}>${r.from}`;
+      const r2 = byKey.get(key2);
+      const mutual = !!r2 && r2.type === r.type && r.from !== r.to;
+      const g = svgEl('g', { class: `edge ${r.type}${mutual ? ' mutual' : ''}` });
       g.dataset.key = key;
-      const line = svgEl('path', { class: 'line', 'marker-end': `url(#${r.type === 'good' ? 'g-arrow-good' : 'g-arrow-bad'})` });
+      const marker = `url(#${r.type === 'good' ? 'g-arrow-good' : 'g-arrow-bad'})`;
+      // marker 가 orient="auto-start-reverse" 라 시작 쪽 화살촉은 자동으로 뒤집혀 양쪽 다 바깥을 가리켜요
+      const line = svgEl('path', { class: 'line', 'marker-end': marker, 'marker-start': mutual ? marker : null });
       const hit = svgEl('path', { class: 'hit' });
       g.append(line, hit);
       edges.append(g);
-      this.edgeEls.set(key, { r, g, line, hit });
+      if (mutual) {
+        g.dataset.key2 = key2;
+        done.add(key2);
+        this.edgeEls.set(key, { r, r2, g, line, hit, mutual: true, keys: [key, key2] });
+      } else {
+        this.edgeEls.set(key, { r, g, line, hit, mutual: false, keys: [key] });
+      }
     }
     svg.append(edges);
 
@@ -412,6 +474,21 @@ export class RelationGraph {
 }
 
 function shorten(s, n) { return s.length > n ? `${s.slice(0, n - 1)}…` : s; }
+
+/** 저장된 움직임 선택('on'|'off'), 없거나 localStorage 를 못 쓰면 null */
+function readMotionPref() {
+  try {
+    const v = localStorage.getItem(GRAPH_MOTION_KEY);
+    return v === 'on' || v === 'off' ? v : null;
+  } catch { return null; }
+}
+
+// 서로 표시한 사이: 두 상자 테두리 사이를 곧은 선으로 잇고, 양쪽 모두 화살촉이 들어갈 자리(pad 6)를 띄워요.
+function straightPath(pa, pb) {
+  const start = rectEdge(pa, NODE_W, NODE_H, pb, 6);
+  const end = rectEdge(pb, NODE_W, NODE_H, pa, 6);
+  return `M${start.x.toFixed(1)},${start.y.toFixed(1)} L${end.x.toFixed(1)},${end.y.toFixed(1)}`;
+}
 
 // 두 노드 사이를 살짝 휘어진 곡선으로 잇습니다. 진행 방향의 오른쪽으로 휘기 때문에
 // A→B 와 B→A 가 서로 다른 쪽으로 갈라져 겹치지 않습니다.

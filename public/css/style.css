@@ -176,6 +176,11 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--gray-700); align-items: center; }
 .legend .line { display: inline-block; width: 26px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
 .legend .sw { display: inline-block; width: 16px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
+/* 범례 "서로 표시한 사이": 짧은 선 양끝에 화살촉 (색은 관계 종류를 따르므로 중립색) */
+.legend .line.both { position: relative; width: 22px; margin: 0 6px; background: var(--gray-700); }
+.legend .line.both::before, .legend .line.both::after { content: ''; position: absolute; top: 50%; width: 0; height: 0; border: 5px solid transparent; transform: translateY(-50%); }
+.legend .line.both::before { left: -6px; border-left: 0; border-right: 7px solid var(--gray-700); }
+.legend .line.both::after { right: -6px; border-right: 0; border-left: 7px solid var(--gray-700); }
 /* 관계도(힘 기반 배치): 이웃 강조는 노드만 opacity 전환으로 부드럽게 — 간선 <g> 의 opacity 전환은 간선 200개에서 hover 마다
    프레임이 끊겨(그룹 opacity 는 합성되지 않아 매 프레임 재래스터화) 간선은 즉시 흐려져요. 움직임 줄이기 설정이면 전환 없음 */
 .node { transition: opacity .18s; }
@@ -200,6 +205,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .edge path.line { fill: none; stroke-width: 2.25; stroke-linecap: round; }
 .edge.good path.line { stroke: var(--red); }
 .edge.bad path.line { stroke: var(--black); }
+.edge.mutual path.line { stroke-width: 3; } /* 서로 표시한 사이(양쪽 화살촉 한 선)는 조금 두껍게 */
 .edge path.hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; }
 .edge.dim { opacity: .08; }
 .edge.selected path.line { stroke-width: 4.5; filter: drop-shadow(0 0 4px rgba(108, 92, 231, .8)); }
@@ -690,6 +696,7 @@ body.teacher button.tile:focus-visible { outline: 3px solid rgba(108,92,231,.35)
 body.teacher .legend { gap: 8px; font-size: 14px; margin-bottom: 12px; }
 body.teacher .legend > span { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--gray-100); border: 1px solid var(--gray-200); color: var(--gray-700); }
 body.teacher .legend .line, body.teacher .legend .sw { margin-right: 0; }
+body.teacher .legend .line.both { margin: 0 6px; } /* 양끝 화살촉이 상자 밖 6px 까지 나가므로 위 규칙에 덮이지 않게 여백 유지 */
 body.teacher .graph-toolbar { gap: 8px; padding: 8px 10px; border-radius: 18px; margin-bottom: 12px; }
 body.teacher .graph-toolbar .seg { display: inline-flex; gap: 4px; background: var(--gray-100); border-radius: 999px; padding: 3px; }
 body.teacher .graph-toolbar .btn.small { padding: 7px 14px; }
