@@ -176,8 +176,13 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--gray-700); align-items: center; }
 .legend .line { display: inline-block; width: 26px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
 .legend .sw { display: inline-block; width: 16px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
+/* 관계도(힘 기반 배치): 이웃 강조는 노드만 opacity 전환으로 부드럽게 — 간선 <g> 의 opacity 전환은 간선 200개에서 hover 마다
+   프레임이 끊겨(그룹 opacity 는 합성되지 않아 매 프레임 재래스터화) 간선은 즉시 흐려져요. 움직임 줄이기 설정이면 전환 없음 */
+.node { transition: opacity .18s; }
 .node rect { fill: var(--node-fill); stroke: var(--node-border); stroke-width: 1.5; filter: drop-shadow(0 2px 3px rgba(30,30,60,.12)); transition: filter .15s; }
-.node:hover rect { filter: drop-shadow(0 6px 12px rgba(30,30,60,.2)); }
+.node:hover rect, .node.hover rect { filter: drop-shadow(0 8px 16px rgba(30,30,60,.28)); }
+.graph-wrap svg.dragging .node { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { .node, .node rect { transition: none; } }
 .node.me rect { fill: var(--me-fill); stroke: var(--me-border); }
 .node.me text { fill: var(--me-text); }
 /* 학생 페이지의 '나': 빨간 동그라미 + 은은한 후광 */
@@ -189,14 +194,14 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .node.pending text { fill: #8a8ba0; }
 .node text { fill: var(--node-text); font-weight: 700; font-size: 15px; pointer-events: none; }
 .node.center rect { stroke: var(--orange); stroke-width: 3; }
-.node.dim { opacity: .2; }
+.node.dim { opacity: .15; }
 .node.selected rect { stroke: var(--blue); stroke-width: 3.5; }
 .node { cursor: pointer; }
 .edge path.line { fill: none; stroke-width: 2.25; stroke-linecap: round; }
 .edge.good path.line { stroke: var(--red); }
 .edge.bad path.line { stroke: var(--black); }
 .edge path.hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; }
-.edge.dim { opacity: .12; }
+.edge.dim { opacity: .08; }
 .edge.selected path.line { stroke-width: 4.5; filter: drop-shadow(0 0 4px rgba(108, 92, 231, .8)); }
 .popover {
   position: absolute; z-index: 20; background: #fff; border: 1px solid var(--gray-200); border-radius: 14px;

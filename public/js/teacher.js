@@ -198,7 +198,7 @@ function buildSkeleton() {
     buildNav(),
     el('section', { class: 'card', id: 'summary-card' }),
     el('section', { class: 'card', id: 'graph-card' }, [
-      cardTitle('전체 관계도', '학생들이 표시한 좋은 사이(빨강)와 안 좋은 사이(검정)를 한 장에 모았어요. 연결이 많은 학생일수록 가운데에 있어요.'),
+      cardTitle('전체 관계도', '학생들이 표시한 좋은 사이(빨강)와 안 좋은 사이(검정)를 한 장에 모았어요. 상자끼리는 밀어내고 화살표는 당겨서, 연결이 많은 학생일수록 가운데에 모여요.'),
       el('div', { class: 'legend' }, [
         el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
         el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
@@ -210,7 +210,7 @@ function buildSkeleton() {
         el('div', { class: 'graph-wrap', id: 'graph-container' }),
         el('div', { class: 'side-panel', id: 'side-panel' }),
       ]),
-      el('p', { class: 'muted graph-help', text: '화살표를 누르면 이유를 볼 수 있어요. 학생을 누르면 그 학생의 관계만 강조돼요. 빈 곳을 끌면 이동, 마우스 휠로 확대/축소, 학생 상자는 끌어서 옮길 수 있어요. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
+      el('p', { class: 'muted graph-help', text: '학생 상자에 마우스를 올리면 연결된 친구만 밝게 보여요. 누르면 그 학생이 가운데로 모이고, 끌어서 놓으면 출렁이며 자리를 잡아요. 화살표를 누르면 이유를 볼 수 있어요. 빈 곳을 끌면 이동, 휠로 확대·축소. 상자 오른쪽 위 숫자는 연결된 화살표 수예요.' }),
     ]),
     el('section', { class: 'card', id: 'analysis-card' }),
     el('section', { class: 'card ai-panel', id: 'ai-card' }),
@@ -310,6 +310,8 @@ function setHighlight(ids, panelStudent = null) {
   ui.panelStudent = panelStudent || (ids && ids.length === 1 ? ids[0] : null);
   graph.setHighlight(ids);
   graph.setSelectedEdge(ui.selectedEdge);
+  // 학생 한 명을 강조하면 관계도에서 그 학생이 가운데로 모여요 (두 명 이상·해제는 풀어 줌)
+  graph.focusNode(ids && ids.length === 1 ? ids[0] : null);
   renderSidePanel();
   markSelectedRow();
 }
@@ -330,6 +332,7 @@ function renderToolbar() {
     el('button', { type: 'button', class: 'btn small', text: '－', title: '축소', 'aria-label': '축소', onClick: () => graph.zoom(1.25) }),
     el('button', { type: 'button', class: 'btn small', text: '＋', title: '확대', 'aria-label': '확대', onClick: () => graph.zoom(0.8) }),
     el('button', { type: 'button', class: 'btn small', text: '화면에 맞추기', onClick: () => graph.fit() }),
+    el('button', { type: 'button', class: 'btn small', text: '🔀 흔들어 정리', title: '관계도를 한 번 흔들어 다시 정리해요', onClick: () => graph.shake() }),
     el('button', { type: 'button', class: 'btn small', text: '배치 다시 계산', onClick: () => graph.resetLayout() }),
     el('button', { type: 'button', class: 'btn small', text: '강조 해제', onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight(null); } }),
   );
