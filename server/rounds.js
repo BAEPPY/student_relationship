@@ -7,6 +7,19 @@ export function monthName(date = new Date()) {
   return `${kst.getUTCFullYear()}년 ${kst.getUTCMonth() + 1}월`;
 }
 
+/** 이미 있는 회차 이름과 겹치지 않는 이름: "2026년 10월" → "2026년 10월 2차" → "2026년 10월 3차" … */
+export function uniqueRoundName(room, base) {
+  const taken = new Set((room?.rounds || []).map((r) => r.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 1000; n++) if (!taken.has(`${base} ${n}차`)) return `${base} ${n}차`;
+  return `${base} ${Date.now()}`;
+}
+
+/** 지금 달 이름으로 새 회차 이름 제안 (같은 달에 이미 조사했으면 2차·3차 …) */
+export function nextRoundName(room, now = new Date()) {
+  return uniqueRoundName(room, monthName(now));
+}
+
 export function makeRound(name, now = new Date().toISOString()) {
   return { id: newId(), name, startedAt: now, closedAt: null, relations: {}, submissions: {} };
 }

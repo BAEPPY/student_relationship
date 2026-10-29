@@ -438,6 +438,27 @@ test('안 좋은 사이: 객관식 없이 20자 이상 직접 적어야 하고, 
   assert.match((await call(`/api/teacher/${t}/export.csv`)).text, /싫어요/);
 });
 
+test('같은 달에 두 번째 조사: 이름을 안 보내면 "N월 2차"로 열리고, 중복 이름은 2차 이름을 제안한다', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '같은달반', students: '가\n나', minGood: 0, minBad: 0 });
+  const t = created.json.adminToken;
+  const first = (await call(`/api/teacher/${t}`)).json.round.name;          // 교실을 만들 때 지금 달 이름으로 열린 회차
+  assert.match(first, /^\d{4}년 \d{1,2}월$/);
+  const dup = await call(`/api/teacher/${t}/rounds`, 'POST', { name: first });
+  assert.equal(dup.status, 400);
+  assert.ok(dup.json.error.includes(`"${first} 2차"`), dup.json.error);
+  const second = await call(`/api/teacher/${t}/rounds`, 'POST', {});
+  assert.equal(second.status, 201);
+  assert.equal(second.json.round.name, `${first} 2차`);
+  assert.equal(second.json.rounds.length, 2);
+  assert.equal(second.json.rounds.find((r) => r.name === first).open, false, '이전 회차는 마감');
+  const third = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '' });
+  assert.equal(third.json.round.name, `${first} 3차`);
+  // 새 회차는 빈 응답으로 시작하고, 학생 화면도 그 회차를 가리킨다
+  const sv = (await call(`/api/student/${second.json.students[0].token}`)).json;
+  assert.equal(sv.round.name, `${first} 3차`);
+  assert.deepEqual(sv.relations, {});
+});
+
 test('이번 달 친해진 친구: 관계 지도와 함께 제출·검증하고 교사 화면·보고서·내보내기에 보이며 삭제·초기화 때 정리된다', async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const created = await call('/api/rooms', 'POST', { name: '돌아보기반', students: '가\n나\n다\n라', minGood: 0, minBad: 0 });

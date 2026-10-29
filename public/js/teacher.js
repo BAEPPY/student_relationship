@@ -362,13 +362,14 @@ function saveGraphMotion(on) {
 }
 
 // ---------- 헤더 ----------
+// 새 회차 이름 제안: 지금 달 이름, 같은 달에 이미 조사했으면 "2026년 10월 2차"처럼 (한 달에 여러 번 조사할 수 있어요)
 function suggestRoundName() {
   const d = new Date();
-  const base0 = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
-  if (!state.rounds.some((r) => r.name === base0)) return base0;
-  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-  const base1 = `${next.getFullYear()}년 ${next.getMonth() + 1}월`;
-  return state.rounds.some((r) => r.name === base1) ? `${base0} (2)` : base1;
+  const base = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
+  const taken = new Set(state.rounds.map((r) => r.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 1000; n++) if (!taken.has(`${base} ${n}차`)) return `${base} ${n}차`;
+  return base;
 }
 
 function closeRoundMenu() {
@@ -401,6 +402,9 @@ function renderHeader() {
         action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { closed: round.open } }), round.open ? '마감했어요.' : '마감을 해제했어요.');
       }, round.open ? 'danger' : '') : null,
       menuItem('이름 바꾸기', () => {
+        // 이름만 바뀌고 응답은 그대로라, 새 달 조사를 시작하려다 누른 경우를 막아요
+        const submitted = rounds.find((r) => r.id === round.id)?.submitted || 0;   // 제출 수는 회차 목록 요약에만 있어요
+        if (submitted > 0 && !confirm(`${round.name} 회차의 이름만 바뀌고 학생 응답 ${submitted}명분은 그대로 남아요. 새로 조사를 시작하려면 "새 회차 시작"을 누르세요. 그래도 이름을 바꿀까요?`)) return;
         const name = prompt('회차 이름', round.name);
         if (name === null || !name.trim() || name.trim() === round.name) return;
         action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { name: name.trim() } }), '이름을 바꿨어요.');
@@ -446,7 +450,7 @@ function renderHeader() {
         : (assignment ? el('span', { class: 'badge gray', id: 'roles-draft-badge', title: '배정 초안이 있지만 아직 학생에게 공개하지 않았어요', text: '1인 1역 초안' }) : null),
       el('span', { class: 'spacer' }),
       el('button', { type: 'button', class: 'btn small primary', text: '새 회차 시작', onClick: () => {
-        const name = prompt('새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요.', suggestRoundName());
+        const name = prompt('새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요. 같은 달에 다시 조사하면 "2026년 10월 2차"처럼 제안돼요.', suggestRoundName());
         if (name === null || !name.trim()) return;
         action(api(`${base}/rounds`, { method: 'POST', body: { name: name.trim() } }), `${name.trim()} 조사를 시작했어요.`);
       } }),

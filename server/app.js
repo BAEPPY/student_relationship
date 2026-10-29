@@ -6,7 +6,7 @@ import { FileStore } from './store.js';
 import { newToken, newId } from './tokens.js';
 import { REASON_CATALOG, isValidTag, BAD_REASON_MIN, textLength } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
-import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
+import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName, nextRoundName, uniqueRoundName } from './rounds.js';
 import { analyzeHistory } from './history.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
@@ -490,12 +490,14 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   // 새 회차 시작: 지금 회차를 마감하고 빈 회차를 엽니다.
   app.post('/api/teacher/:adminToken/rounds', async (req, res) => {
     const found = await requireRoom(req);
-    const name = cleanName(req.body?.name) || monthName();
-    if (name.length > LIMITS.roundName) throw bad(`회차 이름은 ${LIMITS.roundName}자 이하로 적어 주세요.`);
+    const requested = cleanName(req.body?.name);
+    if (requested.length > LIMITS.roundName) throw bad(`회차 이름은 ${LIMITS.roundName}자 이하로 적어 주세요.`);
     let created = null;
     const room = await mutateRoom(found, (room) => {
       if (room.rounds.length >= LIMITS.rounds) throw bad(`회차는 ${LIMITS.rounds}개까지 만들 수 있어요.`);
-      if (room.rounds.some((r) => r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}`);
+      // 이름을 안 보내면 지금 달 이름으로, 같은 달에 이미 조사했으면 "2026년 10월 2차"처럼 (한 달에 여러 번 조사 가능)
+      const name = requested || nextRoundName(room);
+      if (room.rounds.some((r) => r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}. 같은 달에 다시 조사하려면 "${uniqueRoundName(room, name)}"처럼 적어 주세요.`);
       const now = new Date().toISOString();
       const cur = currentRound(room);
       if (!cur.closedAt) cur.closedAt = now;
