@@ -181,7 +181,7 @@ body.kid .role-card .badge.gray { background: #f1ebe3; color: #8a7a6c; }
 .role-card details p { margin: 4px 0 0; color: #5a4632; line-height: 1.55; background: #fffaf3; border-radius: 12px; padding: 8px 10px; }
 /* 지난달에 했던 역할: 회색 + 리본 */
 .role-card.excluded { background: #f4f1ec; border-style: dashed; border-color: #e3dbd0; cursor: not-allowed; }
-.role-card.excluded .role-pick { padding-top: 44px; }
+.role-card.excluded .role-pick { padding-top: 44px; cursor: not-allowed; }   /* 눌리긴 하지만(팝업 안내) 고를 수 없다는 표시 */
 .role-card.excluded:hover { transform: none; box-shadow: none; border-color: #e3dbd0; }
 .role-card.excluded .role-name, .role-card.excluded .role-sub, .role-card.excluded summary { color: #a69b90; }
 .role-card.excluded details p { background: #ede8e1; color: #8a7f74; }
@@ -278,3 +278,10 @@ body.kid .closer-card { border-color: #d7eccb; }   /* body.kid .card 의 흰 테
 .closer-card .closer-summary { font-family: var(--font-kid); font-size: 16px; color: #2f6b1f; margin: 2px 0 10px; }
 .closer-card .closer-summary.hidden { display: none; }
 .closer-card .field { margin: 10px 0 0; }
+.closer-card .closer-sub { margin: 16px 0 2px; font-size: 17px; }
+/* 🙅 지난달 역할 팝업: 가운데 뜨는 작은 창 */
+.modal-backdrop.popup-backdrop { align-items: center; justify-content: center; padding: 16px; z-index: 120; }
+body.kid .modal.role-popup { border-radius: 22px; max-width: 420px; text-align: center; padding: 24px 18px 18px; }
+body.kid .modal.role-popup .popup-icon { font-size: 44px; line-height: 1; margin-bottom: 6px; }
+body.kid .modal.role-popup h2 { margin: 0 0 8px; font-size: 22px; }
+body.kid .modal.role-popup p { margin: 0 0 16px; line-height: 1.5; }

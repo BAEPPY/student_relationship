@@ -52,7 +52,7 @@ function captureDraft() {
   if (!draftStore || submitting) return;
   const sections = {};
   if (relationsDirty) sections.relations = draft;
-  if (closerDirty) sections.closerFriends = { ids: [...closerDraft.ids], text: closerDraft.text };
+  if (closerDirty) sections.closerFriends = { ids: [...closerDraft.ids], text: closerDraft.text, review: closerDraft.review };
   if (profileDirty) sections.profile = { traits: [...profileDraft.traits], partnerTraits: [...profileDraft.partnerTraits], partnerText: profileDraft.partnerText, body: profileDraft.body };
   if (appDirty) sections.application = { choices: appDraft.map(({ roleId, reason, helpClass, helpSelf }) => ({ roleId, reason, helpClass, helpSelf })) };
   draftStore.update({ step, sections });
@@ -118,7 +118,7 @@ function applyDraftSections(saved) {
   relationsDirty = Object.hasOwn(sections, 'relations');
   initDrafts();
   if (sections.closerFriends) {
-    closerDraft = { ids: new Set(sections.closerFriends.ids || []), text: sections.closerFriends.text || '' };
+    closerDraft = { ids: new Set(sections.closerFriends.ids || []), text: sections.closerFriends.text || '', review: sections.closerFriends.review || '' };
     closerDirty = !closerUnchanged();   // 제출한 내용과 같은 초안이면 '다시 제출' 안내를 띄우지 않아요
   }
   dirty = relationsDirty || closerDirty;   // 친해진 친구도 관계 지도와 함께 제출하므로 둘 중 하나만 바뀌어도 다시 제출
@@ -312,7 +312,7 @@ function initDrafts(which = 'all') {
   }
   if (which === 'all' || which === 'relations') {
     const cf = data.closerFriends;
-    closerDraft = { ids: new Set(cf?.ids || []), text: cf?.text || '' };
+    closerDraft = { ids: new Set(cf?.ids || []), text: cf?.text || '', review: cf?.review || '' };
     closerDirty = false;
   }
 }
@@ -670,7 +670,7 @@ function renderApplication() {
 
   function pickRole(roleId) {
     if (locked) return;
-    if (excluded.has(roleId)) { toast('지난달에 했던 역할이라 이번 달엔 지원할 수 없어.'); return; }
+    if (excluded.has(roleId)) { showExcludedPopup(roles.find((r) => r.id === roleId)); return; }
     const at = chosenIndex(roleId);
     if (at >= 0) { // 다시 누르면 그 지망에서 뺌 (쓴 글은 남겨 둠)
       appDraft[at].roleId = ''; appDirty = true; delete appErrors[at]; stepError = null; refresh(); return;
@@ -688,15 +688,17 @@ function renderApplication() {
     pickerBox.replaceChildren(...roles.map((r) => {
       const ex = excluded.has(r.id);
       const at = chosenIndex(r.id);
-      // 고르는 부분은 진짜 <button>, 설명(<details>)은 버튼 밖 형제 요소로
+      const exMonth = monthLabelOf(data.previousRoleMonth, '지난달');
+      // 고르는 부분은 진짜 <button>, 설명(<details>)은 버튼 밖 형제 요소로. 지난달 역할은 눌리게 두고(팝업 안내) 잠겼을 때만 비활성
       return el('div', { class: `role-card ${ex ? 'excluded' : ''} ${at >= 0 ? `chosen rank-${at + 1}` : ''}` }, [
-        ex ? el('span', { class: 'ribbon', 'aria-hidden': 'true', text: '지난달에 했던 역할' }) : null,
+        ex ? el('span', { class: 'ribbon', 'aria-hidden': 'true', text: `${exMonth}에 했던 역할` }) : null,
         el('button', {
           type: 'button',
           class: 'role-pick',
-          disabled: ex || locked ? true : null,
+          disabled: locked ? true : null,
+          'aria-disabled': ex ? 'true' : null,
           'aria-pressed': at >= 0 ? 'true' : 'false',
-          'aria-label': ex ? `${r.name} (지난달에 했던 역할이라 고를 수 없어)` : null,
+          'aria-label': ex ? `${r.name} (${exMonth}에 했던 역할이라 고를 수 없어)` : null,
           dataset: { roleId: r.id },
           onClick: () => pickRole(r.id),
         }, [
@@ -952,10 +954,27 @@ function closerCard() {
     cnt.textContent = `${ta.value.length} / ${CLOSER_TEXT_MAX}자`;
     markCloserDirty();
   });
+  // ① 한 달은 어땠어? (돌아보기 글, 선택)
+  const month = monthLabelOf(data.round?.name);
+  const review = el('textarea', { id: 'closer-review', maxlength: CLOSER_TEXT_MAX, placeholder: '예: 모둠 활동이 재미있었고 친구들이랑 더 친해졌어요. 수학은 조금 어려웠어요.', readonly: locked ? true : null, style: { minHeight: '80px' } });
+  review.value = cd.review;
+  const reviewCnt = el('div', { class: 'ta-counter', text: `${cd.review.length} / ${CLOSER_TEXT_MAX}자` });
+  review.addEventListener('input', () => {
+    cd.review = review.value;
+    reviewCnt.textContent = `${review.value.length} / ${CLOSER_TEXT_MAX}자`;
+    markCloserDirty();
+  });
   return el('section', { class: 'card closer-card', id: 'closer-card' }, [
-    el('div', { class: 'card-title' }, [el('h2', { text: `🌱 ${data.round?.name || '이번 달'} 돌아보기 · 친해진 친구` }), el('span', { class: 'muted', text: '선택' })]),
-    el('p', { class: 'muted', text: '이번 달에 새로 친해졌거나 더 친해진 친구가 있어? 있으면 골라 줘. 없으면 안 골라도 괜찮아.' }),
-    el('div', { class: 'chips', role: 'group', 'aria-label': '이번 달 친해진 친구' }, chips),
+    el('div', { class: 'card-title' }, [el('h2', { text: `🌱 ${month} 돌아보기` }), el('span', { class: 'muted', text: '선택' })]),
+    el('p', { class: 'muted', text: `${month}을 돌아보며 적어 줘. 둘 다 선택이라 비워 둬도 괜찮아. 선생님만 볼 수 있어.` }),
+    el('div', { class: 'field' }, [
+      el('label', { for: 'closer-review' }, [`📝 ${month} 한 달은 어땠어? `, el('span', { class: 'muted', text: '(선택)' })]),
+      review,
+      reviewCnt,
+    ]),
+    el('h3', { class: 'closer-sub', text: '🌱 친해진 친구' }),
+    el('p', { class: 'muted', text: `${month}에 새로 친해졌거나 더 친해진 친구가 있어? 있으면 골라 줘. 없으면 안 골라도 괜찮아.` }),
+    el('div', { class: 'chips', role: 'group', 'aria-label': `${month} 친해진 친구` }, chips),
     summary,
     el('div', { class: 'field' }, [
       el('label', { for: 'closer-text' }, ['어떻게 친해졌어? ', el('span', { class: 'muted', text: '(선택)' })]),
@@ -964,12 +983,45 @@ function closerCard() {
     ]),
   ]);
 }
+
+// 회차 이름("2026년 10월 2차")에서 달 이름("10월")만 뽑아요. 못 읽으면 대신 쓸 말을 돌려줘요
+function monthLabelOf(name, fallback = '이번 달') {
+  const m = /(\d{1,2})\s*월/.exec(name || '');
+  return m ? `${m[1]}월` : fallback;
+}
+
+// 🙅 지난달(같은 달 앞 회차 포함)에 했던 역할을 고르려 하면 팝업으로 알려 줘요
+function showExcludedPopup(role) {
+  const month = monthLabelOf(data.previousRoleMonth, '지난달');
+  const opener = document.activeElement;
+  const backdrop = el('div', { class: 'modal-backdrop popup-backdrop', id: 'role-popup' });
+  const ok = el('button', { type: 'button', class: 'btn primary', id: 'role-popup-ok', text: '알겠어 👍' });
+  const name = role?.name || '이 역할';
+  const modal = el('div', { class: 'modal role-popup', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'role-popup-title', 'aria-describedby': 'role-popup-desc' }, [
+    el('div', { class: 'popup-icon', 'aria-hidden': 'true', text: '🙅' }),
+    el('h2', { id: 'role-popup-title', text: `${month}에 했던 직업은 안 돼요!` }),
+    el('p', { id: 'role-popup-desc', text: `${name}${josa(name, ['은', '는'])} ${month}에 내가 맡았던 역할이야. 이번에는 다른 역할을 골라 줘!` }),
+    ok,
+  ]);
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+    if (opener?.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
+  }
+  ok.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  document.addEventListener('keydown', onKey);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  ok.focus();
+}
 // 친해진 친구 초안이 서버에 제출된 내용과 같은지 (고른 순서는 무시, 글은 앞뒤 공백 무시)
 function closerUnchanged() {
-  const saved = data.closerFriends || { ids: [], text: '' };
+  const saved = data.closerFriends || { ids: [], text: '', review: '' };
   const a = [...closerDraft.ids].sort().join('\n');
   const b = [...new Set(saved.ids || [])].sort().join('\n');
-  return a === b && closerDraft.text.trim() === String(saved.text || '').trim();
+  return a === b && closerDraft.text.trim() === String(saved.text || '').trim() && closerDraft.review.trim() === String(saved.review || '').trim();
 }
 // 친해진 친구를 바꾸면 관계 지도와 함께 다시 제출해야 하므로 제출 안내(말풍선·아래 막대)를 제자리에서 갱신합니다
 function markCloserDirty() {
@@ -1357,7 +1409,7 @@ async function submit() {
   if (!canSubmit()) return;
   try {
     // 🌱 이번 달 친해진 친구도 관계 지도와 함께 보냅니다 (고른 친구가 없고 글도 없으면 서버가 비움)
-    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim() } });
+    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim(), review: closerDraft.review.trim() } });
     step = 'relations';
     render();
     toast('제출 완료! 정말 고마워 🎉');

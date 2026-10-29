@@ -161,9 +161,18 @@ export function previousHistoryFor(room, round) {
   const notMine = history.filter((h) => h.month !== round?.name && (!h.roundId || !round?.id || h.roundId !== round.id));
   const cur = monthIndex(round?.name);
   const stamp = (h) => String(h.updatedAt || '');
+  // 같은 달에 조사를 두 번 하면("2026년 10월" → "2026년 10월 2차") 앞선 회차에서 공개한 그 달 기록도 '지난' 기록으로 봅니다.
+  // 회차 연결이 없는 기록(지난 기록 올리기)은 앞선 것으로 보고, 뒤 회차의 기록은 쓰지 않습니다.
+  const roundIndex = (id) => (room.rounds || []).findIndex((r) => r.id === id);
+  const curIdx = roundIndex(round?.id);
+  const earlierRound = (h) => {
+    if (!h.roundId) return true;
+    const i = roundIndex(h.roundId);
+    return i < 0 || curIdx < 0 || i < curIdx;
+  };
   if (cur !== null) {
     const dated = notMine.map((h) => ({ h, idx: monthIndex(h.month) }));
-    const before = dated.filter((x) => x.idx !== null && x.idx < cur).sort((a, b) => (b.idx - a.idx) || stamp(b.h).localeCompare(stamp(a.h)));
+    const before = dated.filter((x) => x.idx !== null && (x.idx < cur || (x.idx === cur && earlierRound(x.h)))).sort((a, b) => (b.idx - a.idx) || stamp(b.h).localeCompare(stamp(a.h)));
     if (before.length) return before[0].h;
     const undated = dated.filter((x) => x.idx === null);
     return undated.length ? undated[undated.length - 1].h : null;

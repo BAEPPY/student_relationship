@@ -229,7 +229,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       stats,
       analysis,
       history: analyzeHistory(room),
-      closerFriends: round.closerFriends || {},   // { sid: { ids, text, updatedAt } } 이번 달 친해진 친구 (학생 돌아보기)
+      closerFriends: round.closerFriends || {},   // { sid: { ids, text, review, updatedAt } } 돌아보기: 친해진 친구 · 한 달은 어땠나요
       catalog: REASON_CATALOG,
       notice: storageNotice,
       ...seatingView(room, round),
@@ -312,7 +312,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       me: { id: student.id, name: student.name, body: student.body || {} },
       classmates,
       relations,
-      closerFriends: round.closerFriends?.[student.id] || null,   // { ids, text, updatedAt } 이번 달 친해진 친구
+      closerFriends: round.closerFriends?.[student.id] || null,   // { ids, text, review, updatedAt } 돌아보기: 친해진 친구 · 한 달은 어땠나요
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
       draft: studentDraftView(round, student.id),
       catalog: REASON_CATALOG,
@@ -405,6 +405,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       '같이 놀 때 자기 마음대로만 하고 내 말은 안 들어 줘요.',
     ];
     const closerTexts = ['같은 모둠이 되어서 발표 준비를 같이 하다가 친해졌어요.', '쉬는 시간에 같이 보드게임을 하면서 친해졌어요.', '체육 시간에 같은 팀이 되어서 더 친해졌어요.'];
+    const reviewTexts = ['모둠 활동이 재미있었고 친구들이랑 더 친해졌어요.', '수학이 조금 어려웠지만 짝이 도와줘서 괜찮았어요.', '체육 대회 연습이 힘들었는데 끝나고 나니 뿌듯했어요.'];
     const makeRelations = (prev, at, skipLast) => {
       const relations = {};
       const submissions = {};
@@ -429,7 +430,9 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         // 제출한 학생의 40% 정도는 이번 달 친해진 친구를 1~2명 고르고, 그중 절반은 어떻게 친해졌는지도 적음
         if (rand() < 0.4) {
           const picked = [...new Set([pick(others), ...(rand() < 0.5 ? [pick(others)] : [])])];
-          closerFriends[from] = { ids: picked, text: rand() < 0.5 ? pick(closerTexts) : '', updatedAt: at };
+          closerFriends[from] = { ids: picked, text: rand() < 0.5 ? pick(closerTexts) : '', review: rand() < 0.5 ? pick(reviewTexts) : '', updatedAt: at };
+        } else if (rand() < 0.2) {
+          closerFriends[from] = { ids: [], text: '', review: pick(reviewTexts), updatedAt: at };   // 친구는 안 고르고 한 달 돌아보기만 적은 학생
         }
       });
       return { relations, submissions, closerFriends };
@@ -831,7 +834,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (input.text !== undefined && typeof input.text !== 'string') throw bad('어떻게 친해졌는지 글이 올바르지 않아요.');
     const text = input.text === undefined ? '' : input.text.trim();
     if (text.length > LIMITS.reason) throw bad(`어떻게 친해졌는지는 ${LIMITS.reason}자 이하로 적어 주세요.`);
-    return ids.length || text ? { ids, text } : null;
+    // 한 달은 어땠나요 (돌아보기 글, 선택)
+    if (input.review !== undefined && typeof input.review !== 'string') throw bad('한 달이 어땠는지 글이 올바르지 않아요.');
+    const review = input.review === undefined ? '' : input.review.trim();
+    if (review.length > LIMITS.reason) throw bad(`한 달이 어땠는지는 ${LIMITS.reason}자 이하로 적어 주세요.`);
+    return ids.length || text || review ? { ids, text, review } : null;
   }
 
   // 학생을 삭제하면 그 학생의 '친해진 친구' 응답과, 다른 학생이 고른 목록 속 그 학생도 지웁니다
@@ -841,7 +848,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     for (const [sid, entry] of Object.entries(round.closerFriends)) {
       if (!Array.isArray(entry?.ids) || !entry.ids.includes(studentId)) continue;
       entry.ids = entry.ids.filter((id) => id !== studentId);
-      if (!entry.ids.length && !entry.text) delete round.closerFriends[sid];
+      if (!entry.ids.length && !entry.text && !entry.review) delete round.closerFriends[sid];
     }
   }
 
@@ -892,7 +899,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       } else if (closer) {
         round.closerFriends ||= {};
         const before = round.closerFriends[student.id];
-        const same = before && before.text === closer.text && JSON.stringify(before.ids || []) === JSON.stringify(closer.ids);
+        const same = before && before.text === closer.text && (before.review || '') === closer.review && JSON.stringify(before.ids || []) === JSON.stringify(closer.ids);
         round.closerFriends[student.id] = { ...closer, updatedAt: same ? before.updatedAt : now };
       }
       clearStudentDraft(round, student.id, ['relations', 'closerFriends']);

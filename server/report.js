@@ -91,12 +91,16 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (!entry) return '';
     const names = (entry.ids || []).filter((id) => stats[id]).map(nameOf);
     const text = String(entry.text || '').trim();
-    if (!names.length && !text) return '';
-    return `🌱 ${s.name} · 친해진 친구: ${names.length ? names.join(', ') : '(고른 친구 없음)'}${text ? ` — “${text}”` : ''}`;
+    const review = String(entry.review || '').trim();
+    if (!names.length && !text && !review) return '';
+    const parts = [];
+    if (names.length || text) parts.push(`친해진 친구: ${names.length ? names.join(', ') : '(고른 친구 없음)'}${text ? ` — “${text}”` : ''}`);
+    if (review) parts.push(`한 달 돌아보기: “${review}”`);
+    return `🌱 ${s.name} · ${parts.join(' · ')}`;
   }).filter(Boolean);
   if (closerLines.length) {
-    sub(`${round.name} 친해진 친구`);
-    para('학생이 이 회차의 관계 지도와 함께 "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.', 'muted');
+    sub(`${round.name} 돌아보기`);
+    para('학생이 이 회차의 관계 지도와 함께 적은 돌아보기예요. "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지, 그리고 한 달이 어땠는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.', 'muted');
     list(closerLines);
   }
 

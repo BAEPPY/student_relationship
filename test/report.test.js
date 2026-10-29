@@ -360,7 +360,7 @@ describe('보고서 문서 모델 (직접 호출)', () => {
     } };
     const room = { name: '반', students, rounds: [round], currentRoundId: 'r1' };
     const doc = reportDocument({ room, round, now: new Date('2026-10-05T03:00:00Z') });
-    assert.ok(doc.blocks.some((b) => b.type === 'heading' && b.level === 3 && b.text.endsWith(' 친해진 친구')));
+    assert.ok(doc.blocks.some((b) => b.type === 'heading' && b.level === 3 && b.text.endsWith(' 돌아보기')));
     const list = doc.blocks.find((b) => b.type === 'list' && b.items.some((i) => i.startsWith('🌱')));
     assert.deepEqual(list.items, ['🌱 김하늘 · 친해진 친구: 이도윤, 박서연 — “같은 모둠이 되어서 친해졌어요.”', '🌱 이도윤 · 친해진 친구: 김하늘']);
     assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수'], '소제목이라 큰 번호는 안 바뀜');
@@ -370,7 +370,7 @@ describe('보고서 문서 모델 (직접 호출)', () => {
       assert.ok(text.includes('같은 모둠이 되어서 친해졌어요.'), kind);
     }
     const none = reportDocument({ room, round: { ...round, closerFriends: {} }, now: new Date('2026-10-05T03:00:00Z') });
-    assert.ok(!none.blocks.some((b) => b.type === 'heading' && b.text.endsWith(' 친해진 친구')), '아무도 적지 않았으면 소제목도 없음');
+    assert.ok(!none.blocks.some((b) => b.type === 'heading' && b.text.endsWith(' 돌아보기')), '아무도 적지 않았으면 소제목도 없음');
     assert.ok(!JSON.stringify(none).includes('🌱'));
   });
 

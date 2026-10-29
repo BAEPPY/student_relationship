@@ -679,10 +679,13 @@ function rolesInfoBox(sid) {
   // 🌱 이번 달 친해진 친구 (학생 돌아보기, 선택 사항): 낸 학생만 보여 주고 없으면 아무것도 넣지 않아요
   const closer = state.closerFriends?.[sid] || null;
   const closerNames = (closer?.ids || []).filter((id) => state.stats?.[id]).map(nameOf);
-  const closerBlock = closer && (closerNames.length || closer.text)
+  const monthLabel = (/(\d{1,2})\s*월/.exec(state.round?.name || '') || [])[1];   // "2026년 10월 2차" → "10월"
+  const closerBlock = closer && (closerNames.length || closer.text || closer.review)
     ? [
-      label(`🌱 ${state.round?.name || '이번 달'} 친해진 친구 (${closerNames.length}) · ${fmtDate(closer.updatedAt)}`),
-      closerNames.length ? el('div', { class: 'chips profile-chips' }, closerNames.map((name) => el('span', { class: 'profile-chip closer', text: name }))) : el('div', { class: 'muted', text: '고른 친구는 없고 글만 적었어요.' }),
+      label(`🌱 ${state.round?.name || '이번 달'} 돌아보기 · ${fmtDate(closer.updatedAt)}`),
+      closer.review ? el('div', { class: 'quote', text: `${monthLabel ? `${monthLabel}월` : '한 달'}은 어땠나요? “${closer.review}”` }) : null,
+      closerNames.length || closer.text ? el('div', { class: 'muted', style: { marginTop: '4px' }, text: `친해진 친구 (${closerNames.length})` }) : null,
+      closerNames.length ? el('div', { class: 'chips profile-chips' }, closerNames.map((name) => el('span', { class: 'profile-chip closer', text: name }))) : (closer.text ? el('div', { class: 'muted', text: '고른 친구는 없고 글만 적었어요.' }) : null),
       closer.text ? el('div', { class: 'quote', text: `“${closer.text}”` }) : null,
     ]
     : [];
