@@ -80,9 +80,10 @@ export const index = `<!doctype html>
     </section>
 
     <section class="card hidden" id="saved-card">
-      <h2>이 브라우저에서 만든 교실</h2>
+      <h2>이 기기에서 열었던 교실</h2>
+      <p class="muted" style="margin:0 0 10px">선생님 링크를 열면 이 브라우저가 교실을 기억해요. 이 목록은 지금 쓰는 기기의 브라우저에만 저장되고, 다른 사람이나 다른 선생님에게는 보이지 않아요.</p>
       <ul class="room-list" id="saved-list" style="list-style:none;padding:0;margin:0"></ul>
-      <p class="muted" style="margin-top:8px">이 목록은 지금 사용 중인 브라우저에만 저장돼요.</p>
+      <p class="muted" style="margin-top:8px">여러 사람이 같이 쓰는 컴퓨터라면 "목록에서 지우기"를 눌러 두세요. 교실이 지워지는 건 아니고, 이 기기의 목록에서만 빠져요.</p>
     </section>
 
     <section class="card">
