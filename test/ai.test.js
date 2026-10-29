@@ -319,6 +319,26 @@ describe('1인 1역 배정 (aiAssignRoles)', () => {
   });
 });
 
+describe('이번 회차에 친해진 친구 (분석 프롬프트)', () => {
+  test('가명으로만 들어가고 글 속 친구 이름도 가명으로 바뀌며, 비어 있으면 (없음)', () => {
+    const closerFriends = {
+      st_a1: { ids: ['st_c3', 'st_d4'], text: '박서연이랑 같은 모둠이 되어서 친해졌어요.', updatedAt: '2026-10-05T00:00:00Z' },
+      st_b2: { ids: ['st_a1', 'ghost'], text: '', updatedAt: '2026-10-05T00:00:00Z' },
+      st_c3: { ids: ['ghost'], text: '', updatedAt: '2026-10-05T00:00:00Z' },   // 아는 친구도 글도 없으면 줄 없음
+      ghost: { ids: ['st_a1'], text: '없는 학생', updatedAt: '2026-10-05T00:00:00Z' },
+    };
+    const { user } = buildAnalysisPrompt({ ...analysisInput(null), closerFriends });
+    const body = user.split('## 이번 회차에 친해진 친구 (학생이 직접 고름)\n')[1].split('\n\n## ')[0];
+    assert.equal(body, '- S1: S3, S4 — "S3이랑 같은 모둠이 되어서 친해졌어요."\n- S2: S1');
+    for (const name of [...REAL_NAMES, '하늘', '도윤', '서연']) assert.ok(!user.includes(name), name);
+    for (const id of REAL_IDS) assert.ok(!user.includes(id), id);
+    const { user: empty } = buildAnalysisPrompt(analysisInput(null));
+    assert.match(empty, /## 이번 회차에 친해진 친구 \(학생이 직접 고름\)\n\(없음\)/);
+    const { user: textOnly } = buildAnalysisPrompt({ ...analysisInput(null), closerFriends: { st_a1: { ids: [], text: '다들 조금씩 더 친해졌어요' } } });
+    assert.match(textOnly, /- S1: \(고른 친구 없음\) — "다들 조금씩 더 친해졌어요"/);
+  });
+});
+
 describe('추가 검증 (검토 후)', () => {
   test('꼬리표가 붙은 같은 이름, 두 글자 성, 역할 설명 속 이름도 가명으로 바뀜', () => {
     const students = [

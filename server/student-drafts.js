@@ -1,7 +1,8 @@
 import { TRAITS, validateBody } from './roles.js';
 import { isValidTag } from './reasons.js';
 
-const SECTIONS = ['profile', 'application', 'relations'];
+const SECTIONS = ['profile', 'application', 'relations'];          // 단계(step) 이름
+const SECTION_KEYS = [...SECTIONS, 'closerFriends'];                // 초안으로 보관하는 내용 (친해진 친구는 관계 지도 단계의 일부)
 const traitIds = new Set(TRAITS.map((trait) => trait.id));
 const bad = (message) => Object.assign(new Error(message), { status: 400 });
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -26,11 +27,18 @@ export function validateDraft(input, room, studentId) {
   if (mutationId !== null && (typeof mutationId !== 'string' || !mutationId || mutationId.length > 128)) throw bad('임시 저장 요청 번호가 올바르지 않아요.');
   const step = input.step ?? null;
   if (step !== null && !SECTIONS.includes(step)) throw bad('임시 저장할 단계를 확인해 주세요.');
-  if (!object(input.sections) || Object.keys(input.sections).some((key) => !SECTIONS.includes(key))) throw bad('임시 저장할 내용이 올바르지 않아요.');
+  if (!object(input.sections) || Object.keys(input.sections).some((key) => !SECTION_KEYS.includes(key))) throw bad('임시 저장할 내용이 올바르지 않아요.');
   const sections = {};
+  const classmates = new Set(room.students.filter((student) => student.id !== studentId).map((student) => student.id));
   for (const [key, value] of Object.entries(input.sections)) {
     if (!object(value)) throw bad('임시 저장할 내용이 올바르지 않아요.');
-    if (key === 'profile') {
+    if (key === 'closerFriends') {
+      const rawIds = value.ids ?? [];
+      if (!Array.isArray(rawIds) || rawIds.length > 1000) throw bad('임시 저장할 친해진 친구 목록이 올바르지 않아요.');
+      const ids = [...new Set(rawIds)];   // 개수 검사는 중복을 뺀 뒤에
+      if (ids.length > classmates.size || ids.some((id) => !classmates.has(id))) throw bad('임시 저장할 친해진 친구 목록에 우리 반 친구가 아닌 학생이 포함되어 있어요.');
+      sections.closerFriends = { ids, text: text(value.text, 300) };
+    } else if (key === 'profile') {
       sections.profile = {
         traits: traits(value.traits, TRAITS.length),
         partnerTraits: traits(value.partnerTraits, 3),
@@ -48,7 +56,6 @@ export function validateDraft(input, room, studentId) {
         helpSelf: text(choice.helpSelf, 600),
       })) };
     } else {
-      const classmates = new Set(room.students.filter((student) => student.id !== studentId).map((student) => student.id));
       const relations = {};
       if (Object.keys(value).length > classmates.size) throw bad('임시 관계에 우리 반 친구가 아닌 학생이 포함되어 있어요.');
       for (const [target, relation] of Object.entries(value)) {
@@ -80,12 +87,17 @@ export function saveStudentDraft(round, studentId, expectedRevision, draft) {
   round.studentDrafts[studentId] = { ...draft(), revision: current.revision + 1, updatedAt: new Date().toISOString() };
 }
 
-/** 비어 있어도 버전을 올려 최종 제출·초기화보다 늦게 도착한 초안이 되살아나지 않게 합니다. */
+/**
+ * 비어 있어도 버전을 올려 최종 제출·초기화보다 늦게 도착한 초안이 되살아나지 않게 합니다.
+ * section 은 하나 또는 여러 개(배열)를 받고, 한 번에 지워 버전은 한 번만 올립니다.
+ */
 export function clearStudentDraft(round, studentId, section = null) {
   const draft = studentDraftView(round, studentId);
   if (section) {
-    delete draft.sections[section];
-    if (draft.step === section) draft.step = null;
+    for (const key of [].concat(section)) {
+      delete draft.sections[key];
+      if (draft.step === key) draft.step = null;
+    }
   } else {
     draft.sections = {};
     draft.step = null;
@@ -100,8 +112,17 @@ export function clearStudentDraft(round, studentId, section = null) {
 export function removeStudentFromDrafts(round, studentId) {
   delete round.studentDrafts?.[studentId];
   for (const draft of Object.values(round.studentDrafts || {})) {
+    let changed = false;
     if (Object.hasOwn(draft.sections.relations || {}, studentId)) {
       delete draft.sections.relations[studentId];
+      changed = true;
+    }
+    const closer = draft.sections.closerFriends;
+    if (Array.isArray(closer?.ids) && closer.ids.includes(studentId)) {
+      closer.ids = closer.ids.filter((id) => id !== studentId);
+      changed = true;
+    }
+    if (changed) {
       draft.mutationId = null;
       draft.revision++;
     }

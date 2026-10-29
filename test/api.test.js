@@ -7,6 +7,8 @@ import { FakePool } from './fake-pg.js';
 
 let server;
 let url;
+// 안 좋은 사이는 객관식 없이 무슨 일이 있었는지 20자 이상 직접 적어야 제출됩니다 (BAD_REASON_MIN)
+const BAD_REASON = '지난주 체육 시간에 내가 공을 놓쳤다고 여러 번 놀려서 속상했어요.';
 
 const STORES = [
   ['FileStore', async () => new FileStore(null)],
@@ -61,23 +63,23 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   assert.equal(r.status, 400);
   assert.match(r.json.error, /안 좋은 사이를 1명 이상/);
 
-  // 안 좋은 사이인데 직접 쓴 이유가 없음 (선택지만 고른 경우도 안 됨)
+  // 안 좋은 사이인데 직접 쓴 이유가 없거나 20자 미만 (선택지만 고른 경우도 안 됨)
   r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '  ' } } });
   assert.equal(r.status, 400);
-  assert.match(r.json.error, /이유를 직접 적어/);
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: [], reason: 'ㅇ' } } });
+  assert.match(r.json.error, /20자 이상 직접 적어/);
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: [], reason: '' }, [s3.id]: { type: 'bad', tags: [], reason: '가'.repeat(19) } } });
   assert.equal(r.status, 400);
 
   // 잘못된 태그
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['hurt'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['hurt'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 400);
 
   // 자기 자신 / 남의 반 학생
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s1.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s1.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 400);
 
   // 정상 제출
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['fun'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good', tags: ['fun'], reason: '' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 200);
   assert.ok(r.json.submittedAt);
   assert.equal(r.json.relations[s3.id].type, 'bad');
@@ -97,7 +99,7 @@ test('교실 생성 → 학생 응답 → 교사 조회 전체 흐름', async ()
   // 마감 후에는 수정 불가
   const locked = await call(`/api/teacher/${t}`, 'PATCH', { locked: true });
   assert.equal(locked.json.room.locked, true);
-  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${s1.token}/relations`, 'PUT', { relations: { [s2.id]: { type: 'good' }, [s3.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 403);
   await call(`/api/teacher/${t}`, 'PATCH', { locked: false });
 
@@ -248,10 +250,10 @@ test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제�
   assert.equal(me.json.submittedAt, null);
 
   // 옛 회차 번호로 제출하면 거부 (데이터 섞임 방지)
-  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round1, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 409);
   // 2회차로 제출
-  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' } } });
+  r = await call(`/api/student/${a.token}/relations`, 'PUT', { roundId: round2, relations: { [b.id]: { type: 'bad', tags: ['tease'], reason: BAD_REASON } } });
   assert.equal(r.status, 200);
 
   // 1회차 데이터는 그대로
@@ -311,7 +313,7 @@ test('최소 인원: 좋은 사이 3명과 안 좋은 사이 3명을 각각 채�
   assert.equal(view.json.room.minBad, 1);
   const [me, ...others] = view.json.students;
   const good = (id) => [id, { type: 'good', tags: [], reason: '' }];
-  const badr = (id) => [id, { type: 'bad', tags: ['tease'], reason: '자꾸 놀려요' }];
+  const badr = (id) => [id, { type: 'bad', tags: ['tease'], reason: BAD_REASON }];
   // 좋은 사이만 6명
   let rel = Object.fromEntries(others.slice(0, 6).map((s) => good(s.id)));
   let r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: rel });
@@ -390,5 +392,101 @@ test('보관 정책 엔드포인트는 CRON_SECRET 이 있으면 비밀값을 �
   } finally {
     delete process.env.CRON_SECRET;
   }
+});
+test('안 좋은 사이: 객관식 없이 20자 이상 직접 적어야 하고, 보낸 선택지는 저장하지 않는다', async () => {
+  const created = await call('/api/rooms', 'POST', { name: '이유반', students: '가\n나\n다', minGood: 0, minBad: 0 });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  const [me, other] = view.json.students;
+  assert.equal((await call(`/api/student/${me.token}`)).json.room.badReasonMin, 20, '학생 화면이 최소 글자 수를 받음');
+  const put = (reason, tags = []) => call(`/api/student/${me.token}/relations`, 'PUT', { relations: { [other.id]: { type: 'bad', tags, reason } } });
+  // (a) 19자 → 400, 안내에 '20자 이상'과 지금 글자 수
+  let r = await put('가'.repeat(19));
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /20자 이상/);
+  assert.match(r.json.error, /지금 19자/);
+  r = await put(`   ${'가'.repeat(19)}   `);
+  assert.equal(r.status, 400, '앞뒤 공백은 세지 않음');
+  // (b) 정확히 20자 → 200
+  r = await put('가'.repeat(20));
+  assert.equal(r.status, 200);
+  assert.equal(r.json.relations[other.id].reason, '가'.repeat(20));
+  r = await put('😀'.repeat(20));
+  assert.equal(r.status, 200, '코드 포인트 기준이라 이모지 20개도 20자');
+  // (c) 선택지를 보내도 저장하지 않음 (교사 화면의 관계에도 없음)
+  r = await put('지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.', ['tease', 'hurt']);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.relations[other.id].tags, []);
+  let rel = (await call(`/api/teacher/${t}`)).json.relations.find((x) => x.from === me.id && x.to === other.id);
+  assert.deepEqual(rel.tags, []);
+  assert.deepEqual(rel.tagLabels, []);
+  assert.equal(rel.reason, '지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.');
+  // (d) 좋은 사이는 이유가 없거나 짧아도 되고 선택지는 그대로 저장
+  r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: { [other.id]: { type: 'good', tags: ['fun'], reason: '' } } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.relations[other.id].tags, ['fun']);
+  r = await call(`/api/student/${me.token}/relations`, 'PUT', { relations: { [other.id]: { type: 'good', tags: [], reason: '응' } } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.relations[other.id].reason, '응');
+  // 예전에 저장된 짧은 이유·선택지는 그대로 읽힌다 (옮기기·읽을 때 검증 없음)
+  const room = await store.findRoomByAdminToken(t);
+  await store.updateRoom(room.id, (rm) => { rm.rounds[0].relations[me.id][other.id] = { type: 'bad', tags: ['tease'], reason: '싫어요', updatedAt: '2026-09-01T00:00:00.000Z' }; });
+  rel = (await call(`/api/teacher/${t}`)).json.relations.find((x) => x.from === me.id && x.to === other.id);
+  assert.equal(rel.reason, '싫어요');
+  assert.deepEqual(rel.tagLabels, ['놀리거나 험담해요']);
+  assert.equal((await call(`/api/student/${me.token}`)).json.relations[other.id].reason, '싫어요');
+  assert.match((await call(`/api/teacher/${t}/export.csv`)).text, /싫어요/);
+});
+
+test('이번 달 친해진 친구: 관계 지도와 함께 제출·검증하고 교사 화면·보고서·내보내기에 보이며 삭제·초기화 때 정리된다', async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const created = await call('/api/rooms', 'POST', { name: '돌아보기반', students: '가\n나\n다\n라', minGood: 0, minBad: 0 });
+  const t = created.json.adminToken;
+  const view = await call(`/api/teacher/${t}`);
+  const [me, b, c, d] = view.json.students;
+  const put = (body) => call(`/api/student/${me.token}/relations`, 'PUT', { relations: { [b.id]: { type: 'good', tags: [], reason: '' } }, ...body });
+  assert.equal((await call(`/api/student/${me.token}`)).json.closerFriends, null);
+  // 검증: 자기 자신 · 없는 학생 · 300자 초과 · 모양이 잘못됨
+  assert.equal((await put({ closerFriends: { ids: [me.id], text: '' } })).status, 400);
+  assert.equal((await put({ closerFriends: { ids: ['nope'], text: '' } })).status, 400);
+  assert.equal((await put({ closerFriends: { ids: [], text: 'x'.repeat(301) } })).status, 400);
+  assert.equal((await put({ closerFriends: { ids: 'x', text: '' } })).status, 400);
+  assert.equal((await put({ closerFriends: [] })).status, 400);
+  assert.equal((await call(`/api/teacher/${t}`)).json.closerFriends[me.id], undefined, '거부된 요청은 아무것도 저장하지 않음');
+  // 저장: 두 명 + 글 (앞뒤 공백 정리, 같은 학생 중복은 한 번만)
+  let r = await put({ closerFriends: { ids: [c.id, d.id, c.id], text: '  같은 모둠이 되어서 친해졌어요.  ' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.closerFriends.ids, [c.id, d.id]);
+  assert.equal(r.json.closerFriends.text, '같은 모둠이 되어서 친해졌어요.');
+  const firstAt = r.json.closerFriends.updatedAt;
+  assert.ok(firstAt);
+  assert.ok(r.json.submittedAt);
+  // 같은 내용으로 다시 제출 → updatedAt 유지 · closerFriends 를 안 보내면 저장 값 유지
+  await sleep(5);
+  r = await put({ closerFriends: { ids: [c.id, d.id], text: '같은 모둠이 되어서 친해졌어요.' } });
+  assert.equal(r.json.closerFriends.updatedAt, firstAt);
+  r = await put({});
+  assert.deepEqual(r.json.closerFriends, { ids: [c.id, d.id], text: '같은 모둠이 되어서 친해졌어요.', updatedAt: firstAt });
+  // 교사 화면 · JSON 내보내기 · 보고서, 다른 학생 화면에는 없음
+  assert.deepEqual((await call(`/api/teacher/${t}`)).json.closerFriends[me.id].ids, [c.id, d.id]);
+  assert.deepEqual((await call(`/api/teacher/${t}/export.json`)).json.rounds[0].closerFriends[me.id].ids, [c.id, d.id]);
+  assert.equal((await call(`/api/student/${b.token}`)).json.closerFriends, null);
+  const report = await call(`/api/teacher/${t}/report.json`);
+  assert.ok(report.json.blocks.some((bl) => bl.type === 'list' && bl.items.includes('🌱 가 · 친해진 친구: 다, 라 — “같은 모둠이 되어서 친해졌어요.”')), JSON.stringify(report.json.blocks));
+  // 학생 삭제 → 다른 학생이 고른 목록에서 빠짐
+  const removed = await call(`/api/teacher/${t}/students/${c.id}`, 'DELETE');
+  assert.deepEqual(removed.json.closerFriends[me.id].ids, [d.id]);
+  // 내용이 바뀌면 updatedAt 갱신, 모두 비우면 삭제
+  await sleep(5);
+  r = await put({ closerFriends: { ids: [d.id], text: '' } });
+  assert.notEqual(r.json.closerFriends.updatedAt, firstAt);
+  r = await put({ closerFriends: { ids: [], text: '' } });
+  assert.equal(r.json.closerFriends, null);
+  assert.equal((await call(`/api/teacher/${t}`)).json.closerFriends[me.id], undefined);
+  // 응답 초기화 → 그 학생 것만 지움
+  await put({ closerFriends: { ids: [d.id], text: '' } });
+  const reset = await call(`/api/teacher/${t}/students/${me.id}/reset`, 'POST');
+  assert.equal(reset.json.closerFriends[me.id], undefined);
+  assert.equal((await call(`/api/student/${me.token}`)).json.closerFriends, null);
 });
 });

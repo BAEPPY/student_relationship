@@ -585,6 +585,7 @@ body.kid .link-box input { border-radius: 16px; }
 .roles-info .profile-chips, .roles-info .role-chips, .ai-panel .role-chips { gap: 6px; margin: 4px 0 8px; }
 .roles-info .profile-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; background: var(--blue-light); color: var(--blue-dark); border: 1px solid #d8d3ff; }
 .roles-info .profile-chip.partner { background: #fff0e0; color: #9a4b00; border-color: #ffd7ad; }
+.roles-info .profile-chip.closer { background: #edf8ec; color: #1f6b2f; border-color: #bfe3b4; }   /* 🌱 이번 달 친해진 친구 */
 .roles-info .role-chip, .ai-panel .role-chip { display: inline-flex; align-items: baseline; gap: 2px; padding: 4px 10px; border-radius: 10px; font-size: 13px; background: #fff6e8; border: 1px solid #ffe0b8; color: #6b3f00; max-width: 100%; }
 .ai-panel .role-chip .reason { color: var(--gray-700); font-weight: 400; }
 

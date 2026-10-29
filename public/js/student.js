@@ -6,7 +6,10 @@ const app = document.getElementById('app');
 
 let data = null;            // 서버에서 받은 원본
 let draft = {};             // 편집 중인 관계 { toId: { type, tags, reason } }
-let dirty = false;          // 관계 지도에 제출하지 않은 변경이 있는지
+let dirty = false;          // 관계 지도에 제출하지 않은 변경이 있는지 (관계 표시 또는 친해진 친구)
+let relationsDirty = false; // 관계 표시 자체를 바꿨는지 (임시 저장에 관계 섹션을 넣을지)
+let closerDraft = { ids: new Set(), text: '' };   // 🌱 이번 달 친해진 친구 (관계 지도와 함께 제출하는 선택 항목)
+let closerDirty = false;    // 친해진 친구에 제출하지 않은 변경이 있는지
 
 // ---------- 단계(①성향 → ②1인1역 지원 → ③친구 관계 지도) ----------
 let step = 'profile';       // 'profile' | 'application' | 'relations'
@@ -31,6 +34,9 @@ const REOPENED_TEXT = '선생님이 조사를 다시 열었어. 이어서 할 �
 const REASON_MIN = 10;      // 하고 싶은 이유 최소 글자 수
 const TEXT_MAX = 600;       // 지원서 글 최대 글자 수 (서버와 동일)
 const PARTNER_TEXT_MAX = 300;
+const CLOSER_TEXT_MAX = 300;   // 어떻게 친해졌는지 최대 글자 수 (서버의 LIMITS.reason 과 동일)
+const BAD_REASON_MIN = () => data.room.badReasonMin ?? 20;   // 안 좋은 사이 이유 최소 글자 수 (서버가 알려 줌)
+const badReasonLength = (s) => [...String(s ?? '').trim()].length;   // 서버(textLength)와 같은 방식: 앞뒤 공백을 뺀 코드 포인트 수
 
 const STEP_LABEL = { profile: '나는 이런 편이에요', application: '1인 1역 지원', relations: '친구 관계 지도' };
 // 선생님의 선정 기준(data.selectionCriteria)을 어린이 말로 바꾼 것. 순서가 같을 때만 쓰고, 아니면 원문을 보여 줍니다.
@@ -45,7 +51,8 @@ const KID_CRITERIA = [
 function captureDraft() {
   if (!draftStore || submitting) return;
   const sections = {};
-  if (dirty) sections.relations = draft;
+  if (relationsDirty) sections.relations = draft;
+  if (closerDirty) sections.closerFriends = { ids: [...closerDraft.ids], text: closerDraft.text };
   if (profileDirty) sections.profile = { traits: [...profileDraft.traits], partnerTraits: [...profileDraft.partnerTraits], partnerText: profileDraft.partnerText, body: profileDraft.body };
   if (appDirty) sections.application = { choices: appDraft.map(({ roleId, reason, helpClass, helpSelf }) => ({ roleId, reason, helpClass, helpSelf })) };
   draftStore.update({ step, sections });
@@ -108,8 +115,13 @@ async function sendDraft(body, { keepalive = false } = {}) {
 function applyDraftSections(saved) {
   const sections = saved.sections || {};
   draft = JSON.parse(JSON.stringify(sections.relations ?? data.relations ?? {}));
-  dirty = Object.hasOwn(sections, 'relations');
+  relationsDirty = Object.hasOwn(sections, 'relations');
   initDrafts();
+  if (sections.closerFriends) {
+    closerDraft = { ids: new Set(sections.closerFriends.ids || []), text: sections.closerFriends.text || '' };
+    closerDirty = !closerUnchanged();   // 제출한 내용과 같은 초안이면 '다시 제출' 안내를 띄우지 않아요
+  }
+  dirty = relationsDirty || closerDirty;   // 친해진 친구도 관계 지도와 함께 제출하므로 둘 중 하나만 바뀌어도 다시 제출
   if (sections.profile) {
     const p = sections.profile;
     profileDraft = { traits: new Set(p.traits || []), partnerTraits: new Set(p.partnerTraits || []), partnerText: p.partnerText || '', body: { ...(p.body || {}) } };
@@ -220,7 +232,7 @@ function josa(word, [a, b]) {
 // ---------- 유효성 ----------
 function relationValid(r) {
   if (!r) return true;
-  if (r.type === 'bad') return Boolean(r.reason && r.reason.trim().length >= 2); // 안 좋은 사이는 직접 쓴 이유가 꼭 필요
+  if (r.type === 'bad') return badReasonLength(r.reason) >= BAD_REASON_MIN(); // 안 좋은 사이는 무슨 일이 있었는지 직접 쓴 이유(20자 이상)가 꼭 필요
   return r.type === 'good';
 }
 function selectedCount() { return Object.values(draft).filter((r) => r?.type === 'good' || r?.type === 'bad').length; }
@@ -297,6 +309,11 @@ function initDrafts(which = 'all') {
     // 더는 고를 수 없는 역할이 들어 있으면 그 칸만 비우고(쓴 글은 남김) 다시 내야 하는 상태로
     appDirty = dropStaleChoices(appDraft) && !data.room.locked;
     appErrors = {};
+  }
+  if (which === 'all' || which === 'relations') {
+    const cf = data.closerFriends;
+    closerDraft = { ids: new Set(cf?.ids || []), text: cf?.text || '' };
+    closerDirty = false;
   }
 }
 async function reloadAfterRoundChange(status) {
@@ -820,10 +837,7 @@ function renderRelations() {
   const b0 = Math.min(countOf('bad'), m0.bad);
   const need0 = m0.good + m0.bad;
   const pct0 = need0 ? (g0 + b0) / need0 : 1;
-  const leftGood = Math.max(0, m0.good - countOf('good'));
-  const leftBad = Math.max(0, m0.bad - countOf('bad'));
-  const leftText = [leftGood ? `❤️ ${leftGood}명` : '', leftBad ? `⚡ ${leftBad}명` : ''].filter(Boolean).join(', ');
-  const bubble = room.locked ? '조사가 끝났어요!' : selectedCount() === 0 ? '친구를 골라 볼까요?' : !minsMet() ? `${leftText} 더 골라 줘!` : data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
+  const bubble = relationsBubble();
   const ring = el('div', { class: 'ring' }, [
     svgEl('svg', { viewBox: '0 0 112 112' }),
     el('div', { class: 'ring-text' }, [el('b', { text: `${g0 + b0}` }), el('span', { text: `/ ${need0}명` })]),
@@ -837,7 +851,7 @@ function renderRelations() {
       el('div', { class: 'badge blue', style: { marginBottom: '6px' }, text: `${data.round?.name || ''} 조사` }),
       el('h1', { text: `${me.name}, 안녕! 👋` }),
       el('p', { style: { marginBottom: '4px' } }, ['친구들과 나의 관계를 표시해 줘. ', el('b', { text: `❤️ 좋은 사이 ${m0.good}명` }), '과 ', el('b', { text: `⚡ 안 좋은 사이 ${m0.bad}명` }), ' 이상 꼭 골라야 해!']),
-      el('div', { class: `speech ${pct0 >= 1 ? 'done' : ''}`, text: bubble }),
+      el('div', { class: `speech ${pct0 >= 1 && !invalidNames().length ? 'done' : ''}`, id: 'relations-bubble', text: bubble }),
     ]),
   ]);
   app.append(intro);
@@ -846,6 +860,7 @@ function renderRelations() {
     room.locked ? el('div', { class: 'alert warn', style: { margin: '10px 0 0' }, text: lockedText() }) : null,
     data.submittedAt && !room.locked ? el('div', { class: 'alert success', style: { margin: '10px 0 0' }, text: '제출 완료! 끝나기 전까지는 언제든 바꾸고 다시 제출할 수 있어.' }) : null,
   ]));
+  app.append(closerCard());
 
   // 진행 상황
   const m = mins();
@@ -883,13 +898,96 @@ function renderRelations() {
   app.append(stepNav(null));
 }
 
+// 관계 지도 말풍선: 마감 · 아직 안 고름 · 더 골라야 함 · 제출 완료 · 제출할 차례
+function relationsBubble() {
+  const m = mins();
+  const leftGood = Math.max(0, m.good - countOf('good'));
+  const leftBad = Math.max(0, m.bad - countOf('bad'));
+  const leftText = [leftGood ? `❤️ ${leftGood}명` : '', leftBad ? `⚡ ${leftBad}명` : ''].filter(Boolean).join(', ');
+  if (data.room.locked) return '조사가 끝났어요!';
+  const invalid = invalidNames();
+  if (invalid.length) return `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 표시를 다시 확인해 줘!`;
+  if (selectedCount() === 0) return '친구를 골라 볼까요?';
+  if (!minsMet()) return `${leftText} 더 골라 줘!`;
+  return data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
+}
+
+// 🌱 이번 달 친해진 친구 (돌아보기): 관계 지도와 함께 제출하는 선택 항목. 고른 친구 칩과 '어떻게 친해졌어?' 글
+function closerCard() {
+  const { room, classmates } = data;
+  const locked = room.locked;
+  const cd = closerDraft;
+  const summary = el('div', { class: 'closer-summary hidden', id: 'closer-summary', role: 'status' });
+  const chips = classmates.map((c) => el('button', {
+    type: 'button',
+    class: 'chip',
+    'aria-pressed': 'false',
+    disabled: locked ? true : null,
+    dataset: { closer: c.id },
+    text: c.name,
+    onClick: () => {
+      if (cd.ids.has(c.id)) cd.ids.delete(c.id); else cd.ids.add(c.id);
+      markCloserDirty();
+      syncCloser();
+    },
+  }));
+  // 고른 상태와 요약 줄('🌱 하늘, 도윤 (2명)')을 제자리에서 맞춥니다 (다시 그리면 포커스가 사라지므로)
+  const syncCloser = () => {
+    chips.forEach((chip, i) => {
+      const on = cd.ids.has(classmates[i].id);
+      chip.classList.toggle('selected', on);
+      chip.classList.toggle('good-theme', on);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const names = classmates.filter((c) => cd.ids.has(c.id)).map((c) => c.name);
+    summary.textContent = names.length ? `🌱 ${names.join(', ')} (${names.length}명)` : '';
+    summary.classList.toggle('hidden', !names.length);
+  };
+  syncCloser();
+  const ta = el('textarea', { id: 'closer-text', maxlength: CLOSER_TEXT_MAX, placeholder: '예: 같은 모둠이 되어서 발표 준비를 같이 하다가 친해졌어요.', readonly: locked ? true : null, style: { minHeight: '80px' } });
+  ta.value = cd.text;
+  const cnt = el('div', { class: 'ta-counter', text: `${cd.text.length} / ${CLOSER_TEXT_MAX}자` });
+  ta.addEventListener('input', () => {
+    cd.text = ta.value;
+    cnt.textContent = `${ta.value.length} / ${CLOSER_TEXT_MAX}자`;
+    markCloserDirty();
+  });
+  return el('section', { class: 'card closer-card', id: 'closer-card' }, [
+    el('div', { class: 'card-title' }, [el('h2', { text: `🌱 ${data.round?.name || '이번 달'} 돌아보기 · 친해진 친구` }), el('span', { class: 'muted', text: '선택' })]),
+    el('p', { class: 'muted', text: '이번 달에 새로 친해졌거나 더 친해진 친구가 있어? 있으면 골라 줘. 없으면 안 골라도 괜찮아.' }),
+    el('div', { class: 'chips', role: 'group', 'aria-label': '이번 달 친해진 친구' }, chips),
+    summary,
+    el('div', { class: 'field' }, [
+      el('label', { for: 'closer-text' }, ['어떻게 친해졌어? ', el('span', { class: 'muted', text: '(선택)' })]),
+      ta,
+      cnt,
+    ]),
+  ]);
+}
+// 친해진 친구 초안이 서버에 제출된 내용과 같은지 (고른 순서는 무시, 글은 앞뒤 공백 무시)
+function closerUnchanged() {
+  const saved = data.closerFriends || { ids: [], text: '' };
+  const a = [...closerDraft.ids].sort().join('\n');
+  const b = [...new Set(saved.ids || [])].sort().join('\n');
+  return a === b && closerDraft.text.trim() === String(saved.text || '').trim();
+}
+// 친해진 친구를 바꾸면 관계 지도와 함께 다시 제출해야 하므로 제출 안내(말풍선·아래 막대)를 제자리에서 갱신합니다
+function markCloserDirty() {
+  closerDirty = !closerUnchanged();
+  dirty = relationsDirty || closerDirty;
+  const bubble = document.getElementById('relations-bubble');
+  if (bubble) bubble.textContent = relationsBubble();
+  const status = document.getElementById('sticky-status');
+  if (status) status.textContent = stickyStatus();
+}
+
 function mateButton(c, i = 0) {
   const r = draft[c.id];
   const type = r?.type;
   const invalid = r && !relationValid(r);
   const sub = r
     ? invalid
-      ? '⚠️ 관계와 이유를 확인해 줘'
+      ? (!type ? '⚠️ 어떤 관계인지 골라 줘' : `⚠️ 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 적어 줘`)
       : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
     : '눌러서 표시하기';
   return el('button', {
@@ -908,19 +1006,21 @@ function tagLabel(type, id) {
   return data.catalog[type]?.find((t) => t.id === id)?.label || id;
 }
 
-function stickyBar() {
+function stickyStatus() {
   const m = mins();
   const leftGood = Math.max(0, m.good - countOf('good'));
   const leftBad = Math.max(0, m.bad - countOf('bad'));
   const invalid = invalidNames();
-  let status;
-  if (invalid.length) status = `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 어떤 관계인지, 이유를 다 적었는지 확인해 줘.`;
-  else if (leftGood || leftBad) status = `${[leftGood ? `❤️ 좋은 사이 ${leftGood}명` : '', leftBad ? `⚡ 안 좋은 사이 ${leftBad}명` : ''].filter(Boolean).join(', ')} 더 골라 줘!`;
-  else if (dirty) status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
-  else if (data.submittedAt) status = '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
-  else status = '🌟 다 됐어! 제출 버튼을 눌러 줘.';
+  if (invalid.length) return `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 어떤 관계인지, 이유를 ${BAD_REASON_MIN()}자 이상 적었는지 확인해 줘.`;
+  if (leftGood || leftBad) return `${[leftGood ? `❤️ 좋은 사이 ${leftGood}명` : '', leftBad ? `⚡ 안 좋은 사이 ${leftBad}명` : ''].filter(Boolean).join(', ')} 더 골라 줘!`;
+  if (dirty) return '🌟 다 됐어! 제출 버튼을 눌러 줘.';
+  if (data.submittedAt) return '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
+  return '🌟 다 됐어! 제출 버튼을 눌러 줘.';
+}
+
+function stickyBar() {
   return el('div', { class: 'sticky-bar' }, [
-    el('div', { class: 'status', text: status }),
+    el('div', { class: 'status', id: 'sticky-status', text: stickyStatus() }),
     el('button', { type: 'button', class: 'btn primary', text: data.submittedAt ? '다시 제출하기 ▶' : '제출하기 ▶', disabled: canSubmit() ? null : true, onClick: submit }),
   ]);
 }
@@ -1071,6 +1171,7 @@ function openEditor(id) {
   function record() {
     if (state.type || state.reason) draft[id] = { type: state.type, tags: [...state.tags], reason: state.reason };
     else delete draft[id];
+    relationsDirty = true;
     dirty = true;
     captureDraft();
   }
@@ -1098,32 +1199,48 @@ function openEditor(id) {
         el('span', { class: 'big', text: '❤️' }), '좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 골라도 되고 안 골라도 돼' }),
       ]),
       el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'bad' ? null : 'bad'; state.tags.clear(); record(); draw(); } }, [
-        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: '검은 화살표 · 이유를 꼭 적어야 해' }),
+        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이', el('span', { class: 'desc', text: `검은 화살표 · 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 직접 적어야 해` }),
       ]),
     ]);
     modal.append(choice);
 
     if (state.type) {
       const isBad = state.type === 'bad';
-      modal.append(el('div', { class: 'field' }, [
-        el('label', {}, [isBad ? '어떤 점이 안 좋아? ' : '왜 좋은 사이야? ', el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
-        el('div', { class: 'chips' }, data.catalog[state.type].map((t) => el('button', {
-          type: 'button',
-          class: `chip ${state.tags.has(t.id) ? `selected ${isBad ? 'bad-theme' : 'good-theme'}` : ''}`,
-          text: `${t.emoji ? `${t.emoji} ` : ''}${t.label}`,
-          onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); record(); draw(); },
-        }))),
-      ]));
-      const ta = el('textarea', { placeholder: isBad ? '예: 지난주에 내 물건을 허락 없이 가져갔어요. 무슨 일이 있었는지 적어 줘.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
+      const min = BAD_REASON_MIN();
+      // 안 좋은 사이는 객관식(선택지) 없이 무슨 일이 있었는지 직접 적어요. 예전에 고른 선택지가 남아 있어도 비웁니다
+      if (isBad) state.tags.clear();
+      else {
+        modal.append(el('div', { class: 'field' }, [
+          el('label', {}, ['왜 좋은 사이야? ', el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
+          el('div', { class: 'chips' }, data.catalog.good.map((t) => el('button', {
+            type: 'button',
+            class: `chip ${state.tags.has(t.id) ? 'selected good-theme' : ''}`,
+            text: `${t.emoji ? `${t.emoji} ` : ''}${t.label}`,
+            onClick: () => { state.tags.has(t.id) ? state.tags.delete(t.id) : state.tags.add(t.id); record(); draw(); },
+          }))),
+        ]));
+      }
+      const ta = el('textarea', { id: 'editor-reason', placeholder: isBad ? '예: 지난주 체육 시간에 내가 공을 놓쳤다고 여러 번 놀려서 속상했어요.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
       ta.value = state.reason;
+      const counter = isBad ? el('div', { class: 'ta-counter', id: 'editor-counter' }) : null;
       ta.addEventListener('input', () => { state.reason = ta.value; record(); updateHint(); });
       modal.append(el('div', { class: 'field' }, [
-        el('label', {}, ['✏️ 이유 적기 ', isBad ? el('span', { class: 'req', text: '(꼭 적어 줘)' }) : el('span', { class: 'muted', text: '(선택)' })]),
+        el('label', { for: 'editor-reason' }, isBad
+          ? ['✏️ 무슨 일이 있었는지 직접 적어 줘 ', el('span', { class: 'req', text: `(${min}자 이상 꼭!)` })]
+          : ['✏️ 이유 적기 ', el('span', { class: 'muted', text: '(선택)' })]),
         ta,
+        counter,
       ]));
-      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: '안 좋은 사이일 때는 무슨 일이 있었는지 이유를 꼭 적어 줘. 선생님만 볼 수 있어.' });
+      const hint = el('div', { class: 'alert warn hidden', id: 'editor-hint', text: `안 좋은 사이일 때는 무슨 일이 있었는지 ${min}자 이상 직접 적어 줘. 선생님만 볼 수 있어.` });
       modal.append(hint);
-      var updateHint = () => hint.classList.toggle('hidden', !(isBad && state.reason.trim().length < 2));
+      // 글자 수(앞뒤 공백 제외)를 지원서 단계와 같은 모양으로 보여 주고, 모자라면 안내를 띄웁니다
+      var updateHint = () => {
+        if (!isBad) return;
+        const n = badReasonLength(state.reason);
+        counter.textContent = n < min ? `${n}자 · 최소 ${min}자 (${min - n}자 더!)` : `${n}자 ✓`;
+        counter.className = `ta-counter ${n < min ? 'bad' : 'ok'}`;
+        hint.classList.toggle('hidden', n >= min);
+      };
       updateHint();
     } else {
       modal.append(el('p', { class: 'muted', text: '위에서 관계를 골라 줘. 아직 잘 모르겠으면 표시하지 않아도 괜찮아.' }));
@@ -1132,17 +1249,18 @@ function openEditor(id) {
     modal.append(el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
       el('button', { type: 'button', class: 'btn primary', text: '완료 ✓', onClick: save }),
       el('button', { type: 'button', class: 'btn', text: '임시 저장', onClick: async () => { captureDraft(); await draftStore.flush(); toast(draftMessage(), 4500); } }),
-      current || state.type || state.reason ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; dirty = true; captureDraft(); close(); } }) : null,
+      current || state.type || state.reason ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; relationsDirty = true; dirty = true; captureDraft(); close(); } }) : null,
       el('button', { type: 'button', class: 'btn', text: '닫기', onClick: close }),
     ]));
   }
 
   function save() {
     if (!state.type && state.reason) { toast('어떤 관계인지 먼저 골라 줘. 쓴 이유는 임시 저장돼 있어.'); return; }
-    if (!state.type) { delete draft[id]; dirty = true; captureDraft(); close(); return; }
+    if (!state.type) { delete draft[id]; relationsDirty = true; dirty = true; captureDraft(); close(); return; }
     const r = { type: state.type, tags: [...state.tags], reason: state.reason };
-    if (!relationValid(r)) { toast('안 좋은 사이일 때는 이유를 꼭 적어 줘! (2자 이상)'); return; }
+    if (!relationValid(r)) { toast(`안 좋은 사이일 때는 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 직접 적어 줘! (지금 ${badReasonLength(state.reason)}자)`); return; }
     draft[id] = r;
+    relationsDirty = true;
     dirty = true;
     captureDraft();
     close();
@@ -1238,7 +1356,8 @@ function stopPolling() {
 async function submit() {
   if (!canSubmit()) return;
   try {
-    await submitSection('relations', { relations: draft });
+    // 🌱 이번 달 친해진 친구도 관계 지도와 함께 보냅니다 (고른 친구가 없고 글도 없으면 서버가 비움)
+    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim() } });
     step = 'relations';
     render();
     toast('제출 완료! 정말 고마워 🎉');

@@ -59,6 +59,7 @@ test('실제 분석 입력의 수정은 모두 재분석 필요 상태로 바뀐
     ({ room }) => { room.teacherNotes.rules[0].type = 'together'; },
     ({ room }) => { room.roles[0].description = '책과 서가 정리'; },
     ({ room }) => { room.roleHistory[0].assignments.library = ['a']; },
+    ({ round }) => { round.closerFriends = { a: { ids: ['b'], text: '같은 모둠이 되어서 친해졌어요', updatedAt: time } }; },
   ];
   for (const change of changes) {
     const input = fixture();
@@ -191,4 +192,13 @@ test('없는 학생의 제출은 제출률을 부풀리지 않고 빈 학급은 
   round.submissions.deleted = { submittedAt: time };
   assert.equal(capture(room, round).coverage.submitted, 1);
   assert.equal(capture({ ...room, students: [] }, round).coverage.complete, false);
+});
+
+test('친해진 친구가 없는 회차의 지문은 이 기능이 생기기 전과 같다 (저장해 둔 분석이 괜히 재분석 필요로 바뀌지 않음)', () => {
+  const PINNED = '7ecd23ae71ee71ccf9ed393859c6e2f8924a8b847989f32760e833d0b1c8b5d1';   // 친해진 친구 기능 전 서버 모듈로 같은 fixture 에서 계산한 값
+  const { room, round } = fixture();
+  assert.equal(capture(room, round).fingerprint, PINNED);
+  round.closerFriends = {};
+  assert.equal(capture(room, round).fingerprint, PINNED);
+  assert.ok(!capture(room, round).evidence.some((e) => e.kind === 'closer-friends'));
 });

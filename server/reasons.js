@@ -40,3 +40,11 @@ export function tagLabel(type, id) {
   const list = type === 'good' ? GOOD_REASONS : BAD_REASONS;
   return list.find((r) => r.id === id)?.label || id;
 }
+
+// 안 좋은 사이는 객관식 없이 무슨 일이 있었는지 직접 적습니다. 최소 글자 수는 앞뒤 공백을 뺀 코드 포인트 수로 셉니다
+// (클라이언트도 [...s.trim()].length 로 같은 방식으로 셉니다).
+export const BAD_REASON_MIN = 20;
+
+export function textLength(s) {
+  return [...String(s ?? '').trim()].length;
+}

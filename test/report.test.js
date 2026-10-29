@@ -350,6 +350,30 @@ describe('보고서 문서 모델 (직접 호출)', () => {
     }
   });
 
+  test('🌱 이번 달 친해진 친구는 적은 학생만 한 줄씩 넣고, 삭제된 학생은 이름에서 빼며, 한글·워드에도 남는다', () => {
+    const students = [{ id: 's1', name: '김하늘' }, { id: 's2', name: '이도윤' }, { id: 's3', name: '박서연' }];
+    const at = '2026-10-05T00:00:00Z';
+    const round = { id: 'r1', name: '2026년 10월', relations: {}, submissions: {}, closerFriends: {
+      s1: { ids: ['s2', 's3', 'gone'], text: '같은 모둠이 되어서 친해졌어요.', updatedAt: at },
+      s2: { ids: ['s1'], text: '', updatedAt: at },
+      s3: { ids: ['gone'], text: '', updatedAt: at },   // 삭제된 학생만 골랐고 글도 없으면 줄이 없음
+    } };
+    const room = { name: '반', students, rounds: [round], currentRoundId: 'r1' };
+    const doc = reportDocument({ room, round, now: new Date('2026-10-05T03:00:00Z') });
+    assert.ok(doc.blocks.some((b) => b.type === 'heading' && b.level === 3 && b.text.endsWith(' 친해진 친구')));
+    const list = doc.blocks.find((b) => b.type === 'list' && b.items.some((i) => i.startsWith('🌱')));
+    assert.deepEqual(list.items, ['🌱 김하늘 · 친해진 친구: 이도윤, 박서연 — “같은 모둠이 되어서 친해졌어요.”', '🌱 이도윤 · 친해진 친구: 김하늘']);
+    assert.deepEqual(headings(doc), ['1. 한눈에 보기', '2. 학생별 관계', '3. 관계 관심 점수'], '소제목이라 큰 번호는 안 바뀜');
+    for (const [kind, make] of [['hwpx', makeHwpxDocument], ['docx', makeDocxDocument]]) {
+      const text = documentToText(extractDocument(make(doc), `closer.${kind}`));
+      assert.ok(text.includes('친해진 친구: 이도윤, 박서연'), kind);
+      assert.ok(text.includes('같은 모둠이 되어서 친해졌어요.'), kind);
+    }
+    const none = reportDocument({ room, round: { ...round, closerFriends: {} }, now: new Date('2026-10-05T03:00:00Z') });
+    assert.ok(!none.blocks.some((b) => b.type === 'heading' && b.text.endsWith(' 친해진 친구')), '아무도 적지 않았으면 소제목도 없음');
+    assert.ok(!JSON.stringify(none).includes('🌱'));
+  });
+
   test('학생이 없는 빈 교실도 깨지지 않는다', () => {
     const round = { id: 'r1', name: '2026년 10월', relations: {}, submissions: {} };
     const doc = reportDocument({ room: { name: '빈 반', students: [], rounds: [round], currentRoundId: 'r1' }, round, now: new Date('2026-10-05T03:00:00Z') });

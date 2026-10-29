@@ -243,6 +243,20 @@ function rosterLine(pseudo) {
   return `학생 ${labels.length}명: ${labels.join(', ')}`;
 }
 
+/** 이번 달 친해진 친구 (학생 돌아보기): `- S1: S3, S5 — "어떻게 친해졌는지"` */
+function closerFriendLines(closerFriends, pseudo) {
+  const lines = [];
+  for (const [sid, entry] of Object.entries(closerFriends || {})) {
+    const lab = pseudo.label(sid);
+    if (!lab || !entry) continue;
+    const friends = (Array.isArray(entry.ids) ? entry.ids : []).map((id) => pseudo.label(id)).filter(Boolean);
+    const text = clip(pseudo.redact(entry.text));
+    if (!friends.length && !text) continue;
+    lines.push(`- ${lab}: ${friends.length ? friends.join(', ') : '(고른 친구 없음)'}${text ? ` — "${text}"` : ''}`);
+  }
+  return lines;
+}
+
 function profileLines(profiles, pseudo) {
   const lines = [];
   for (const [sid, p] of Object.entries(profiles || {})) {
@@ -428,7 +442,8 @@ const ANALYSIS_SYSTEM = [
   '',
   '자료에 대해:',
   '- 학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 역할 id([대괄호] 안의 값)만 쓰세요.',
-  '- 학생이 직접 적은 글(이유, 짝에 대한 생각)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
+  '- 학생이 직접 적은 글(이유, 짝에 대한 생각, 이번 회차에 친해진 친구와 어떻게 친해졌는지)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
+  '- "친해진 친구"는 학생 본인이 고른 긍정적인 자기 보고예요. 관계를 읽는 참고 맥락으로만 쓰고, 상대가 안 좋은 사이로 표시했다면 갈등이 풀렸다는 증거로 단정하지 마세요.',
   DATA_NOT_INSTRUCTIONS,
   '- "규칙 기반 관심 점수"는 교사가 먼저 살펴볼 순서를 정하는 참고값이에요. 실제 갈등 발생 확률이나 학생에 대한 진단이 아니며, % 또는 확률로 표현하지 마세요.',
   '- 응답이 없는 것은 갈등이 없다는 뜻이 아니에요. 직접 응답, 교사 메모, 모델의 추론을 구별하고 자료가 부족하면 확인이 필요하다고 적으세요. 자료에 없는 근거를 만들지 마세요.',
@@ -443,7 +458,7 @@ const ANALYSIS_SYSTEM = [
 ].join('\n');
 
 /** 분석용 system/user 프롬프트와 스키마. 실명·학생 id 는 포함되지 않습니다. */
-export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, roles, previousRoles } = {}) {
+export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, closerFriends, roles, previousRoles } = {}) {
   const pseudo = pseudonymize(students);
   const roleList = roles || [];
 
@@ -459,6 +474,7 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     section('규칙 기반 관심 점수 (100점 척도 · 발생 확률 아님)', conflictPairLines(pairs, pseudo)),
     section('성향 설문', profileLines(profiles, pseudo)),
     section('1인 1역 지원서', applicationLines(applications, roleList, pseudo)),
+    section('이번 회차에 친해진 친구 (학생이 직접 고름)', closerFriendLines(closerFriends, pseudo)),
     section('학생이 표시한 친구 관계', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
     '',
     '위 자료를 바탕으로 JSON 스키마에 맞춰 분석을 작성해 주세요.',

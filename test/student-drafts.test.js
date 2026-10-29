@@ -5,6 +5,7 @@ import { FileStore } from '../server/store.js';
 import { PgStore } from '../server/pgstore.js';
 import { FakePool } from './fake-pg.js';
 import { roundLastActivity, purgeExpired } from '../server/retention.js';
+import { removeStudentFromDrafts, clearStudentDraft } from '../server/student-drafts.js';
 
 for (const [label, makeStore] of [
   ['FileStore', () => new FileStore(null)],
@@ -242,6 +243,61 @@ for (const [label, makeStore] of [
     assert.equal((await call(room.student)).json.draft.revision, 0);
     assert.equal((await save(room, 0, { application: { choices: [{ roleId: 'removed-role', reason: '', helpClass: '', helpSelf: '' }] } })).status, 200);
   });
+
+  test('친해진 친구 초안은 왕복 저장되고, 삭제된 학생은 목록에서 빠지며, 관계 지도 제출이 그 초안도 함께 지운다', async () => {
+    const room = await classroom();
+    const [, b, c] = room.students;
+    const sections = { closerFriends: { ids: [b.id, c.id], text: '  같은 모둠 PRIVATE_CLOSER ' } };
+    assert.equal((await save(room, 0, sections, 'relations')).status, 200);
+    const mine = (await call(room.student)).json;
+    assert.deepEqual(mine.draft.sections, sections, '작성 중인 공백도 보존');
+    assert.equal(mine.draft.step, 'relations');
+    assert.equal(mine.closerFriends, null, '초안은 제출이 아님');
+    for (const path of [room.teacher, `${room.teacher}/export.json`]) assert.doesNotMatch(JSON.stringify((await call(path)).json), /PRIVATE_CLOSER/);
+    // 잘못된 초안: 자기 자신 · 없는 학생 · 301자 · 배열이 아님 (저장 버전은 그대로)
+    for (const invalid of [{ ids: [room.students[0].id] }, { ids: ['nope'] }, { text: 'x'.repeat(301) }, { ids: 'x' }]) {
+      assert.equal((await save(room, 1, { closerFriends: invalid }, 'relations')).status, 400);
+    }
+    assert.equal((await call(room.student)).json.draft.revision, 1);
+    // 학생 삭제 → 다른 학생 초안의 목록에서 빠지고 버전이 오름
+    await call(`${room.teacher}/students/${c.id}`, 'DELETE');
+    const cleaned = (await call(room.student)).json.draft;
+    assert.equal(cleaned.revision, 2);
+    assert.deepEqual(cleaned.sections.closerFriends.ids, [b.id]);
+    // 관계 지도 제출이 relations · closerFriends 초안을 한 번에 지움 (버전은 한 번만 증가)
+    const submitted = await call(`${room.student}/relations`, 'PUT', { roundId: room.roundId, relations: {}, closerFriends: { ids: [b.id], text: '같은 모둠' } });
+    assert.equal(submitted.status, 200);
+    assert.equal(submitted.json.draft.revision, 3);
+    assert.deepEqual(submitted.json.draft.sections, {});
+    assert.deepEqual(submitted.json.closerFriends.ids, [b.id]);
+    assert.equal(submitted.json.closerFriends.text, '같은 모둠');
+  });
+});
+
+test('removeStudentFromDrafts 는 다른 학생 초안의 친해진 친구 목록에서도 지우고 관계없는 초안은 건드리지 않는다', () => {
+  const round = { studentDrafts: {
+    a: { revision: 1, updatedAt: 'x', step: 'relations', sections: { closerFriends: { ids: ['b', 'c'], text: '' } }, mutationId: 'm' },
+    b: { revision: 1, updatedAt: 'x', step: null, sections: { closerFriends: { ids: ['a'], text: '' } }, mutationId: 'm' },
+    c: { revision: 1, updatedAt: 'x', step: null, sections: {}, mutationId: null },
+  } };
+  removeStudentFromDrafts(round, 'c');
+  assert.equal(round.studentDrafts.c, undefined);
+  assert.deepEqual(round.studentDrafts.a.sections.closerFriends.ids, ['b']);
+  assert.equal(round.studentDrafts.a.revision, 2);
+  assert.equal(round.studentDrafts.a.mutationId, null);
+  assert.equal(round.studentDrafts.b.revision, 1);
+  assert.equal(round.studentDrafts.b.mutationId, 'm');
+});
+
+test('clearStudentDraft 는 여러 구역을 한 번에 지우고 버전은 한 번만 올린다', () => {
+  const round = { studentDrafts: { a: { revision: 3, updatedAt: 'x', step: 'relations', sections: { profile: { traits: [] }, relations: {}, closerFriends: { ids: [], text: '글' } }, mutationId: 'm' } } };
+  clearStudentDraft(round, 'a', ['relations', 'closerFriends']);
+  const draft = round.studentDrafts.a;
+  assert.equal(draft.revision, 4);
+  assert.deepEqual(Object.keys(draft.sections), ['profile']);
+  assert.equal(draft.step, null);
+  assert.equal(draft.mutationId, null);
+  assert.equal(draft.updatedAt, 'x', '남은 구역이 있으면 저장 시각 유지');
 });
 
 test('최근 임시 저장 활동이 있는 회차는 보관 기간 만료로 삭제하지 않는다', () => {

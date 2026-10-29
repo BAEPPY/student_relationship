@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import { FileStore } from './store.js';
 import { newToken, newId } from './tokens.js';
-import { REASON_CATALOG, isValidTag } from './reasons.js';
+import { REASON_CATALOG, isValidTag, BAD_REASON_MIN, textLength } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName } from './rounds.js';
 import { analyzeHistory } from './history.js';
@@ -229,6 +229,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       stats,
       analysis,
       history: analyzeHistory(room),
+      closerFriends: round.closerFriends || {},   // { sid: { ids, text, updatedAt } } 이번 달 친해진 친구 (학생 돌아보기)
       catalog: REASON_CATALOG,
       notice: storageNotice,
       ...seatingView(room, round),
@@ -306,11 +307,12 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       }
     }
     return {
-      room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad, rolesEnabled: roles.length > 0 },
+      room: { name: room.name, locked: Boolean(round.closedAt), minGood: mins.minGood, minBad: mins.minBad, minRelations: mins.minGood + mins.minBad, rolesEnabled: roles.length > 0, badReasonMin: BAD_REASON_MIN },
       round: roundView(round),
       me: { id: student.id, name: student.name, body: student.body || {} },
       classmates,
       relations,
+      closerFriends: round.closerFriends?.[student.id] || null,   // { ids, text, updatedAt } 이번 달 친해진 친구
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
       draft: studentDraftView(round, student.id),
       catalog: REASON_CATALOG,
@@ -388,7 +390,6 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const room = newRoom('예시 교실 (체험용)', names, 3, 1);
     const ids = room.students.map((s) => s.id);
     const goodTags = REASON_CATALOG.good.map((r) => r.id);
-    const badTags = REASON_CATALOG.bad.map((r) => r.id);
     // 결정적인 의사난수(같은 패턴이 매번 나오도록)
     let seed = 7;
     const rand = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
@@ -396,9 +397,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
     const now = new Date();
     const monthsAgo = (k) => new Date(now.getFullYear(), now.getMonth() - k, 5, 9, 0, 0);
+    // 안 좋은 사이는 객관식 없이 무슨 일이 있었는지 20자 이상 직접 적음 (BAD_REASON_MIN)
+    const badReasons = [
+      '지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.',
+      '체육 시간에 내가 공을 놓쳤다고 여러 번 놀려서 속상했어요.',
+      '내 필통을 허락 없이 가져가서 돌려 달라고 해도 안 줬어요.',
+      '같이 놀 때 자기 마음대로만 하고 내 말은 안 들어 줘요.',
+    ];
+    const closerTexts = ['같은 모둠이 되어서 발표 준비를 같이 하다가 친해졌어요.', '쉬는 시간에 같이 보드게임을 하면서 친해졌어요.', '체육 시간에 같은 팀이 되어서 더 친해졌어요.'];
     const makeRelations = (prev, at, skipLast) => {
       const relations = {};
       const submissions = {};
+      const closerFriends = {};
       ids.forEach((from, i) => {
         if (skipLast && i === ids.length - 1) return; // 지금 회차는 한 명 미제출 상태로
         const rels = {};
@@ -411,13 +421,18 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
           if (rels[to]) continue;
           const isBad = need('bad') ? true : need('good') ? false : rand() < 0.4;
           rels[to] = isBad
-            ? { type: 'bad', tags: rand() < 0.7 ? [pick(badTags)] : [], reason: pick(['지난주에 말다툼을 했어요.', '자꾸 놀려서 속상해요.', '내 물건을 허락 없이 가져갔어요.', '같이 놀 때 자기 마음대로만 해요.']), updatedAt: at }
+            ? { type: 'bad', tags: [], reason: pick(badReasons), updatedAt: at }
             : { type: 'good', tags: rand() < 0.7 ? [pick(goodTags)] : [], reason: rand() < 0.3 ? '쉬는 시간에 항상 같이 놀아요.' : '', updatedAt: at };
         }
         relations[from] = rels;
         submissions[from] = { submittedAt: at };
+        // 제출한 학생의 40% 정도는 이번 달 친해진 친구를 1~2명 고르고, 그중 절반은 어떻게 친해졌는지도 적음
+        if (rand() < 0.4) {
+          const picked = [...new Set([pick(others), ...(rand() < 0.5 ? [pick(others)] : [])])];
+          closerFriends[from] = { ids: picked, text: rand() < 0.5 ? pick(closerTexts) : '', updatedAt: at };
+        }
       });
-      return { relations, submissions };
+      return { relations, submissions, closerFriends };
     };
 
     room.rounds = [];
@@ -597,6 +612,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         for (const targets of Object.values(round.relations)) delete targets[student.id];
         delete round.profiles?.[student.id];
         delete round.applications?.[student.id];
+        removeStudentFromCloserFriends(round, student.id);
         if (round.roleAssignment) {
           const ra = round.roleAssignment;
           for (const [rid, list] of Object.entries(ra.assignments || {})) ra.assignments[rid] = (list || []).filter((x) => x !== student.id);
@@ -660,6 +676,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const round = roundId ? requireRound(room, roundId) : currentRound(room);
       delete round.relations[student.id];
       delete round.submissions[student.id];
+      delete round.closerFriends?.[student.id];   // 관계 지도와 함께 낸 '친해진 친구'도 그 학생 것만 지움
       clearStudentDraft(round, student.id);
     });
     res.json(teacherView(req, room, roundId));
@@ -760,7 +777,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const rounds = room.rounds.map((r) => {
       const rr = roundRoom(room, r);
       const stats = computeStats(rr);
-      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
+      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
     res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [] });
@@ -802,10 +819,35 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     res.set('Cache-Control', 'no-store').json({ draft: saved });
   });
 
+  // 이번 달 친해진 친구(돌아보기) 본문 검증: { ids: [반 친구 id…], text } → 저장할 모양 (둘 다 비어 있으면 null)
+  function parseCloserFriends(input, classmates) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('친해진 친구 내용이 올바르지 않아요.');
+    const rawIds = input.ids === undefined ? [] : input.ids;
+    if (!Array.isArray(rawIds) || rawIds.length > 1000) throw bad('친해진 친구 목록이 올바르지 않아요.');
+    const ids = [...new Set(rawIds.map(String))];   // 같은 친구를 두 번 보내도 한 번으로 (개수 검사는 중복을 뺀 뒤에)
+    if (ids.length > classmates.size || ids.some((id) => !classmates.has(id))) throw bad('친해진 친구 목록에 우리 반 친구가 아닌 학생이 포함되어 있어요.');
+    if (input.text !== undefined && typeof input.text !== 'string') throw bad('어떻게 친해졌는지 글이 올바르지 않아요.');
+    const text = input.text === undefined ? '' : input.text.trim();
+    if (text.length > LIMITS.reason) throw bad(`어떻게 친해졌는지는 ${LIMITS.reason}자 이하로 적어 주세요.`);
+    return ids.length || text ? { ids, text } : null;
+  }
+
+  // 학생을 삭제하면 그 학생의 '친해진 친구' 응답과, 다른 학생이 고른 목록 속 그 학생도 지웁니다
+  function removeStudentFromCloserFriends(round, studentId) {
+    if (!round.closerFriends) return;
+    delete round.closerFriends[studentId];
+    for (const [sid, entry] of Object.entries(round.closerFriends)) {
+      if (!Array.isArray(entry?.ids) || !entry.ids.includes(studentId)) continue;
+      entry.ids = entry.ids.filter((id) => id !== studentId);
+      if (!entry.ids.length && !entry.text) delete round.closerFriends[sid];
+    }
+  }
+
   app.put('/api/student/:token/relations', async (req, res) => {
     const { room: found, student: me } = await requireStudent(req);
     const input = req.body?.relations;
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('보낸 내용이 올바르지 않아요.');
+    const closerInput = req.body?.closerFriends;   // 없으면 저장된 값 그대로 둠
     const roundId = req.body?.roundId ? String(req.body.roundId) : null;
 
     const room = await mutateRoom(found, (room) => {
@@ -822,13 +864,14 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       for (const [toId, r] of Object.entries(input)) {
         if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
         if (!r || (r.type !== 'good' && r.type !== 'bad')) throw bad('관계 종류는 좋은 사이 또는 안 좋은 사이여야 해요.');
-        const tags = Array.isArray(r.tags) ? [...new Set(r.tags.map(String))] : [];
+        // 안 좋은 사이는 객관식 없이 직접 쓴 이유만 받습니다 (보내온 선택지는 무시). 좋은 사이는 선택지·이유 모두 선택 사항
+        const tags = r.type === 'bad' ? [] : Array.isArray(r.tags) ? [...new Set(r.tags.map(String))] : [];
         for (const t of tags) if (!isValidTag(r.type, t)) throw bad('선택한 이유가 올바르지 않아요.');
         const reason = String(r.reason ?? '').trim();
         if (reason.length > LIMITS.reason) throw bad(`이유는 ${LIMITS.reason}자 이하로 적어 주세요.`);
-        if (r.type === 'bad' && reason.length < 2) {
+        if (r.type === 'bad' && textLength(reason) < BAD_REASON_MIN) {
           const name = room.students.find((s) => s.id === toId)?.name || '';
-          throw bad(`${name}와(과) 안 좋은 사이인 이유를 직접 적어 주세요. (2자 이상)`);
+          throw bad(`${name}와(과) 안 좋은 사이인 이유를 ${BAD_REASON_MIN}자 이상 직접 적어 주세요. (지금 ${textLength(reason)}자)`);
         }
         const unchanged = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && JSON.stringify(prev[toId].tags || []) === JSON.stringify(tags);
         next[toId] = { type: r.type, tags, reason, updatedAt: unchanged ? prev[toId].updatedAt : now };
@@ -838,10 +881,19 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const badCount = Object.values(next).filter((r) => r.type === 'bad').length;
       if (goodCount < mins.minGood) throw bad(`좋은 사이를 ${mins.minGood}명 이상 표시해 주세요. (지금 ${goodCount}명)`);
       if (badCount < mins.minBad) throw bad(`안 좋은 사이를 ${mins.minBad}명 이상 표시해 주세요. (지금 ${badCount}명)`);
+      const closer = closerInput === undefined ? undefined : parseCloserFriends(closerInput, classmates);
 
       round.relations[student.id] = next;
       round.submissions[student.id] = { submittedAt: now, firstSubmittedAt: round.submissions[student.id]?.firstSubmittedAt || now };
-      clearStudentDraft(round, student.id, 'relations');
+      if (closer === null) {
+        delete round.closerFriends?.[student.id];
+      } else if (closer) {
+        round.closerFriends ||= {};
+        const before = round.closerFriends[student.id];
+        const same = before && before.text === closer.text && JSON.stringify(before.ids || []) === JSON.stringify(closer.ids);
+        round.closerFriends[student.id] = { ...closer, updatedAt: same ? before.updatedAt : now };
+      }
+      clearStudentDraft(round, student.id, ['relations', 'closerFriends']);
     });
     res.json(studentView(req, room, room.students.find((s) => s.id === me.id)));
   });
@@ -1149,6 +1201,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       teacherNotes: found.teacherNotes || { students: {}, rules: [] },
       profiles: round.profiles || {},
       applications: round.applications || {},
+      closerFriends: round.closerFriends || {},
       roles: roomRoles(found),
       previousRoles: previousRoleIds(found, round),
     });

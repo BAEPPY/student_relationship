@@ -18,6 +18,7 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
   const relations = listRelations({ students, relations: round.relations || {} }).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`));
   const profiles = sortedRecord(round.profiles, known);
   const applications = sortedRecord(round.applications, known);
+  const closerFriends = sortedRecord(round.closerFriends, known);   // 이번 달 친해진 친구 (관계 분석 프롬프트에만 들어감)
   const submissions = sortedRecord(round.submissions, known);
   const teacherNotes = {
     students: sortedRecord(room.teacherNotes?.students, known),
@@ -36,6 +37,7 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
   for (const relation of relations) evidence.push({ id: `relation:${relation.from}:${relation.to}`, kind: 'relation', studentIds: [relation.from, relation.to], from: relation.from, to: relation.to, updatedAt: at(relation.updatedAt) });
   for (const [id, profile] of Object.entries(profiles)) evidence.push({ id: `profile:${id}`, kind: 'profile', studentIds: [id], updatedAt: at(profile.updatedAt) });
   if (kind !== 'seating') for (const [id, application] of Object.entries(applications)) evidence.push({ id: `application:${id}`, kind: 'application', studentIds: [id], updatedAt: at(application.updatedAt) });
+  if (kind !== 'seating') for (const [id, entry] of Object.entries(closerFriends)) evidence.push({ id: `closer-friends:${id}`, kind: 'closer-friends', studentIds: [id, ...(entry.ids || []).filter((other) => known.has(other))], updatedAt: at(entry.updatedAt) });
   for (const id of Object.keys(teacherNotes.students)) evidence.push({ id: `teacher-note:${id}`, kind: 'teacher-note', studentIds: [id], updatedAt: at(room.teacherNotes?.updatedAt) });
   for (const rule of teacherNotes.rules) evidence.push({ id: `teacher-rule:${rule.a}:${rule.b}`, kind: 'teacher-rule', studentIds: [rule.a, rule.b], updatedAt: at(room.teacherNotes?.updatedAt) });
   const missingStudentIds = students.filter((student) => !submissions[student.id]).map((student) => student.id);
@@ -55,6 +57,7 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
     snapshot.inputConfig = extra;
   } else {
     snapshot.applications = applications;
+    if (Object.keys(closerFriends).length) snapshot.closerFriends = closerFriends;   // 비어 있으면 넣지 않아 이 기능 전에 저장한 분석의 지문이 그대로 유지돼요
     snapshot.roles = roomRoles(room);
     snapshot.previousRoles = previousRoleIds(room, round);
   }

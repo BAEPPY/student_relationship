@@ -672,6 +672,17 @@ function rolesInfoBox(sid) {
     ]
     : [el('div', { class: 'muted', text: '성향 설문을 아직 내지 않았어요.' })];
 
+  // 🌱 이번 달 친해진 친구 (학생 돌아보기, 선택 사항): 낸 학생만 보여 주고 없으면 아무것도 넣지 않아요
+  const closer = state.closerFriends?.[sid] || null;
+  const closerNames = (closer?.ids || []).filter((id) => state.stats?.[id]).map(nameOf);
+  const closerBlock = closer && (closerNames.length || closer.text)
+    ? [
+      label(`🌱 ${state.round?.name || '이번 달'} 친해진 친구 (${closerNames.length}) · ${fmtDate(closer.updatedAt)}`),
+      closerNames.length ? el('div', { class: 'chips profile-chips' }, closerNames.map((name) => el('span', { class: 'profile-chip closer', text: name }))) : el('div', { class: 'muted', text: '고른 친구는 없고 글만 적었어요.' }),
+      closer.text ? el('div', { class: 'quote', text: `“${closer.text}”` }) : null,
+    ]
+    : [];
+
   const applicationBlock = choices.length
     ? [
       label(`1인 1역 지원서 · ${fmtDate(application.updatedAt)}`),
@@ -697,6 +708,7 @@ function rolesInfoBox(sid) {
   return el('div', { class: 'roles-info', id: 'roles-info' }, [
     el('div', { class: 'roles-info-title', text: '📝 성향 · 1인 1역' }),
     ...profileBlock,
+    ...closerBlock,
     ...applicationBlock,
     prevRoleIds.length ? el('div', { class: 'muted', style: { marginTop: '6px' }, text: `지난달${prevMonth ? `(${prevMonth})` : ''} 역할: ${prevRoleIds.map(roleNameOf).join(', ')} → 이번 달은 다른 역할을 맡아요.` }) : null,
     assignedBlock,
@@ -739,7 +751,7 @@ function pairEvidence(p, context, { ai = false } = {}) {
   const relations = (state.relations || []).filter((r) => (r.from === p.a && r.to === p.b) || (r.from === p.b && r.to === p.a));
   const notes = ids.filter((id) => state.teacherNotes?.students?.[id]?.memo);
   const rules = (state.teacherNotes?.rules || []).filter((rule) => ids.includes(rule.a) && ids.includes(rule.b));
-  const refKinds = { submission: '관계 제출', relation: '관계 응답', profile: '성향 설문', application: '지원서', 'teacher-note': '교사 메모', 'teacher-rule': '교사 지정 규칙' };
+  const refKinds = { submission: '관계 제출', relation: '관계 응답', profile: '성향 설문', application: '지원서', 'closer-friends': '친해진 친구', 'teacher-note': '교사 메모', 'teacher-rule': '교사 지정 규칙' };
   return el('div', { class: 'pair-evidence' }, [
     ai ? el('p', { class: 'muted', text: '서버가 연결한 입력 자료의 참조 항목이에요. AI 문장의 정확한 인용을 뜻하지 않으며, 아래 내용은 현재 응답이에요.' }) : null,
     el('div', { class: 'section-label', text: '현재 응답과 교사 기록' }),

@@ -44,7 +44,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (context.evidence.length) {
       const counts = {};
       for (const evidence of context.evidence) counts[evidence.kind] = (counts[evidence.kind] || 0) + 1;
-      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
+      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'closer-friends': '친해진 친구', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
       para(`분석 근거: ${Object.entries(counts).map(([key, count]) => `${labels[key] || key} ${count}건`).join(' · ')}${context.sourceUpdatedAt ? ` · 최근 응답·메모 기록 ${context.sourceUpdatedAt.replace('T', ' ').slice(0, 16)} (UTC)` : ''}.`, 'muted');
     }
   };
@@ -85,6 +85,20 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     analysis.mostLiked.length ? `좋은 사이로 많이 지목된 학생: ${analysis.mostLiked.map((x) => `${x.name} ${x.count}명`).join(', ')}` : '',
     analysis.mostDisliked.length ? `안 좋은 사이로 많이 지목된 학생: ${analysis.mostDisliked.map((x) => `${x.name} ${x.count}명`).join(', ')}` : '',
   ].filter(Boolean));
+  // 🌱 이번 달 친해진 친구 (학생 돌아보기, 선택 사항): 적은 학생만 한 줄씩
+  const closerLines = students.map((s) => {
+    const entry = round.closerFriends?.[s.id];
+    if (!entry) return '';
+    const names = (entry.ids || []).filter((id) => stats[id]).map(nameOf);
+    const text = String(entry.text || '').trim();
+    if (!names.length && !text) return '';
+    return `🌱 ${s.name} · 친해진 친구: ${names.length ? names.join(', ') : '(고른 친구 없음)'}${text ? ` — “${text}”` : ''}`;
+  }).filter(Boolean);
+  if (closerLines.length) {
+    sub(`${round.name} 친해진 친구`);
+    para('학생이 이 회차의 관계 지도와 함께 "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.', 'muted');
+    list(closerLines);
+  }
 
   // 3. 관계 관심 점수
   heading('관계 관심 점수');

@@ -270,3 +270,11 @@ body.kid .closed-modal .btn.primary:focus-visible { outline: 3px solid rgba(74, 
 }
 @media (prefers-reduced-motion: reduce) { body.kid .modal.closed-modal { animation: none; } }
 @media print { .closed-backdrop { display: none !important; } }
+
+/* ---------- 🌱 이번 달 친해진 친구 (관계 지도 단계의 돌아보기 카드) ---------- */
+.closer-card { border: 2px solid #d7eccb; background: #f7fcf3; }
+body.kid .closer-card { border-color: #d7eccb; }   /* body.kid .card 의 흰 테두리보다 우선 */
+.closer-card .chips { margin: 8px 0 4px; }
+.closer-card .closer-summary { font-family: var(--font-kid); font-size: 16px; color: #2f6b1f; margin: 2px 0 10px; }
+.closer-card .closer-summary.hidden { display: none; }
+.closer-card .field { margin: 10px 0 0; }
