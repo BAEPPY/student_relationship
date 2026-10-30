@@ -13,6 +13,7 @@ function dateLabel(d = new Date()) {
   return `${kst.getUTCFullYear()}.${pad2(kst.getUTCMonth() + 1)}.${pad2(kst.getUTCDate())}`;
 }
 const LEVEL_KO = { high: '높음', medium: '주의', low: '낮음' };
+const TREND_KO = { new: '이번에 새로', continuing: '계속됨', improving: '나아지는 중', resolved: '이번엔 사라짐', unclear: '판단 어려움' };   // AI 분석: 지난 회차와 견준 흐름
 const REL_KO = { good: '좋은 사이', bad: '안 좋은 사이', none: '표시 없음' };
 const center = (text) => ({ text: String(text), align: 'center' });
 const bold = (text) => ({ text: String(text), bold: true });
@@ -44,7 +45,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (context.evidence.length) {
       const counts = {};
       for (const evidence of context.evidence) counts[evidence.kind] = (counts[evidence.kind] || 0) + 1;
-      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'closer-friends': '친해진 친구', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
+      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'closer-friends': '친해진 친구', history: '지난 회차 응답', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
       para(`분석 근거: ${Object.entries(counts).map(([key, count]) => `${labels[key] || key} ${count}건`).join(' · ')}${context.sourceUpdatedAt ? ` · 최근 응답·메모 기록 ${context.sourceUpdatedAt.replace('T', ' ').slice(0, 16)} (UTC)` : ''}.`, 'muted');
     }
   };
@@ -130,7 +131,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
   const ai = round.aiAnalysis;
   if (ai) {
     heading('AI 분석');
-    para(`AI가 학생 응답(가명 처리), 선생님 메모, 성향 설문, 지원서를 함께 읽고 쓴 내용이에요. ${String(ai.createdAt || '').slice(0, 10)} 기준이며 참고용이에요.`, 'muted');
+    const hist = Array.isArray(ai.historyRounds) && ai.historyRounds.length ? ` 지난 회차 ${ai.historyRounds.length}개(${ai.historyRounds.map((r) => r.name).join(', ')})의 흐름도 함께 읽었어요.` : '';
+    para(`AI가 학생 응답(가명 처리), 선생님 메모, 성향 설문, 지원서, 돌아보기를 함께 읽고 쓴 내용이에요.${hist} ${String(ai.createdAt || '').slice(0, 10)} 기준이며 참고용이에요.`, 'muted');
     aiContext(ai);
     if (ai.summary) para(ai.summary);
     const pairs = (ai.pairs || []).filter((p) => stats[p.a] && stats[p.b]);
@@ -138,8 +140,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
       blocks.push({
         type: 'table',
         caption: `눈여겨볼 관계 (${pairs.length}쌍)`,
-        columns: [{ label: '학생', width: 0.2 }, { label: '위험도', width: 0.1 }, { label: '갈등 성격', width: 0.14 }, { label: '분석', width: 0.28 }, { label: '교실에서 해 볼 일', width: 0.28 }],
-        rows: pairs.map((p) => [bold(`${nameOf(p.a)} ↔ ${nameOf(p.b)}`), center(LEVEL_KO[p.riskLevel] || p.riskLevel), p.conflictType || '', p.analysis || '', p.advice || '']),
+        columns: [{ label: '학생', width: 0.18 }, { label: '위험도', width: 0.09 }, { label: '흐름', width: 0.11 }, { label: '갈등 성격', width: 0.12 }, { label: '분석', width: 0.25 }, { label: '교실에서 해 볼 일', width: 0.25 }],
+        rows: pairs.map((p) => [bold(`${nameOf(p.a)} ↔ ${nameOf(p.b)}`), center(LEVEL_KO[p.riskLevel] || p.riskLevel), center(p.trend ? TREND_KO[p.trend] || '' : ''), p.conflictType || '', p.analysis || '', p.advice || '']),
         header: true,
       });
     }
@@ -150,7 +152,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
         type: 'table',
         caption: '학생별 AI 요약',
         columns: [{ label: '이름', width: 0.14 }, { label: '요약', width: 0.3 }, { label: '강점', width: 0.18 }, { label: '살펴볼 점', width: 0.18 }, { label: '잘 맞는 역할', width: 0.2 }],
-        rows: aiStudents.map((s) => [bold(nameOf(s.id)), s.summary || '', s.strengths || '', s.watch || '', (s.roleFit || []).map((f) => roleName(f.roleId)).join(', ')]),
+        rows: aiStudents.map((s) => [bold(nameOf(s.id)), `${s.summary || ''}${s.trend ? ` 지난 회차와 견주면: ${s.trend}` : ''}`.trim(), s.strengths || '', s.watch || '', (s.roleFit || []).map((f) => roleName(f.roleId)).join(', ')]),
         header: true,
       });
     }

@@ -200,3 +200,30 @@ for (const field of ['seating','aiSeating']) test(`예약 정리가 기존 ${fie
   assert.equal(result.deletedRounds,0);
   assert.equal((await store.getRoom(created.id)).rounds[0].id,view.round.id);
 });
+
+test('AI 관계 분석은 지난 회차를 함께 읽고 그 목록을 저장하며, 지난 회차가 지워지면 재분석 필요가 된다',async t=>{
+  const seen=[];
+  const {call,teacher,view}=await setup(t,new FileStore(null),async (params)=>{ seen.push(params.messages[0].content); return aiReply(params); });
+  const student=view.students[0];
+  await call(`/api/student/${student.token}/relations`,'PUT',{roundId:view.round.id,relations:{[view.students[1].id]:{type:'bad',tags:[],reason:'지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.'}}});
+  const first=await call(`${teacher}/ai/analyze`,'POST',{roundId:view.round.id});
+  assert.deepEqual(first.aiAnalysis.historyRounds,[],'첫 회차는 지난 회차 없음');
+  assert.ok(seen[0].includes('(지난 회차 자료가 없어요. 첫 조사라 흐름은 판단할 수 없어요.)'));
+  const second=await call(`${teacher}/rounds`,'POST',{name:'2026년 11월'},201);
+  const analyzed=await call(`${teacher}/ai/analyze`,'POST',{roundId:second.round.id});
+  assert.deepEqual(analyzed.aiAnalysis.historyRounds,[{id:view.round.id,name:view.round.name}]);
+  assert.deepEqual(analyzed.aiAnalysis.provenance.historyRoundIds,[view.round.id]);
+  assert.equal(analyzed.aiAnalysis.context.status,'fresh');
+  assert.ok(analyzed.aiAnalysis.context.evidence.some(e=>e.kind==='history'&&e.roundId===view.round.id));
+  assert.ok(seen[1].includes('## 안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)') && seen[1].includes('S1 → S2 안 좋은 사이') === false, '가명 S1→S2 형식');
+  assert.ok(seen[1].includes('- S1 ↔ S2: '+view.round.name+' S1→S2 안 좋은 사이("지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.")'), seen[1].split('## 안 좋은 사이 변화')[1]?.slice(0,300));
+  assert.equal(analyzed.aiAnalysis.pairs[0].trend,'unclear','스텁 응답에 trend 가 없으면 unclear');
+  // 지난 회차를 지우면 재분석 필요
+  await call(`${teacher}/rounds/${view.round.id}`,'DELETE');
+  const after=await call(`${teacher}?round=${second.round.id}`);
+  assert.equal(after.aiAnalysis.context.status,'stale');
+  // 지난 회차 없이 만든 옛 결과(historyRoundIds 없음)는 지난 회차가 생겨도 최신으로 유지
+  const third=await call(`${teacher}/rounds`,'POST',{name:'2026년 12월'},201);
+  const fresh=await call(`${teacher}?round=${third.round.id}`);
+  assert.equal(fresh.aiAnalysis,null);
+});

@@ -261,6 +261,99 @@ function closerFriendLines(closerFriends, pseudo) {
   return lines;
 }
 
+// ---------- 지난 회차 흐름 (AI 관계 분석: 지난 달들의 응답을 함께 읽기) ----------
+const TREND_SET = new Set(['new', 'continuing', 'improving', 'resolved', 'unclear']);
+const roundLabel = (name) => clip(String(name || '회차'), 24);
+const pairKeyOf = (a, b) => [a, b].sort().join('|');
+
+/** 회차별 한 줄 요약: 제출 수 · 좋은/안 좋은 사이 수 · 서로 안 좋음 쌍 (오래된 순) */
+function historyRoundLines(history, pseudo) {
+  return (history || []).map((r) => {
+    const rels = (r.relations || []).filter((x) => pseudo.label(x.from) && pseudo.label(x.to));
+    const good = rels.filter((x) => x.type === 'good').length;
+    const bad = rels.filter((x) => x.type === 'bad');
+    const badKeys = new Set(bad.map((x) => `${x.from}>${x.to}`));
+    const mutualBad = Math.floor(bad.filter((x) => badKeys.has(`${x.to}>${x.from}`)).length / 2);
+    const submitted = (r.submittedIds || []).filter((id) => pseudo.label(id)).length;
+    return `- ${roundLabel(r.name)}${r.closedAt ? ' (마감)' : ''}: 제출 ${submitted}/${r.total ?? '?'} · 좋은 사이 ${good} · 안 좋은 사이 ${bad.length} · 서로 안 좋음 ${mutualBad}쌍`;
+  });
+}
+
+/** 지난 회차들 + 지금 회차를 오래된 순으로 (마지막이 지금) */
+function timelineRounds(history, relations, roundName, submittedIds) {
+  const rounds = (history || []).map((r) => ({ name: roundLabel(r.name), relations: r.relations || [], submitted: new Set(r.submittedIds || []) }));
+  rounds.push({ name: `지금(${roundLabel(roundName || '이번 회차')})`, relations: relations || [], submitted: Array.isArray(submittedIds) ? new Set(submittedIds) : null });
+  return rounds.map((r) => { const m = new Map(); for (const x of r.relations) m.set(`${x.from}>${x.to}`, x); return { ...r, map: m }; });
+}
+
+/** 안 좋은 사이가 한 번이라도 있었던 조합의 회차별 흐름. 지금 안 좋은 조합 → 안 좋았던 회차가 많은 조합 순, 최대 max개 */
+function pairTimelineLines(history, relations, roundName, pseudo, submittedIds, { max = 60 } = {}) {
+  const rounds = timelineRounds(history, relations, roundName, submittedIds);
+  const last = rounds.length - 1;
+  const pairs = new Map();
+  rounds.forEach((r, i) => {
+    for (const x of r.relations) {
+      if (x.type !== 'bad' || !pseudo.label(x.from) || !pseudo.label(x.to)) continue;
+      const k = pairKeyOf(x.from, x.to);
+      const [a, b] = [x.from, x.to].sort((p, q) => Number(pseudo.label(p).slice(1)) - Number(pseudo.label(q).slice(1)));   // 가명 번호 순으로 S3 ↔ S4
+      const e = pairs.get(k) || { a, b, badRounds: new Set(), currentBad: false };
+      e.badRounds.add(i);
+      if (i === last) e.currentBad = true;
+      pairs.set(k, e);
+    }
+  });
+  const sorted = [...pairs.values()].sort((x, y) => Number(y.currentBad) - Number(x.currentBad) || y.badRounds.size - x.badRounds.size);
+  const lines = sorted.slice(0, max).map(({ a, b }) => {
+    const A = pseudo.label(a);
+    const B = pseudo.label(b);
+    const steps = rounds.map((r) => {
+      const ab = r.map.get(`${a}>${b}`);
+      const ba = r.map.get(`${b}>${a}`);
+      const side = (x, from, to) => {
+        if (!x) return null;
+        const reason = x.type === 'bad' ? clip(pseudo.redact(x.reason), 50) : '';
+        return `${from}→${to} ${relationTypeKo(x.type)}${reason ? `("${reason}")` : ''}`;
+      };
+      const parts = [side(ab, A, B), side(ba, B, A)].filter(Boolean);
+      if (!parts.length) {
+        const missing = r.submitted ? [a, b].filter((id) => !r.submitted.has(id)).map((id) => pseudo.label(id)) : [];
+        parts.push(missing.length ? `(${missing.join(', ')} 미응답)` : '표시 없음');
+      }
+      return `${r.name} ${parts.join(' · ')}`;
+    });
+    return `- ${A} ↔ ${B}: ${steps.join(' / ')}`;
+  });
+  if (sorted.length > max) lines.push(`(… 외 ${sorted.length - max}개 조합은 생략)`);
+  return lines;
+}
+
+/** 학생별로 받은 좋은/안 좋은 사이 수의 회차별 변화 (안 좋은 사이를 받은 적 있는 학생만, 최대 max명) */
+function studentTrendLines(history, relations, roundName, students, pseudo, submittedIds, { max = 40 } = {}) {
+  const rounds = timelineRounds(history, relations, roundName, submittedIds);
+  const lines = [];
+  for (const s of students || []) {
+    const lab = pseudo.label(s.id);
+    if (!lab) continue;
+    const counts = rounds.map((r) => {
+      let good = 0; let bad = 0;
+      for (const x of r.relations) if (x.to === s.id && pseudo.label(x.from)) { if (x.type === 'good') good++; else if (x.type === 'bad') bad++; }
+      return { good, bad };
+    });
+    if (!counts.some((c) => c.bad > 0)) continue;
+    lines.push(`- ${lab}: ${rounds.map((r, i) => `${r.name} 좋음 ${counts[i].good}·안 좋음 ${counts[i].bad}`).join(' → ')}`);
+    if (lines.length >= max) { lines.push('(… 나머지 학생은 생략)'); break; }
+  }
+  return lines;
+}
+
+/** 최근 지난 회차 몇 개의 돌아보기 글(친해진 친구 · 한 달 소감) */
+function pastReviewLines(history, pseudo, { rounds = 2, max = 40 } = {}) {
+  const lines = [];
+  for (const r of (history || []).slice(-rounds)) for (const line of closerFriendLines(r.closerFriends, pseudo)) lines.push(`- ${roundLabel(r.name)} ${line.slice(2)}`);
+  if (lines.length > max) return [...lines.slice(0, max), `(… 외 ${lines.length - max}줄 생략)`];
+  return lines;
+}
+
 function profileLines(profiles, pseudo) {
   const lines = [];
   for (const [sid, p] of Object.entries(profiles || {})) {
@@ -403,8 +496,9 @@ const ANALYSIS_SCHEMA = {
           conflictType: { type: 'string', description: '갈등의 성격을 짧게 (예: 놀림과 장난, 무리 다툼, 오해, 경쟁)' },
           analysis: { type: 'string', description: '왜 그렇게 보이는지 2~3문장' },
           advice: { type: 'string', description: '자리·짝·역할처럼 교실에서 바로 할 수 있는 조치 2~3문장' },
+          trend: { type: 'string', enum: ['new', 'continuing', 'improving', 'resolved', 'unclear'], description: '지난 회차와 견준 흐름: new(이번에 처음 표시됨) · continuing(여러 회차 계속) · improving(안 좋은 표시가 줄거나 한쪽만 남음) · resolved(이번에 안 좋은 표시가 사라짐) · unclear(지난 자료가 없거나 응답이 빠져 판단 어려움)' },
         },
-        required: ['a', 'b', 'riskLevel', 'conflictType', 'analysis', 'advice'],
+        required: ['a', 'b', 'riskLevel', 'conflictType', 'analysis', 'advice', 'trend'],
         additionalProperties: false,
       },
     },
@@ -418,6 +512,7 @@ const ANALYSIS_SCHEMA = {
           summary: { type: 'string', description: '이 학생의 관계·성향 요약 2~3문장' },
           strengths: { type: 'string', description: '강점 (한두 문장)' },
           watch: { type: 'string', description: '선생님이 살펴보면 좋을 점 (한두 문장, 꼬리표 없이)' },
+          trend: { type: 'string', description: '지난 회차와 견줘 이 학생의 관계가 어떻게 달라졌는지 한 문장 (지난 자료가 없으면 "지난 회차 자료가 없어요")' },
           roleFit: {
             type: 'array',
             description: '잘 맞을 것 같은 역할 1~3개',
@@ -432,7 +527,7 @@ const ANALYSIS_SCHEMA = {
             },
           },
         },
-        required: ['id', 'summary', 'strengths', 'watch', 'roleFit'],
+        required: ['id', 'summary', 'strengths', 'watch', 'roleFit', 'trend'],
         additionalProperties: false,
       },
     },
@@ -448,6 +543,7 @@ const ANALYSIS_SYSTEM = [
   '- 학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 역할 id([대괄호] 안의 값)만 쓰세요.',
   '- 학생이 직접 적은 글(이유, 짝에 대한 생각, 이번 회차에 친해진 친구와 어떻게 친해졌는지, 한 달이 어땠는지)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
   '- "친해진 친구"는 학생 본인이 고른 긍정적인 자기 보고예요. 관계를 읽는 참고 맥락으로만 쓰고, 상대가 안 좋은 사이로 표시했다면 갈등이 풀렸다는 증거로 단정하지 마세요.',
+  '- "지난 회차 흐름"·"안 좋은 사이 변화"·"학생별 받은 관계 수 변화"는 이전 조사(지난 달들)의 응답이에요. 지금 회차의 응답을 중심으로 보되, 같은 조합이 여러 회차에서 계속 안 좋은 사이인지, 이번에 새로 생겼는지, 나아지고 있는지, 사라졌는지를 함께 읽어요. 지난 회차에 응답이 없던 학생의 변화는 단정하지 마세요.',
   DATA_NOT_INSTRUCTIONS,
   '- "규칙 기반 관심 점수"는 교사가 먼저 살펴볼 순서를 정하는 참고값이에요. 실제 갈등 발생 확률이나 학생에 대한 진단이 아니며, % 또는 확률로 표현하지 마세요.',
   '- 응답이 없는 것은 갈등이 없다는 뜻이 아니에요. 직접 응답, 교사 메모, 모델의 추론을 구별하고 자료가 부족하면 확인이 필요하다고 적으세요. 자료에 없는 근거를 만들지 마세요.',
@@ -458,11 +554,13 @@ const ANALYSIS_SYSTEM = [
   '- analysis 와 summary 는 2~3문장, advice 는 자리 배치·짝 구성·모둠·역할 선택처럼 교실에서 실제로 할 수 있는 행동으로 2~3문장 써요.',
   '- pairs 에는 안 좋은 사이로 표시되었거나 관심 점수가 높은 조합, 선생님 규칙(떨어뜨리기)이 있는 조합을 넣어요. 확인 우선순위가 높은 순서로 최대 15개, 좋은 사이만 있는 조합은 넣지 않아요.',
   '- students 에는 명단의 모든 학생을 한 번씩 넣어요. roleFit 은 역할 목록에 있는 id 만 쓰고, 지난달에 맡았던 역할은 추천하지 않아요.',
+  '- pairs 의 trend 는 지난 회차와 견준 흐름이에요: new(이번에 처음) · continuing(계속됨) · improving(나아지는 중) · resolved(이번에 안 좋은 표시가 사라짐) · unclear(지난 자료가 없거나 판단 어려움). analysis 에 그렇게 본 근거(어느 회차에 어땠는지)를 한 문장 넣어요. 지난 회차 자료가 없으면 모두 unclear 로 두세요.',
+  '- students 의 trend 는 지난 회차와 견줘 이 학생이 받은 관계가 어떻게 달라졌는지 한 문장이에요. 지난 회차 자료가 없으면 "지난 회차 자료가 없어요"라고 적어요.',
   '- 응답은 주어진 JSON 스키마에 맞는 JSON 하나만 출력하고, 그 밖의 글은 쓰지 않아요.',
 ].join('\n');
 
 /** 분석용 system/user 프롬프트와 스키마. 실명·학생 id 는 포함되지 않습니다. */
-export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, closerFriends, roles, previousRoles } = {}) {
+export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, closerFriends, roles, previousRoles, history, roundName, submittedIds } = {}) {
   const pseudo = pseudonymize(students);
   const roleList = roles || [];
 
@@ -479,7 +577,15 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     section('성향 설문', profileLines(profiles, pseudo)),
     section('1인 1역 지원서', applicationLines(applications, roleList, pseudo)),
     section('이번 회차 돌아보기 (학생이 직접 적음: 친해진 친구 · 한 달은 어땠나요)', closerFriendLines(closerFriends, pseudo)),
-    section('학생이 표시한 친구 관계', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
+    section('학생이 표시한 친구 관계 (지금 회차)', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
+    // 지난 회차(지난 달들)의 흐름은 지금 회차 응답 뒤에 두어, 자료가 길어 잘리더라도 지금 응답이 먼저 남게 합니다.
+    // 첫 조사면 자료가 없다고 알려 trend 를 unclear 로 두게 합니다
+    section('지난 회차 흐름 (오래된 순 · 지금 회차 응답은 위 "학생이 표시한 친구 관계")', historyRoundLines(history, pseudo), '(지난 회차 자료가 없어요. 첫 조사라 흐름은 판단할 수 없어요.)'),
+    ...(history?.length ? [
+      section('안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)', pairTimelineLines(history, relations, roundName, pseudo, submittedIds)),
+      section('학생별 받은 관계 수 변화 (안 좋은 사이를 받은 적 있는 학생만)', studentTrendLines(history, relations, roundName, students, pseudo, submittedIds)),
+      section('지난 회차 돌아보기 글 (최근 2개 회차)', pastReviewLines(history, pseudo)),
+    ] : []),
     '',
     '위 자료를 바탕으로 JSON 스키마에 맞춰 분석을 작성해 주세요.',
   ].join('\n\n'));
@@ -511,6 +617,7 @@ export async function aiAnalyzeRelationships(input = {}) {
       conflictType: clip(pseudo.restore(String(p.conflictType ?? '').trim()), 60),
       analysis: pseudo.restore(String(p.analysis ?? '').trim()),
       advice: pseudo.restore(String(p.advice ?? '').trim()),
+      trend: TREND_SET.has(p.trend) ? p.trend : 'unclear',   // 지난 회차와 견준 흐름
     });
   }
   pairs.sort((x, y) => RISK_ORDER[x.riskLevel] - RISK_ORDER[y.riskLevel]);
@@ -534,11 +641,14 @@ export async function aiAnalyzeRelationships(input = {}) {
       summary: pseudo.restore(String(s.summary ?? '').trim()),
       strengths: pseudo.restore(String(s.strengths ?? '').trim()),
       watch: pseudo.restore(String(s.watch ?? '').trim()),
+      trend: pseudo.restore(String(s.trend ?? '').trim()),
       roleFit,
     });
   }
 
-  return { summary: pseudo.restore(String(raw.summary ?? '').trim()), pairs, students, truncated };
+  // 함께 읽은 지난 회차 (선생님 화면·보고서에 표시)
+  const historyRounds = (Array.isArray(input.history) ? input.history : []).map((r) => ({ id: r.id, name: r.name }));
+  return { summary: pseudo.restore(String(raw.summary ?? '').trim()), pairs, students, truncated, historyRounds };
 }
 
 // ---------- 1인 1역 배정 ----------

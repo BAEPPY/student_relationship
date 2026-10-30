@@ -24,6 +24,7 @@ let lastLoadedAt = null;
 const followupBusy = new Set();
 
 const LEVEL_LABEL = { high: '높음', medium: '주의', low: '낮음' };
+const TREND_LABEL = { new: '🆕 이번에 새로', continuing: '🔁 계속됨', improving: '📈 나아지는 중', resolved: '✅ 이번엔 사라짐' };   // AI 분석: 지난 회차와 견준 흐름 (unclear 는 표시 안 함)
 const RISK_ORDER = { high: 0, medium: 1, low: 2 };
 // 구역 이동 줄(sticky nav)에 나오는 카드 순서
 const SECTIONS = [
@@ -758,7 +759,7 @@ function pairEvidence(p, context, { ai = false } = {}) {
   const relations = (state.relations || []).filter((r) => (r.from === p.a && r.to === p.b) || (r.from === p.b && r.to === p.a));
   const notes = ids.filter((id) => state.teacherNotes?.students?.[id]?.memo);
   const rules = (state.teacherNotes?.rules || []).filter((rule) => ids.includes(rule.a) && ids.includes(rule.b));
-  const refKinds = { submission: '관계 제출', relation: '관계 응답', profile: '성향 설문', application: '지원서', 'closer-friends': '친해진 친구', 'teacher-note': '교사 메모', 'teacher-rule': '교사 지정 규칙' };
+  const refKinds = { submission: '관계 제출', relation: '관계 응답', profile: '성향 설문', application: '지원서', 'closer-friends': '친해진 친구', history: '지난 회차 응답', 'teacher-note': '교사 메모', 'teacher-rule': '교사 지정 규칙' };
   return el('div', { class: 'pair-evidence' }, [
     ai ? el('p', { class: 'muted', text: '서버가 연결한 입력 자료의 참조 항목이에요. AI 문장의 정확한 인용을 뜻하지 않으며, 아래 내용은 현재 응답이에요.' }) : null,
     el('div', { class: 'section-label', text: '현재 응답과 교사 기록' }),
@@ -913,6 +914,7 @@ function renderAiPanel() {
       el('div', { class: 'ai-pair-head' }, [
         el('a', { href: '#', class: 'names', text: `${nameOf(p.a)} ↔ ${nameOf(p.b)}`, onClick: (e) => { e.preventDefault(); setHighlight([p.a, p.b], p.a); scrollToGraph(); } }),
         el('span', { class: `badge ${lv}`, text: LEVEL_LABEL[lv] }),
+        TREND_LABEL[p.trend] ? el('span', { class: 'badge gray ai-trend', title: '지난 회차와 견준 흐름', text: TREND_LABEL[p.trend] }) : null,
         p.conflictType ? el('span', { class: 'conflict-type', text: p.conflictType }) : null,
       ]),
       p.analysis ? el('p', { class: 'ai-text', text: p.analysis }) : el('p', { class: 'ai-text muted', text: '설명이 비어 있어요.' }),
@@ -936,6 +938,7 @@ function renderAiPanel() {
         info.summary ? el('p', { text: info.summary }) : null,
         info.strengths ? el('div', { class: 'ai-line' }, [el('b', { text: '💪 강점: ' }), info.strengths]) : null,
         info.watch ? el('div', { class: 'ai-line' }, [el('b', { text: '👀 살펴볼 점: ' }), info.watch]) : null,
+        info.trend ? el('div', { class: 'ai-line' }, [el('b', { text: '📅 지난 회차와 견주면: ' }), info.trend]) : null,
         fit.length ? el('div', { class: 'chips role-chips' }, fit.map((f) => el('span', { class: 'role-chip', title: f.reason || '' }, [
           el('b', { text: roleNameOf(f.roleId) }),
           f.reason ? el('span', { class: 'reason', text: ` — ${f.reason}` }) : null,
@@ -950,6 +953,9 @@ function renderAiPanel() {
     analysisDataNotice(a.context, { ai: true }),
     el('div', { class: 'ai-meta muted', id: 'ai-meta' }, [
       `분석 ${fmtDate(a.createdAt)}${a.model ? ` · 모델 ${a.model}` : ''} · ${state.round.name} 회차`,
+      a.historyRounds?.length
+        ? ` · 지난 회차 ${a.historyRounds.length}개 함께 읽음 (${a.historyRounds.map((r) => r.name).join(', ')})`
+        : (state.rounds.length > 1 && !a.historyRounds ? ' · 지난 회차 없이 분석한 결과예요. "다시 분석"하면 지난 회차 흐름도 함께 읽어요.' : ''),
       a.truncated ? el('span', { class: 'ai-truncated', id: 'ai-truncated', text: ' · ⚠️ 자료가 길어 AI에 보낸 내용 일부가 생략됐어요.' }) : null,
     ]),
     el('div', { class: 'ai-summary' }, [
@@ -974,7 +980,7 @@ function renderAiPanel() {
     ]),
     el('p', { class: 'muted', style: { marginTop: '12px', marginBottom: 0 }, text: 'AI 분석은 참고용이에요. 학생을 판단하는 근거가 아니라 먼저 살펴볼 관계와 어울리는 역할을 찾는 도구로 써 주세요. 학생이 답을 고치면 "다시 분석"으로 새로 받을 수 있어요.' }),
   ] : [
-    enabled ? el('p', { class: 'muted', style: { marginBottom: 0 }, text: '아직 분석 결과가 없어요. "AI 분석 실행"을 누르면 이번 회차의 관계도, 성향 설문, 1인 1역 지원서, 교사 메모를 함께 읽고 학급 요약·주의할 관계·학생별 역할 추천을 만들어요.' }) : null,
+    enabled ? el('p', { class: 'muted', style: { marginBottom: 0 }, text: '아직 분석 결과가 없어요. "AI 분석 실행"을 누르면 이번 회차의 관계도, 성향 설문, 1인 1역 지원서, 돌아보기, 교사 메모와 지난 회차들(지난 달들)의 흐름을 함께 읽고 학급 요약·주의할 관계(새로 생김·계속됨·나아지는 중·사라짐)·학생별 역할 추천을 만들어요.' }) : null,
   ];
 
   setChildren(card,

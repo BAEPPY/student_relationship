@@ -7,7 +7,7 @@ import { newToken, newId } from './tokens.js';
 import { REASON_CATALOG, isValidTag, BAD_REASON_MIN, textLength } from './reasons.js';
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName, nextRoundName, uniqueRoundName } from './rounds.js';
-import { analyzeHistory } from './history.js';
+import { analyzeHistory, historyForAi } from './history.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
@@ -260,7 +260,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
   function aiAnalysisView(room, round) {
     if (!round.aiAnalysis) return null;
-    return { ...round.aiAnalysis, context: describeAnalysisContext(round.aiAnalysis.provenance, captureAnalysisContext(room, round)) };
+    // 지난 회차를 함께 읽은 분석이면 지금도 같은 방식으로 지문을 계산해 최신 여부를 비교합니다
+    const saved = round.aiAnalysis.provenance;
+    const history = Array.isArray(saved?.historyRoundIds) ? historyForAi(room, round) : undefined;
+    return { ...round.aiAnalysis, context: describeAnalysisContext(saved, captureAnalysisContext(room, round, { history })) };
   }
 
   function aiSeatingView(room, round) {
@@ -1201,12 +1204,16 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const stats = computeStats(rr);
     const analysis = analyzeConflicts(rr, stats);
     const ai = makeAi();
-    const provenance = captureAnalysisContext(found, round);
+    const history = historyForAi(found, round);   // 지난 회차(지난 달들)의 응답·돌아보기를 함께 읽어 흐름을 봅니다
+    const provenance = captureAnalysisContext(found, round, { history });
     const result = await aiAnalyzeRelationships({
       ai,
       students: found.students.map((s) => ({ id: s.id, name: s.name })),
       relations: listRelations(rr),
       pairs: analysis.pairs,
+      history,
+      roundName: round.name,
+      submittedIds: found.students.filter((s) => stats[s.id]?.submitted).map((s) => s.id),
       teacherNotes: found.teacherNotes || { students: {}, rules: [] },
       profiles: round.profiles || {},
       applications: round.applications || {},

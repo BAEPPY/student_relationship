@@ -12,7 +12,7 @@ const fingerprint = (value) => createHash('sha256').update(JSON.stringify(canoni
 const sortedRecord = (record, known) => Object.fromEntries(Object.entries(record || {}).filter(([id]) => known.has(id)).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Capture before calling AI. The saved context contains references, not duplicate student writing. */
-export function captureAnalysisContext(room, round, { kind = 'relationships', extra = null, now = new Date().toISOString() } = {}) {
+export function captureAnalysisContext(room, round, { kind = 'relationships', extra = null, now = new Date().toISOString(), history = undefined } = {}) {
   const known = new Set(room.students.map((student) => student.id));
   const students = room.students.map((student) => ({ id: student.id, name: student.name, ...(kind === 'seating' ? { body: student.body || {} } : {}) }));
   const relations = listRelations({ students, relations: round.relations || {} }).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`));
@@ -57,12 +57,23 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
     snapshot.inputConfig = extra;
   } else {
     snapshot.applications = applications;
-    if (Object.keys(closerFriends).length) snapshot.closerFriends = closerFriends;   // 비어 있으면 넣지 않아 이 기능 전에 저장한 분석의 지문이 그대로 유지돼요
+    if (Object.keys(closerFriends).length) snapshot.closerFriends = closerFriends;
+    // 지난 회차를 함께 읽은 분석은 그 회차들의 응답·돌아보기도 지문에 넣어, 지난 회차가 바뀌거나 지워지면 재분석 필요로 표시합니다
+    if (Array.isArray(history)) {
+      snapshot.history = history.map((r) => ({
+        id: r.id, name: r.name,
+        submittedIds: (r.submittedIds || []).filter((id) => known.has(id)).sort(),
+        relations: (r.relations || []).filter((x) => known.has(x.from) && known.has(x.to)).map(({ from, to, type, tags, reason, updatedAt }) => ({ from, to, type, tags: tags || [], reason: reason || '', updatedAt: updatedAt || null })).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`)),
+        closerFriends: sortedRecord(r.closerFriends, known),
+      }));
+      for (const r of history) evidence.push({ id: `history:${r.id}`, kind: 'history', studentIds: [], roundId: r.id, roundName: r.name, updatedAt: at(r.closedAt) });
+    }   // 비어 있으면 넣지 않아 이 기능 전에 저장한 분석의 지문이 그대로 유지돼요
     snapshot.roles = roomRoles(room);
     snapshot.previousRoles = previousRoleIds(room, round);
   }
   return {
     version: 1, kind, roundId: round.id, fingerprint: fingerprint(snapshot), capturedAt: now,
+    historyRoundIds: Array.isArray(history) && kind !== 'seating' ? history.map((r) => r.id) : undefined,   // 함께 읽은 지난 회차 (없으면 키 자체가 저장되지 않음)
     sourceUpdatedAt: timestamps.sort().at(-1) || null,
     coverage: { submitted, total, percent: total ? Math.round(submitted / total * 100) : 0, complete: total > 0 && submitted === total, missingStudentIds },
     evidence,

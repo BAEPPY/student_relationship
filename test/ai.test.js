@@ -402,3 +402,71 @@ describe('추가 검증 (검토 후)', () => {
     assert.ok(!/S\d/.test(result.pairs[0].conflictType));
   });
 });
+
+describe('지난 회차 흐름 (분석 프롬프트 · 결과의 trend)', () => {
+  const history = [
+    { id: 'r-sep', name: '2026년 9월', closedAt: '2026-09-30T00:00:00Z', total: 4, submittedIds: ['st_a1', 'st_b2', 'st_c3'],
+      relations: [
+        { from: 'st_a1', to: 'st_b2', type: 'bad', tags: [], reason: '이도윤이 9월에 놀렸어요' },
+        { from: 'st_b2', to: 'st_a1', type: 'bad', tags: [], reason: '김하늘이 먼저 시비 걸었어요' },
+        { from: 'st_c3', to: 'st_a1', type: 'good', tags: [], reason: '' },
+      ],
+      closerFriends: { st_c3: { ids: ['st_d4'], text: '박서연이랑 모둠에서 친해졌어요', review: '9월은 바빴어요' } } },
+    { id: 'r-oct', name: '2026년 10월', closedAt: '2026-10-20T00:00:00Z', total: 4, submittedIds: ['st_a1', 'st_b2', 'st_c3', 'st_d4'],
+      relations: [
+        { from: 'st_a1', to: 'st_b2', type: 'bad', tags: [], reason: '아직도 놀려요' },
+        { from: 'st_b2', to: 'st_a1', type: 'good', tags: [], reason: '' },
+        { from: 'st_d4', to: 'st_c3', type: 'bad', tags: [], reason: '약속을 안 지켰어요' },
+      ],
+      closerFriends: {} },
+  ];
+  test('지난 회차 요약·조합별 흐름·학생별 변화·지난 돌아보기 글이 가명으로 들어가고 지금 회차가 마지막에 온다', () => {
+    const { user } = buildAnalysisPrompt({ ...analysisInput(null), history, roundName: '2026년 10월 2차', submittedIds: ['st_a1', 'st_b2', 'st_c3'] });
+    const sec = (title) => user.split(`## ${title}\n`)[1]?.split('\n\n## ')[0].split('\n\n\n')[0];   // 마지막 섹션 뒤의 빈 줄·마무리 문장은 뺌
+    const rounds = sec('지난 회차 흐름 (오래된 순 · 지금 회차 응답은 위 "학생이 표시한 친구 관계")');
+    assert.equal(rounds, '- 2026년 9월 (마감): 제출 3/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 1쌍\n- 2026년 10월 (마감): 제출 4/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 0쌍');
+    const pairs = sec('안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)').split('\n');
+    // 지금 안 좋은 조합(S1↔S2)이 먼저, 그다음 지난 회차에만 안 좋았던 조합(S3↔S4)
+    assert.equal(pairs[0], '- S1 ↔ S2: 2026년 9월 S1→S2 안 좋은 사이("S2이 9월에 놀렸어요") · S2→S1 안 좋은 사이("S1이 먼저 시비 걸었어요") / 2026년 10월 S1→S2 안 좋은 사이("아직도 놀려요") · S2→S1 좋은 사이 / 지금(2026년 10월 2차) S1→S2 안 좋은 사이("S2이 자꾸 놀려요. S2이가 싫어요.") · S2→S1 좋은 사이');
+    assert.equal(pairs[1], '- S3 ↔ S4: 2026년 9월 (S4 미응답) / 2026년 10월 S4→S3 안 좋은 사이("약속을 안 지켰어요") / 지금(2026년 10월 2차) S3→S4 좋은 사이');
+    const trend = sec('학생별 받은 관계 수 변화 (안 좋은 사이를 받은 적 있는 학생만)').split('\n');
+    assert.ok(trend.includes('- S2: 2026년 9월 좋음 0·안 좋음 1 → 2026년 10월 좋음 0·안 좋음 1 → 지금(2026년 10월 2차) 좋음 0·안 좋음 1'), trend.join(' | '));
+    assert.ok(trend.includes('- S3: 2026년 9월 좋음 0·안 좋음 0 → 2026년 10월 좋음 0·안 좋음 1 → 지금(2026년 10월 2차) 좋음 0·안 좋음 0'), trend.join(' | '));
+    assert.ok(!trend.some((l) => l.startsWith('- S4:')), '안 좋은 사이를 받은 적 없는 학생은 생략');
+    const past = sec('지난 회차 돌아보기 글 (최근 2개 회차)');
+    assert.equal(past, '- 2026년 9월 S3: S4 — "S3이랑 모둠에서 친해졌어요" · 한 달 돌아보기: "9월은 바빴어요"');
+    for (const name of [...REAL_NAMES, '하늘', '도윤', '서연']) assert.ok(!user.includes(name), name);
+    for (const id of REAL_IDS) assert.ok(!user.includes(id), id);
+    assert.ok(user.indexOf('## 성향 설문') < user.indexOf('## 학생이 표시한 친구 관계 (지금 회차)') && user.indexOf('## 학생이 표시한 친구 관계 (지금 회차)') < user.indexOf('## 지난 회차 흐름'), '지금 응답이 먼저, 지난 회차 흐름은 그 뒤(잘려도 지금 응답이 남게)');
+  });
+  test('지난 회차가 없으면 첫 조사라고 알리고 변화 섹션은 넣지 않는다', () => {
+    const { user } = buildAnalysisPrompt({ ...analysisInput(null), history: [], roundName: '2026년 10월' });
+    assert.match(user, /## 지난 회차 흐름 [^\n]*\n\(지난 회차 자료가 없어요\. 첫 조사라 흐름은 판단할 수 없어요\.\)/);
+    assert.ok(!user.includes('## 안 좋은 사이 변화'));
+    assert.ok(!user.includes('## 학생별 받은 관계 수 변화'));
+  });
+  test('결과의 trend 는 허용 값만 남기고, 함께 읽은 지난 회차 목록을 돌려준다', async () => {
+    const canned = {
+      summary: '요약',
+      pairs: [
+        { a: 'S1', b: 'S2', riskLevel: 'high', conflictType: '놀림', analysis: '9월부터 계속돼요', advice: '자리를 떨어뜨려요', trend: 'continuing' },
+        { a: 'S3', b: 'S4', riskLevel: 'low', conflictType: '약속', analysis: '이번엔 좋은 사이로 표시했어요', advice: '지켜봐요', trend: 'weird' },
+      ],
+      students: [{ id: 'S1', summary: '조용해요', strengths: '', watch: '', trend: '9월보다 S2와의 사이가 나아졌어요', roleFit: [] }],
+    };
+    const { client, calls } = fakeClient(textMessage(canned));
+    const ai = createAiClient({ apiKey: '', client, model: 'test-model' });
+    const result = await aiAnalyzeRelationships({ ...analysisInput(ai), history, roundName: '2026년 10월 2차' });
+    assertNoRealData(calls[0]);
+    const schema = calls[0].output_config.format.schema;
+    assert.ok(schema.properties.pairs.items.required.includes('trend'));
+    assert.deepEqual(schema.properties.pairs.items.properties.trend.enum, ['new', 'continuing', 'improving', 'resolved', 'unclear']);
+    assert.ok(schema.properties.students.items.required.includes('trend'));
+    assert.equal(result.pairs.find((p) => p.a === 'st_a1').trend, 'continuing');
+    assert.equal(result.pairs.find((p) => p.a === 'st_c3').trend, 'unclear', '모르는 값은 unclear');
+    assert.equal(result.students[0].trend, '9월보다 이도윤와의 사이가 나아졌어요');
+    assert.deepEqual(result.historyRounds, [{ id: 'r-sep', name: '2026년 9월' }, { id: 'r-oct', name: '2026년 10월' }]);
+    const none = await aiAnalyzeRelationships({ ...analysisInput(createAiClient({ apiKey: '', client: fakeClient(textMessage(canned)).client })) });
+    assert.deepEqual(none.historyRounds, [], '지난 회차를 안 넣으면 빈 목록');
+  });
+});

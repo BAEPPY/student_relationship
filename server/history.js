@@ -1,4 +1,4 @@
-import { computeStats, analyzeConflicts } from './analysis.js';
+import { computeStats, analyzeConflicts, listRelations } from './analysis.js';
 import { roundRoom, roundView } from './rounds.js';
 
 const pairKey = (a, b) => [a, b].sort().join('|');
@@ -155,4 +155,25 @@ export function analyzeHistory(room) {
   }
 
   return { trend, students, pairHistory, changes };
+}
+
+/**
+ * AI 관계 분석에 함께 넣는 지난 회차 자료: 분석하는 회차보다 앞선 회차(최근 maxRounds개)를 오래된 순으로.
+ * 응답(관계·이유), 제출한 학생, 돌아보기(친해진 친구·한 달 소감)를 담고, 가명 처리는 ai.js 가 합니다.
+ */
+export function historyForAi(room, round, { maxRounds = 8 } = {}) {
+  const rounds = room.rounds || [];
+  const idx = rounds.findIndex((r) => r.id === round?.id);
+  if (idx < 0) return [];
+  return rounds.slice(0, idx).slice(-maxRounds).map((r) => {
+    const rr = roundRoom(room, r);
+    const stats = computeStats(rr);
+    return {
+      id: r.id, name: r.name, startedAt: r.startedAt || null, closedAt: r.closedAt || null,
+      submittedIds: room.students.filter((s) => stats[s.id]?.submitted).map((s) => s.id),
+      total: room.students.length,
+      relations: listRelations(rr),
+      closerFriends: r.closerFriends || {},
+    };
+  });
 }

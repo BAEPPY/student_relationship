@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeHistory } from '../server/history.js';
+import { analyzeHistory, historyForAi } from '../server/history.js';
 
 const students = [
   { id: 'a', name: '가학생' }, { id: 'b', name: '나학생' },
@@ -183,4 +183,25 @@ test('한 회차만 있으면 기존 changes:null 계약과 회차 통계를 유
   assert.equal(result.changes, null);
   assert.equal(result.trend[0].submitted, 1);
   assert.equal(result.students.length, students.length);
+});
+
+test('historyForAi: 분석 회차보다 앞선 회차만 오래된 순으로, 최근 maxRounds개까지, 응답·제출자·돌아보기를 담는다', () => {
+  const rounds = ['r1', 'r2', 'r3', 'r4'].map((id, i) => ({
+    id, name: `2026년 ${6 + i}월`, startedAt: `2026-0${6 + i}-01T00:00:00.000Z`, closedAt: i < 3 ? `2026-0${6 + i}-28T00:00:00.000Z` : null,
+    relations: { a: { b: bad() }, b: i === 0 ? { a: good() } : {} },
+    submissions: { a: { submittedAt: 'x' }, ...(i === 0 ? { b: { submittedAt: 'x' } } : {}) },
+    closerFriends: i === 2 ? { a: { ids: ['c'], text: '모둠에서 친해졌어요', review: '즐거웠어요', updatedAt: 'x' } } : undefined,
+  }));
+  const room = { students, rounds, currentRoundId: 'r4' };
+  const h = historyForAi(room, rounds[3]);
+  assert.deepEqual(h.map((r) => r.name), ['2026년 6월', '2026년 7월', '2026년 8월']);
+  assert.deepEqual(h[0].submittedIds, ['a', 'b']);
+  assert.equal(h[0].total, 4);
+  assert.deepEqual(h[0].relations.map((r) => `${r.from}>${r.to}:${r.type}`).sort(), ['a>b:bad', 'b>a:good']);
+  assert.deepEqual(h[2].closerFriends.a.ids, ['c']);
+  assert.ok(h.every((r) => r.closedAt));
+  assert.deepEqual(historyForAi(room, rounds[3], { maxRounds: 2 }).map((r) => r.id), ['r2', 'r3'], '최근 2개만');
+  assert.deepEqual(historyForAi(room, rounds[0]), [], '첫 회차는 지난 회차 없음');
+  assert.deepEqual(historyForAi(room, { id: 'ghost' }), [], '모르는 회차는 빈 목록');
+  assert.deepEqual(historyForAi(room, rounds[1]).map((r) => r.id), ['r1'], '가운데 회차를 분석하면 그 앞만');
 });
