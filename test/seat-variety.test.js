@@ -87,7 +87,7 @@ describe('지난 회차 자리표 API', () => {
     assert.deepEqual(r.json.pastSeatings, [], '지금 회차의 자리표는 지난 자리표가 아님');
 
     // 2회차: 1회차 자리표가 지난 자리표로
-    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' });
+    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2031년 1월' });
     assert.equal(r.status, 201, r.text);
     const r2 = r.json.round.id;
     view = await call(`/api/teacher/${t}?round=${r2}`);
@@ -102,7 +102,7 @@ describe('지난 회차 자리표 API', () => {
     // 3회차: 2회차 자리표(상관없음으로 저장)와 1회차 자리표가 최신 순. 비어 있는 자리표는 뺌
     r = await call(`/api/teacher/${t}/seating`, 'PUT', { roundId: r2, layout: LAYOUT, seats: { 'b0-r0-c0': a.id, 'b0-r0-c1': c.id }, options: { variety: 'off' } });
     assert.equal(r.json.seating.options.variety, 'off');
-    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 12월' });
+    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2031년 2월' });
     const r3 = r.json.round.id;
     r = await call(`/api/teacher/${t}/seating`, 'PUT', { roundId: r3, layout: LAYOUT, seats: {} });
     assert.equal(r.status, 200, r.text);
@@ -118,7 +118,7 @@ describe('지난 회차 자리표 API', () => {
     assert.equal(calls.length, 1);
     const user = calls[0].messages[0].content;
     assert.ok(user.includes('## 지난 자리표의 짝꿍'));
-    assert.ok(user.includes('- 2026년 11월: S1·S3'), user.slice(user.indexOf('지난 자리표의 짝꿍'), user.indexOf('지난 자리표의 짝꿍') + 200));
+    assert.ok(user.includes('- 2031년 1월: S1·S3'), user.slice(user.indexOf('지난 자리표의 짝꿍'), user.indexOf('지난 자리표의 짝꿍') + 200));
     assert.ok(user.includes('S1·S2') && user.includes('S3·S4'), '1회차 짝꿍');
     const dump = JSON.stringify(calls[0]);
     for (const n of [...STUDENTS.map((s) => s.name), a.id, b.id, c.id, d.id]) assert.ok(!dump.includes(n), `실명/번호가 요청에 들어감: ${n}`);

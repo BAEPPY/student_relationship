@@ -161,19 +161,26 @@ export function analyzeHistory(room) {
  * AI 관계 분석에 함께 넣는 지난 회차 자료: 분석하는 회차보다 앞선 회차(최근 maxRounds개)를 오래된 순으로.
  * 응답(관계·이유), 제출한 학생, 돌아보기(친해진 친구·한 달 소감)를 담고, 가명 처리는 ai.js 가 합니다.
  */
-export function historyForAi(room, round, { maxRounds = 8 } = {}) {
+export function historyForAi(room, round, { maxRounds = 8, cache = null } = {}) {
   const rounds = room.rounds || [];
   const idx = rounds.findIndex((r) => r.id === round?.id);
   if (idx < 0) return [];
-  return rounds.slice(0, idx).slice(-maxRounds).map((r) => {
-    const rr = roundRoom(room, r);
-    const stats = computeStats(rr);
-    return {
-      id: r.id, name: r.name, startedAt: r.startedAt || null, closedAt: r.closedAt || null,
-      submittedIds: room.students.filter((s) => stats[s.id]?.submitted).map((s) => s.id),
-      total: room.students.length,
-      relations: listRelations(rr),
-      closerFriends: r.closerFriends || {},
-    };
-  });
+  return rounds.slice(0, idx).slice(-maxRounds).map((r) => historyRoundFor(room, r, cache));
+}
+
+// cache(Map)를 넘기면 한 요청 안에서 같은 회차 요약을 한 번만 계산합니다 (JSON 내보내기가 모든 회차의 분석 상태를 볼 때).
+// 방 객체에 붙이는 캐시는 쓰지 않아요: FileStore 는 요청 사이에 같은 객체를 고쳐 쓰므로 오래된 값을 돌려줄 수 있어요
+function historyRoundFor(room, r, cache) {
+  if (cache?.has(r.id)) return cache.get(r.id);
+  const rr = roundRoom(room, r);
+  const stats = computeStats(rr);
+  const entry = {
+    id: r.id, name: r.name, startedAt: r.startedAt || null, closedAt: r.closedAt || null,
+    submittedIds: room.students.filter((s) => stats[s.id]?.submitted).map((s) => s.id),
+    total: room.students.length,
+    relations: listRelations(rr),
+    closerFriends: r.closerFriends || {},
+  };
+  cache?.set(r.id, entry);
+  return entry;
 }

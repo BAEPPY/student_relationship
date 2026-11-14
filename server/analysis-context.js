@@ -12,7 +12,7 @@ const fingerprint = (value) => createHash('sha256').update(JSON.stringify(canoni
 const sortedRecord = (record, known) => Object.fromEntries(Object.entries(record || {}).filter(([id]) => known.has(id)).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Capture before calling AI. The saved context contains references, not duplicate student writing. */
-export function captureAnalysisContext(room, round, { kind = 'relationships', extra = null, now = new Date().toISOString(), history = undefined } = {}) {
+export function captureAnalysisContext(room, round, { kind = 'relationships', extra = null, now = new Date().toISOString(), history = undefined, historyInFingerprint = false } = {}) {
   const known = new Set(room.students.map((student) => student.id));
   const students = room.students.map((student) => ({ id: student.id, name: student.name, ...(kind === 'seating' ? { body: student.body || {} } : {}) }));
   const relations = listRelations({ students, relations: round.relations || {} }).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`));
@@ -58,22 +58,20 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
   } else {
     snapshot.applications = applications;
     if (Object.keys(closerFriends).length) snapshot.closerFriends = closerFriends;
-    // 지난 회차를 함께 읽은 분석은 그 회차들의 응답·돌아보기도 지문에 넣어, 지난 회차가 바뀌거나 지워지면 재분석 필요로 표시합니다
+    // 지난 회차를 함께 읽은 분석은 그 회차들의 응답·돌아보기를 회차별 지문으로 따로 기록합니다 (아래 historyRounds).
+    // 보관 기간이 지나 자동 삭제된 회차는 '바뀐 입력'이 아니라 비교에서 빠지고, 남아 있는 회차의 응답이 바뀌면 재분석 필요로 표시합니다.
+    // historyInFingerprint 는 이 방식 전에 저장한(지난 회차를 전체 지문에 넣던) 분석과 비교할 때만 씁니다.
     if (Array.isArray(history)) {
-      snapshot.history = history.map((r) => ({
-        id: r.id, name: r.name,
-        submittedIds: (r.submittedIds || []).filter((id) => known.has(id)).sort(),
-        relations: (r.relations || []).filter((x) => known.has(x.from) && known.has(x.to)).map(({ from, to, type, tags, reason, updatedAt }) => ({ from, to, type, tags: tags || [], reason: reason || '', updatedAt: updatedAt || null })).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`)),
-        closerFriends: sortedRecord(r.closerFriends, known),
-      }));
+      if (historyInFingerprint) snapshot.history = history.map((r) => historyRoundSnapshot(r, known));
       for (const r of history) evidence.push({ id: `history:${r.id}`, kind: 'history', studentIds: [], roundId: r.id, roundName: r.name, updatedAt: at(r.closedAt) });
-    }   // 비어 있으면 넣지 않아 이 기능 전에 저장한 분석의 지문이 그대로 유지돼요
+    }
     snapshot.roles = roomRoles(room);
     snapshot.previousRoles = previousRoleIds(room, round);
   }
   return {
     version: 1, kind, roundId: round.id, fingerprint: fingerprint(snapshot), capturedAt: now,
     historyRoundIds: Array.isArray(history) && kind !== 'seating' ? history.map((r) => r.id) : undefined,   // 함께 읽은 지난 회차 (없으면 키 자체가 저장되지 않음)
+    historyRounds: Array.isArray(history) && kind !== 'seating' && !historyInFingerprint ? history.map((r) => ({ id: r.id, name: r.name, fingerprint: fingerprint(historyRoundSnapshot(r, known)) })) : undefined,
     sourceUpdatedAt: timestamps.sort().at(-1) || null,
     coverage: { submitted, total, percent: total ? Math.round(submitted / total * 100) : 0, complete: total > 0 && submitted === total, missingStudentIds },
     evidence,
@@ -81,9 +79,26 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
 }
 
 /** Old analyses have unknown provenance; partial submission is distinct from whether inputs changed. */
+/** 지난 회차 한 개의 지문 재료: 응답·제출자·돌아보기 (지금 명단에 있는 학생만) */
+function historyRoundSnapshot(r, known) {
+  return {
+    id: r.id, name: r.name,
+    submittedIds: (r.submittedIds || []).filter((id) => known.has(id)).sort(),
+    relations: (r.relations || []).filter((x) => known.has(x.from) && known.has(x.to)).map(({ from, to, type, tags, reason, updatedAt }) => ({ from, to, type, tags: tags || [], reason: reason || '', updatedAt: updatedAt || null })).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`)),
+    closerFriends: sortedRecord(r.closerFriends, known),
+  };
+}
+
+/** 함께 읽은 지난 회차 중 아직 남아 있는 회차의 응답이 바뀌었는지 (지워진 회차는 비교하지 않음) */
+function historyChanged(saved, current) {
+  if (!Array.isArray(saved?.historyRounds)) return false;
+  const now = new Map((current.historyRounds || []).map((r) => [r.id, r.fingerprint]));
+  return saved.historyRounds.some((r) => now.has(r.id) && now.get(r.id) !== r.fingerprint);
+}
+
 export function describeAnalysisContext(saved, current) {
   const verified = saved?.version === 1 && typeof saved.fingerprint === 'string' && saved.roundId === current.roundId && saved.kind === current.kind;
-  const changed = verified ? saved.fingerprint !== current.fingerprint : null;
+  const changed = verified ? saved.fingerprint !== current.fingerprint || historyChanged(saved, current) : null;
   return {
     status: !verified ? 'unknown' : changed ? 'stale' : 'fresh', changed,
     capturedAt: verified ? saved.capturedAt || null : null,

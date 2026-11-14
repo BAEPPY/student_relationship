@@ -258,12 +258,15 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     return out;
   }
 
-  function aiAnalysisView(room, round) {
+  function aiAnalysisView(room, round, historyCache = null) {
     if (!round.aiAnalysis) return null;
-    // 지난 회차를 함께 읽은 분석이면 지금도 같은 방식으로 지문을 계산해 최신 여부를 비교합니다
+    // 지난 회차를 함께 읽은 분석이면 지금도 같은 방식으로 지문을 계산해 최신 여부를 비교합니다.
+    // historyRounds(회차별 지문)가 없는 옛 기록은 지난 회차를 전체 지문에 넣던 방식으로 비교합니다
     const saved = round.aiAnalysis.provenance;
-    const history = Array.isArray(saved?.historyRoundIds) ? historyForAi(room, round) : undefined;
-    return { ...round.aiAnalysis, context: describeAnalysisContext(saved, captureAnalysisContext(room, round, { history })) };
+    const readHistory = Array.isArray(saved?.historyRounds) || Array.isArray(saved?.historyRoundIds);
+    const history = readHistory ? historyForAi(room, round, { cache: historyCache }) : undefined;
+    const historyInFingerprint = readHistory && !Array.isArray(saved?.historyRounds);
+    return { ...round.aiAnalysis, context: describeAnalysisContext(saved, captureAnalysisContext(room, round, { history, historyInFingerprint })) };
   }
 
   function aiSeatingView(room, round) {
@@ -503,7 +506,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       if (room.rounds.length >= LIMITS.rounds) throw bad(`회차는 ${LIMITS.rounds}개까지 만들 수 있어요.`);
       // 이름을 안 보내면 지금 달 이름으로, 같은 달에 이미 조사했으면 "2026년 10월 2차"처럼 (한 달에 여러 번 조사 가능)
       const name = requested || nextRoundName(room);
-      if (room.rounds.some((r) => r.name === name)) throw bad(`같은 이름의 회차가 이미 있어요: ${name}. 같은 달에 다시 조사하려면 "${uniqueRoundName(room, name)}"처럼 적어 주세요.`);
+      if (room.rounds.some((r) => r.name === name)) {
+        const base = name.replace(/\s*\d+차$/, '');   // "2026년 10월 2차"를 또 적었으면 "3차"를 제안 ("2차 2차"가 되지 않게)
+        throw bad(`같은 이름의 회차가 이미 있어요: ${name}. 같은 달에 다시 조사하려면 "${uniqueRoundName(room, base)}"처럼 적어 주세요.`);
+      }
       const now = new Date().toISOString();
       const cur = currentRound(room);
       if (!cur.closedAt) cur.closedAt = now;
@@ -782,10 +788,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/api/teacher/:adminToken/export.json', async (req, res) => {
     const room = await requireRoom(req);
     const view = teacherView(req, room);
+    const historyCache = new Map();   // 회차마다 지난 회차 요약을 다시 계산하지 않도록 (이 내보내기 한 번 동안만)
     const rounds = room.rounds.map((r) => {
       const rr = roundRoom(room, r);
       const stats = computeStats(rr);
-      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
+      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r, historyCache), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
     res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [] });
@@ -829,6 +836,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
 
   // 이번 달 친해진 친구(돌아보기) 본문 검증: { ids: [반 친구 id…], text } → 저장할 모양 (둘 다 비어 있으면 null)
   function parseCloserFriends(input, classmates) {
+    if (input === null) return null;   // null 은 '비우기' (둘 다 비운 것과 같음)
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('친해진 친구 내용이 올바르지 않아요.');
     const rawIds = input.ids === undefined ? [] : input.ids;
     if (!Array.isArray(rawIds) || rawIds.length > 1000) throw bad('친해진 친구 목록이 올바르지 않아요.');
@@ -902,8 +910,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       } else if (closer) {
         round.closerFriends ||= {};
         const before = round.closerFriends[student.id];
-        const same = before && before.text === closer.text && (before.review || '') === closer.review && JSON.stringify(before.ids || []) === JSON.stringify(closer.ids);
-        round.closerFriends[student.id] = { ...closer, updatedAt: same ? before.updatedAt : now };
+        // 고른 친구가 같으면 순서가 달라도 같은 내용으로 보고 저장본(제출 시각 포함)을 그대로 둡니다
+        const sameIds = JSON.stringify([...(before?.ids || [])].sort()) === JSON.stringify([...closer.ids].sort());
+        const same = before && before.text === closer.text && (before.review || '') === closer.review && sameIds;
+        round.closerFriends[student.id] = same ? before : { ...closer, updatedAt: now };
       }
       clearStudentDraft(round, student.id, ['relations', 'closerFriends']);
     });

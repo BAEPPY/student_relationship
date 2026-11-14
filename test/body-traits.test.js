@@ -71,7 +71,7 @@ describe('몸 특징 · 자리 환경 API', () => {
     assert.deepEqual(view.json.students[1].body, {});
 
     // 새 회차를 시작해도 몸 특징은 그대로, 성향 설문은 새로
-    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' });
+    r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2031년 1월' });
     assert.equal(r.status, 201, r.text);
     view = await call(`/api/teacher/${t}`);
     assert.deepEqual(view.json.students[0].body, { sight: 'poor', cold: 'yes', height: 'mid' });

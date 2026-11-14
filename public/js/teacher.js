@@ -1,4 +1,4 @@
-import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, helpTip, TYPE_LABEL, TYPE_ICON } from './common.js';
+import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, helpTip, TYPE_LABEL, TYPE_ICON, monthLabelOf } from './common.js';
 import { RelationGraph, GRAPH_MOTION_KEY } from './graph.js';
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -365,8 +365,8 @@ function saveGraphMotion(on) {
 // ---------- 헤더 ----------
 // 새 회차 이름 제안: 지금 달 이름, 같은 달에 이미 조사했으면 "2026년 10월 2차"처럼 (한 달에 여러 번 조사할 수 있어요)
 function suggestRoundName() {
-  const d = new Date();
-  const base = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
+  const kst = new Date(Date.now() + 9 * 3600 * 1000);   // 서버(monthName)와 같은 한국 시간 기준
+  const base = `${kst.getUTCFullYear()}년 ${kst.getUTCMonth() + 1}월`;
   const taken = new Set(state.rounds.map((r) => r.name));
   if (!taken.has(base)) return base;
   for (let n = 2; n < 1000; n++) if (!taken.has(`${base} ${n}차`)) return `${base} ${n}차`;
@@ -680,11 +680,11 @@ function rolesInfoBox(sid) {
   // 🌱 이번 달 친해진 친구 (학생 돌아보기, 선택 사항): 낸 학생만 보여 주고 없으면 아무것도 넣지 않아요
   const closer = state.closerFriends?.[sid] || null;
   const closerNames = (closer?.ids || []).filter((id) => state.stats?.[id]).map(nameOf);
-  const monthLabel = (/(\d{1,2})\s*월/.exec(state.round?.name || '') || [])[1];   // "2026년 10월 2차" → "10월"
+  const monthLabel = monthLabelOf(state.round?.name, '한 달');   // "2026년 10월 2차" → "10월"
   const closerBlock = closer && (closerNames.length || closer.text || closer.review)
     ? [
       label(`🌱 ${state.round?.name || '이번 달'} 돌아보기 · ${fmtDate(closer.updatedAt)}`),
-      closer.review ? el('div', { class: 'quote', text: `${monthLabel ? `${monthLabel}월` : '한 달'}은 어땠나요? “${closer.review}”` }) : null,
+      closer.review ? el('div', { class: 'quote', text: `${monthLabel}은 어땠나요? “${closer.review}”` }) : null,
       closerNames.length || closer.text ? el('div', { class: 'muted', style: { marginTop: '4px' }, text: `친해진 친구 (${closerNames.length})` }) : null,
       closerNames.length ? el('div', { class: 'chips profile-chips' }, closerNames.map((name) => el('span', { class: 'profile-chip closer', text: name }))) : (closer.text ? el('div', { class: 'muted', text: '고른 친구는 없고 글만 적었어요.' }) : null),
       closer.text ? el('div', { class: 'quote', text: `“${closer.text}”` }) : null,

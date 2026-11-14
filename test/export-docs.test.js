@@ -211,7 +211,11 @@ describe('내보내기 API', () => {
     r = await call(`/api/teacher/${t}/roles/export.hwpx?round=${view.round.id}&reasons=1`);
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-type'), 'application/hwp+zip');
-    assert.match(r.headers.get('content-disposition'), /^attachment; filename="roles_2026-10\.hwpx"; filename\*=UTF-8''1%EC%9D%B81%EC%97%AD_2026%EB%85%84%2010%EC%9B%94\.hwpx$/);
+    // 파일 이름은 그 회차 이름(교실을 만든 달)을 따르므로 날짜에 맞춰 기대값을 만듭니다
+    const [, y, m] = /^(\d{4})년 (\d{1,2})월$/.exec(view.round.name);
+    const pad = String(m).padStart(2, '0');
+    const enc = encodeURIComponent(`1인1역_${y}년 ${m}월.hwpx`);
+    assert.equal(r.headers.get('content-disposition'), `attachment; filename="roles_${y}-${pad}.hwpx"; filename*=UTF-8''${enc}`);
     const doc = extractDocument(r.buf, 'a.hwpx');
     assert.equal(doc.format, 'hwpx');
     assert.match(doc.blocks[0].text, /1인 1역 배정표$/);

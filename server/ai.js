@@ -287,8 +287,7 @@ function timelineRounds(history, relations, roundName, submittedIds) {
 }
 
 /** 안 좋은 사이가 한 번이라도 있었던 조합의 회차별 흐름. 지금 안 좋은 조합 → 안 좋았던 회차가 많은 조합 순, 최대 max개 */
-function pairTimelineLines(history, relations, roundName, pseudo, submittedIds, { max = 60 } = {}) {
-  const rounds = timelineRounds(history, relations, roundName, submittedIds);
+function pairTimelineLines(rounds, pseudo, { max = 60 } = {}) {
   const last = rounds.length - 1;
   const pairs = new Map();
   rounds.forEach((r, i) => {
@@ -328,9 +327,8 @@ function pairTimelineLines(history, relations, roundName, pseudo, submittedIds, 
 }
 
 /** 학생별로 받은 좋은/안 좋은 사이 수의 회차별 변화 (안 좋은 사이를 받은 적 있는 학생만, 최대 max명) */
-function studentTrendLines(history, relations, roundName, students, pseudo, submittedIds, { max = 40 } = {}) {
-  const rounds = timelineRounds(history, relations, roundName, submittedIds);
-  const lines = [];
+function studentTrendLines(rounds, students, pseudo, { max = 40 } = {}) {
+  const all = [];
   for (const s of students || []) {
     const lab = pseudo.label(s.id);
     if (!lab) continue;
@@ -340,9 +338,10 @@ function studentTrendLines(history, relations, roundName, students, pseudo, subm
       return { good, bad };
     });
     if (!counts.some((c) => c.bad > 0)) continue;
-    lines.push(`- ${lab}: ${rounds.map((r, i) => `${r.name} 좋음 ${counts[i].good}·안 좋음 ${counts[i].bad}`).join(' → ')}`);
-    if (lines.length >= max) { lines.push('(… 나머지 학생은 생략)'); break; }
+    all.push(`- ${lab}: ${rounds.map((r, i) => `${r.name} 좋음 ${counts[i].good}·안 좋음 ${counts[i].bad}`).join(' → ')}`);
   }
+  const lines = all.slice(0, max);
+  if (all.length > max) lines.push(`(… 외 ${all.length - max}명은 생략)`);   // 정말 남은 학생이 있을 때만
   return lines;
 }
 
@@ -581,11 +580,14 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     // 지난 회차(지난 달들)의 흐름은 지금 회차 응답 뒤에 두어, 자료가 길어 잘리더라도 지금 응답이 먼저 남게 합니다.
     // 첫 조사면 자료가 없다고 알려 trend 를 unclear 로 두게 합니다
     section('지난 회차 흐름 (오래된 순 · 지금 회차 응답은 위 "학생이 표시한 친구 관계")', historyRoundLines(history, pseudo), '(지난 회차 자료가 없어요. 첫 조사라 흐름은 판단할 수 없어요.)'),
-    ...(history?.length ? [
-      section('안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)', pairTimelineLines(history, relations, roundName, pseudo, submittedIds)),
-      section('학생별 받은 관계 수 변화 (안 좋은 사이를 받은 적 있는 학생만)', studentTrendLines(history, relations, roundName, students, pseudo, submittedIds)),
-      section('지난 회차 돌아보기 글 (최근 2개 회차)', pastReviewLines(history, pseudo)),
-    ] : []),
+    ...(history?.length ? (() => {
+      const rounds = timelineRounds(history, relations, roundName, submittedIds);   // 두 섹션이 같은 회차 묶음을 씀 (한 번만 계산)
+      return [
+        section('안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)', pairTimelineLines(rounds, pseudo)),
+        section('학생별 받은 관계 수 변화 (안 좋은 사이를 받은 적 있는 학생만)', studentTrendLines(rounds, students, pseudo)),
+        section('지난 회차 돌아보기 글 (최근 2개 회차)', pastReviewLines(history, pseudo)),
+      ];
+    })() : []),
     '',
     '위 자료를 바탕으로 JSON 스키마에 맞춰 분석을 작성해 주세요.',
   ].join('\n\n'));

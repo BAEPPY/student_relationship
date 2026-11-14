@@ -1,4 +1,4 @@
-import { api, el, svgEl, toast, TYPE_LABEL, TYPE_ICON, avatarColor, mascotSvg } from './common.js';
+import { api, el, svgEl, toast, TYPE_LABEL, TYPE_ICON, avatarColor, mascotSvg, monthLabelOf } from './common.js';
 import { createDraftController } from './student-drafts.js';
 
 const token = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -8,7 +8,7 @@ let data = null;            // 서버에서 받은 원본
 let draft = {};             // 편집 중인 관계 { toId: { type, tags, reason } }
 let dirty = false;          // 관계 지도에 제출하지 않은 변경이 있는지 (관계 표시 또는 친해진 친구)
 let relationsDirty = false; // 관계 표시 자체를 바꿨는지 (임시 저장에 관계 섹션을 넣을지)
-let closerDraft = { ids: new Set(), text: '' };   // 🌱 이번 달 친해진 친구 (관계 지도와 함께 제출하는 선택 항목)
+let closerDraft = { ids: new Set(), text: '', review: '' };   // 🌱 돌아보기: 친해진 친구 · 한 달은 어땠어? (관계 지도와 함께 제출하는 선택 항목)
 let closerDirty = false;    // 친해진 친구에 제출하지 않은 변경이 있는지
 
 // ---------- 단계(①성향 → ②1인1역 지원 → ③친구 관계 지도) ----------
@@ -618,8 +618,8 @@ function validateApplicationDraft() {
     } else {
       const role = data.roles.find((r) => r.id === c.roleId);
       if (!role) e.role = '없는 역할이야. 다시 골라 줘.';
-      else if (excluded.has(c.roleId)) e.role = `${role.name}${josa(role.name, ['은', '는'])} 지난달에 했던 역할이라 이번 달에는 지원할 수 없어.`;
-      else if (seen.has(c.roleId)) e.role = `${role.name}${josa(role.name, ['은', '는'])} 이미 골랐어. 지망마다 다른 역할을 골라 줘.`;
+      else if (excluded.has(c.roleId)) e.role = `${role.name}${josa(role.name, ['는', '은'])} 지난달에 했던 역할이라 이번 달에는 지원할 수 없어.`;
+      else if (seen.has(c.roleId)) e.role = `${role.name}${josa(role.name, ['는', '은'])} 이미 골랐어. 지망마다 다른 역할을 골라 줘.`;
       seen.add(c.roleId);
       const n = (c.reason || '').trim().length;
       if (n < REASON_MIN) e.reason = `${i + 1}지망: 하고 싶은 이유를 ${REASON_MIN}자 이상 적어 줘. (지금 ${n}자)`;
@@ -908,7 +908,7 @@ function relationsBubble() {
   const leftText = [leftGood ? `❤️ ${leftGood}명` : '', leftBad ? `⚡ ${leftBad}명` : ''].filter(Boolean).join(', ');
   if (data.room.locked) return '조사가 끝났어요!';
   const invalid = invalidNames();
-  if (invalid.length) return `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 표시를 다시 확인해 줘!`;
+  if (invalid.length) return `⚠️ ${invalid.join(', ')} 표시를 다시 확인해 줘!`;
   if (selectedCount() === 0) return '친구를 골라 볼까요?';
   if (!minsMet()) return `${leftText} 더 골라 줘!`;
   return data.submittedAt && !dirty ? '제출 완료! 멋져요' : '다 됐어요! 제출해요';
@@ -984,12 +984,6 @@ function closerCard() {
   ]);
 }
 
-// 회차 이름("2026년 10월 2차")에서 달 이름("10월")만 뽑아요. 못 읽으면 대신 쓸 말을 돌려줘요
-function monthLabelOf(name, fallback = '이번 달') {
-  const m = /(\d{1,2})\s*월/.exec(name || '');
-  return m ? `${m[1]}월` : fallback;
-}
-
 // 🙅 지난달(같은 달 앞 회차 포함)에 했던 역할을 고르려 하면 팝업으로 알려 줘요
 function showExcludedPopup(role) {
   const month = monthLabelOf(data.previousRoleMonth, '지난달');
@@ -1000,13 +994,17 @@ function showExcludedPopup(role) {
   const modal = el('div', { class: 'modal role-popup', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'role-popup-title', 'aria-describedby': 'role-popup-desc' }, [
     el('div', { class: 'popup-icon', 'aria-hidden': 'true', text: '🙅' }),
     el('h2', { id: 'role-popup-title', text: `${month}에 했던 직업은 안 돼요!` }),
-    el('p', { id: 'role-popup-desc', text: `${name}${josa(name, ['은', '는'])} ${month}에 내가 맡았던 역할이야. 이번에는 다른 역할을 골라 줘!` }),
+    el('p', { id: 'role-popup-desc', text: `${name}${josa(name, ['는', '은'])} ${month}에 내가 맡았던 역할이야. 이번에는 다른 역할을 골라 줘!` }),
     ok,
   ]);
-  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'Tab') { e.preventDefault(); ok.focus(); }   // 창 안에 버튼 하나뿐이라 포커스를 그 자리에 둬요
+  };
   function close() {
     document.removeEventListener('keydown', onKey);
     backdrop.remove();
+    if (!closedModal) app.inert = false;   // 마감 창이 떠 있으면 그쪽이 계속 뒤를 막아야 해요
     if (opener?.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
   }
   ok.addEventListener('click', close);
@@ -1014,6 +1012,7 @@ function showExcludedPopup(role) {
   document.addEventListener('keydown', onKey);
   backdrop.append(modal);
   document.body.append(backdrop);
+  app.inert = true;   // 뒤의 카드가 눌리거나 포커스를 받지 않게 (마감 창과 같은 방식)
   ok.focus();
 }
 // 친해진 친구 초안이 서버에 제출된 내용과 같은지 (고른 순서는 무시, 글은 앞뒤 공백 무시)

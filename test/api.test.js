@@ -236,7 +236,7 @@ test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제�
   assert.equal(r.json.round.id, round1);
 
   // 새 회차 시작 → 1회차 마감, 2회차 열림, 학생 화면은 빈 상태
-  r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' });
+  r = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2031년 1월' });
   assert.equal(r.status, 201);
   const round2 = r.json.round.id;
   assert.notEqual(round2, round1);
@@ -245,7 +245,7 @@ test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제�
   assert.equal(r.json.rounds[1].open, true);
   const me = await call(`/api/student/${a.token}`);
   assert.equal(me.json.round.id, round2);
-  assert.equal(me.json.round.name, '2026년 11월');
+  assert.equal(me.json.round.name, '2031년 1월');
   assert.deepEqual(me.json.relations, {});
   assert.equal(me.json.submittedAt, null);
 
@@ -267,7 +267,7 @@ test('회차: 새 회차 시작, 이전 회차 잠김, 오래된 화면의 제�
   assert.equal(view.json.history.changes.newConflicts.length, 1);
 
   // 같은 이름 회차 거부, 지난 회차 다시 열기 거부, 이름 바꾸기
-  assert.equal((await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2026년 11월' })).status, 400);
+  assert.equal((await call(`/api/teacher/${t}/rounds`, 'POST', { name: '2031년 1월' })).status, 400);
   assert.equal((await call(`/api/teacher/${t}/rounds/${round1}`, 'PATCH', { closed: false })).status, 400);
   r = await call(`/api/teacher/${t}/rounds/${round2}`, 'PATCH', { name: '11월 조사', closed: true });
   assert.equal(r.json.round.name, '11월 조사');
@@ -462,6 +462,17 @@ test('돌아보기 "한 달은 어땠나요": 친구를 안 골라도 저장되�
   assert.ok(report.json.blocks.some((bl) => bl.type === 'list' && bl.items.includes('🌱 가 · 한 달 돌아보기: “수학이 어려웠어요.”')), JSON.stringify(report.json.blocks.filter((b) => b.type === 'list')));
   r = await put({ closerFriends: { ids: [], text: '', review: '' } });
   assert.equal(r.json.closerFriends, null, '모두 비우면 지워짐');
+  // null 도 비우기로 받고, 고른 친구 순서만 다르면 같은 내용으로 보고 제출 시각을 유지
+  const others = teacher.students.slice(1);
+  r = await put({ closerFriends: { ids: [others[0].id, others[1].id], text: '', review: '' } });
+  const pickedAt = r.json.closerFriends.updatedAt;
+  await sleep(5);
+  r = await put({ closerFriends: { ids: [others[1].id, others[0].id], text: '', review: '' } });
+  assert.equal(r.json.closerFriends.updatedAt, pickedAt, '순서만 달라도 같은 내용');
+  assert.deepEqual(r.json.closerFriends.ids, [others[0].id, others[1].id], '처음 저장한 순서 유지');
+  r = await put({ closerFriends: null });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.closerFriends, null, 'null 은 비우기');
 });
 
 test('같은 달에 두 번째 조사: 이름을 안 보내면 "N월 2차"로 열리고, 중복 이름은 2차 이름을 제안한다', async () => {
@@ -479,6 +490,9 @@ test('같은 달에 두 번째 조사: 이름을 안 보내면 "N월 2차"로 �
   assert.equal(second.json.rounds.find((r) => r.name === first).open, false, '이전 회차는 마감');
   const third = await call(`/api/teacher/${t}/rounds`, 'POST', { name: '' });
   assert.equal(third.json.round.name, `${first} 3차`);
+  const dup2 = await call(`/api/teacher/${t}/rounds`, 'POST', { name: `${first} 2차` });
+  assert.equal(dup2.status, 400);
+  assert.ok(dup2.json.error.includes(`"${first} 4차"`), dup2.json.error);   // "2차 2차"가 아니라 다음 차수를 제안
   // 새 회차는 빈 응답으로 시작하고, 학생 화면도 그 회차를 가리킨다
   const sv = (await call(`/api/student/${second.json.students[0].token}`)).json;
   assert.equal(sv.round.name, `${first} 3차`);

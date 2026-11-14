@@ -203,7 +203,7 @@ test('친해진 친구가 없는 회차의 지문은 이 기능이 생기기 전
   assert.ok(!capture(room, round).evidence.some((e) => e.kind === 'closer-friends'));
 });
 
-test('지난 회차를 함께 읽은 분석은 그 회차 목록을 기록하고, 지난 회차 응답이 바뀌면 재분석 필요가 된다', () => {
+test('지난 회차를 함께 읽은 분석은 회차별 지문을 기록하고, 남아 있는 지난 회차의 응답이 바뀌면 재분석 필요, 지워진 회차는 비교에서 뺀다', () => {
   const { room, round } = fixture();
   const past = { id: 'september', name: '2026년 9월', closedAt: '2026-09-30T00:00:00.000Z', total: 2, submittedIds: ['a'],
     relations: [{ from: 'a', to: 'b', type: 'bad', tags: [], reason: '9월에 다퉜어요', updatedAt: time }], closerFriends: {} };
@@ -211,13 +211,25 @@ test('지난 회차를 함께 읽은 분석은 그 회차 목록을 기록하고
   const withHistory = capture(room, round, { history: [past] });
   assert.equal(plain.historyRoundIds, undefined, '지난 회차 없이 분석하면 키가 없음');
   assert.deepEqual(withHistory.historyRoundIds, ['september']);
-  assert.notEqual(plain.fingerprint, withHistory.fingerprint);
+  assert.equal(withHistory.historyRounds.length, 1);
+  assert.equal(withHistory.historyRounds[0].id, 'september');
+  assert.match(withHistory.historyRounds[0].fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(plain.fingerprint, withHistory.fingerprint, '지난 회차는 전체 지문이 아니라 회차별 지문으로 따로 비교');
   assert.ok(withHistory.evidence.some((e) => e.kind === 'history' && e.roundId === 'september' && e.studentIds.length === 0));
   assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [past] })).status, 'fresh');
   const changed = { ...past, relations: [{ ...past.relations[0], reason: '사실은 괜찮았어요' }] };
   assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [changed] })).status, 'stale', '지난 회차 응답이 바뀜');
-  assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [] })).status, 'stale', '지난 회차가 지워짐');
   assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [{ ...past, submittedIds: ['a', 'b'] }] })).status, 'stale', '제출자가 달라짐');
+  assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [] })).status, 'fresh', '보관 기간이 지나 지워진 회차는 바뀐 입력이 아님');
+  assert.equal(describeAnalysisContext(withHistory, capture(room, round, { history: [{ ...past, id: 'older' }] })).status, 'fresh', '분석 때 읽지 않은 다른 회차는 비교하지 않음');
+  assert.equal(describeAnalysisContext(plain, capture(room, round, { history: [past] })).status, 'fresh', '지난 회차 없이 만든 옛 결과는 지난 회차가 생겨도 최신');
+  // 이 방식 전에 저장한(지난 회차를 전체 지문에 넣던) 기록과도 같은 방식으로 비교한다
+  const legacy = capture(room, round, { history: [past], historyInFingerprint: true });
+  assert.equal(legacy.historyRounds, undefined);
+  assert.notEqual(legacy.fingerprint, plain.fingerprint);
+  assert.equal(describeAnalysisContext(legacy, capture(room, round, { history: [past], historyInFingerprint: true })).status, 'fresh');
+  assert.equal(describeAnalysisContext(legacy, capture(room, round, { history: [changed], historyInFingerprint: true })).status, 'stale');
   const seating = capture(room, round, { kind: 'seating', history: [past] });
   assert.equal(seating.historyRoundIds, undefined, '자리 분석 지문에는 지난 회차를 넣지 않음');
+  assert.equal(seating.historyRounds, undefined);
 });
