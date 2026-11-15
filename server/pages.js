@@ -51,6 +51,7 @@ export const index = `<!doctype html>
           </div>
           <div id="roster-notice" class="alert warn hidden" style="margin-top:8px;margin-bottom:0"></div>
         </div>
+        <div id="carry-roles" class="alert info hidden"></div>
         <div class="field">
           <label>학생 한 명이 꼭 표시해야 하는 친구 수</label>
           <div class="btn-row">
@@ -67,13 +68,25 @@ export const index = `<!doctype html>
       </form>
     </section>
 
+    <section class="card" id="import-card">
+      <h2>JSON 파일로 가져오기</h2>
+      <p class="muted" style="margin:0 0 10px">선생님 페이지의 <b>JSON 내보내기</b>로 받아 둔 파일로 교실을 그대로 되살리거나, 지난 교실의 설정으로 새 학년 교실을 시작할 수 있어요.</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="import-file-btn">📂 JSON 파일 고르기</button>
+        <span class="muted">파일은 고른 뒤 아래에서 확인하고, 버튼을 눌러야 서버로 보내요.</span>
+      </div>
+      <div id="import-error" class="alert error hidden" style="margin-top:10px;margin-bottom:0"></div>
+      <div id="import-preview" class="hidden" style="margin-top:12px"></div>
+    </section>
+
     <section class="card hidden" id="result-card">
-      <h2>교실이 만들어졌어요 🎉</h2>
+      <h2 id="result-title">교실이 만들어졌어요 🎉</h2>
       <div class="alert warn">아래 <b>선생님 관리 링크</b>는 교실에 들어가는 유일한 열쇠예요. 즐겨찾기에 저장하거나 안전한 곳에 복사해 두세요. 학생에게는 절대 알려주지 마세요.</div>
       <div class="link-box">
         <input type="text" id="admin-url" readonly>
         <button type="button" class="btn" id="copy-admin">복사</button>
       </div>
+      <div id="result-note" class="alert info hidden" style="margin-top:12px;margin-bottom:0"></div>
       <div class="btn-row" style="margin-top:12px">
         <a class="btn primary" id="go-teacher" href="#">선생님 페이지로 가기</a>
       </div>

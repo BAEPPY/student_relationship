@@ -9,6 +9,7 @@ import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName, nextRoundName, uniqueRoundName } from './rounds.js';
 import { analyzeHistory, historyForAi } from './history.js';
 import { detectGroups } from './cliques.js';
+import { backupOf, restoreRoom, carriedRoles } from './import.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
@@ -113,7 +114,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '300kb' }));
+  // 본문은 평소 300KB 까지. 전체 JSON 으로 교실을 복원할 때만 4MB 까지 받아요 (Vercel 서버리스 요청 한도 4.5MB 안쪽)
+  const jsonBody = express.json({ limit: '300kb' });
+  const jsonImportBody = express.json({ limit: '4mb' });
+  app.use((req, res, next) => (req.method === 'POST' && req.path === '/api/rooms/import' ? jsonImportBody : jsonBody)(req, res, next));
   app.use((req, res, next) => {
     // 토큰이 담긴 주소가 다른 사이트로 새지 않도록
     res.set('Referrer-Policy', 'no-referrer');
@@ -390,8 +394,39 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const minBad = parseMin(req.body?.minBad, 1);
 
     const room = newRoom(name, names, minGood, minBad);
+    // 새 학년 교실로 시작할 때: 지난 교실의 1인 1역 역할 목록을 함께 가져올 수 있어요 (선택)
+    const roles = carriedRoles(req.body?.roles);
+    if (roles.length) room.roles = roles;
     await store.createRoom(room);
-    res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length });
+    res.status(201).json({ id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room), studentCount: room.students.length, roleCount: roles.length });
+  });
+
+  // 전체 JSON(내보내기 파일)의 복원용 원본으로 교실을 그대로 되살립니다. 선생님 열쇠와 학생 링크는 새로 발급해요.
+  app.post('/api/rooms/import', async (req, res) => {
+    const room = ensureRounds(restoreRoom(req.body?.backup, { name: cleanName(req.body?.name) }));
+    // 보관 기간(14개월)이 지난 회차는 복원해도 곧바로 지워지므로, 여기서 미리 정리하고 알려 줍니다
+    const before = room.rounds.length;
+    const purge = purgeExpired(room);
+    if (purge.deleteRoom || purge.removed.length === before) throw bad(`이 파일의 조사 자료는 보관 기간(${RETENTION_MONTHS}개월)이 지나 복원할 수 없어요.`);
+    ensureRounds(room);
+    // 저장하기 전에 주요 화면을 한 번씩 만들어 봅니다. 여기서 오류가 나면 파일이 손상됐거나 고쳐진 것이므로 받지 않아요
+    try {
+      teacherView(req, room);
+      studentView(req, room, room.students[0]);
+      for (const round of room.rounds) {
+        teacherView(req, room, round.id);
+        reportDocument({ room, round });
+      }
+      for (const student of room.students) studentReportDocument({ room, studentId: student.id });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 400) throw err;
+      throw bad('파일 내용을 읽는 중에 문제가 생겼어요. 선생님 페이지에서 내려받은 전체 JSON 파일을 고치지 않고 그대로 올려 주세요.');
+    }
+    await store.createRoom(room);
+    res.status(201).json({
+      id: room.id, name: room.name, adminToken: room.adminToken, adminUrl: adminUrl(req, room),
+      studentCount: room.students.length, roundCount: room.rounds.length, droppedRounds: purge.removed.length, restored: true,
+    });
   });
 
   // 체험용 예시 교실 (세 회차의 임의 관계 데이터 포함)
@@ -806,7 +841,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r, historyCache), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [], studentReports: room.studentReports || {} });
+    const { adminUrl: _adminUrl, ...roomInfo } = view.room;   // 파일을 다른 사람에게 건네도 교실 열쇠가 따라가지 않게 선생님 링크는 빼요
+    res.json({ exportedAt: new Date().toISOString(), room: roomInfo, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [], studentReports: room.studentReports || {},
+      // 복원용 원본: 첫 화면의 "JSON 파일로 가져오기"가 이 부분으로 교실을 되살려요 (선생님 열쇠·학생 링크는 들어 있지 않음)
+      backup: backupOf(room),
+    });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
@@ -1519,7 +1558,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) console.error(err);
     let message = status >= 500 && !err.expose ? '서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.' : err.message;
-    if (err.type === 'entity.too.large') message = '보낸 내용이 너무 커요. (파일은 6MB 까지)';
+    if (err.type === 'entity.too.large') message = req.path === '/api/rooms/import' ? '파일이 너무 커요. 복원할 수 있는 파일은 4MB 까지예요.' : '보낸 내용이 너무 커요. (파일은 6MB 까지)';
     if (req.path.startsWith('/api')) res.status(status).json({ error: message, ...(err.code === 'DRAFT_CONFLICT' ? { code: err.code, draft: err.draft } : {}), ...(err.code === 'ROUND_CHANGED' ? { code: err.code, currentRoundId: err.currentRoundId } : {}) });
     else res.status(status).type('text/plain').send(message);
   });

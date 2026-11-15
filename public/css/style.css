@@ -144,6 +144,16 @@ p { margin: 0 0 10px; }
 .alert.warn { background: #fff1d6; color: #7a4f00; }
 .alert.error { background: var(--red-light); color: #a61b1b; }
 .alert.success { background: #e3f4e6; color: #1e6b32; }
+/* 첫 화면: JSON 파일로 가져오기 */
+.import-summary { padding: 12px 14px; border-radius: 12px; background: var(--gray-100); margin-bottom: 12px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.import-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.import-option { min-width: 0; border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.import-option h3 { margin: 0; font-size: 16px; }
+.import-option p { margin: 0; }
+.import-option .alert { margin: 0; }
+.import-option .btn-row { margin-top: auto; }
+.import-check { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
+.import-check input { margin-top: 3px; flex: none; }
 
 .toast {
   position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%);
