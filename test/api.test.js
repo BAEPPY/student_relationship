@@ -449,7 +449,7 @@ test('돌아보기 "한 달은 어땠나요": 친구를 안 골라도 저장되�
   assert.equal((await put({ closerFriends: { review: { no: 'way' } } })).status, 400);
   let r = await put({ closerFriends: { ids: [], text: '', review: '  모둠 활동이 재미있었고 친구들이랑 더 친해졌어요.  ' } });
   assert.equal(r.status, 200);
-  assert.deepEqual({ ...r.json.closerFriends, updatedAt: null }, { ids: [], text: '', review: '모둠 활동이 재미있었고 친구들이랑 더 친해졌어요.', updatedAt: null });
+  assert.deepEqual({ ...r.json.closerFriends, updatedAt: null }, { ids: [], text: '', review: '모둠 활동이 재미있었고 친구들이랑 더 친해졌어요.', score: null, updatedAt: null });
   const at = r.json.closerFriends.updatedAt;
   await sleep(5);
   r = await put({ closerFriends: { ids: [], text: '', review: '모둠 활동이 재미있었고 친구들이랑 더 친해졌어요.' } });
@@ -473,6 +473,28 @@ test('돌아보기 "한 달은 어땠나요": 친구를 안 골라도 저장되�
   r = await put({ closerFriends: null });
   assert.equal(r.status, 200);
   assert.equal(r.json.closerFriends, null, 'null 은 비우기');
+  // 우리 반은 몇 점이야? (1~5)
+  assert.equal((await put({ closerFriends: { score: 6 } })).status, 400);
+  assert.equal((await put({ closerFriends: { score: 'x' } })).status, 400);
+  assert.equal((await put({ closerFriends: { score: 2.5 } })).status, 400);
+  r = await put({ closerFriends: { score: 4 } });
+  assert.equal(r.status, 200);
+  assert.deepEqual({ ...r.json.closerFriends, updatedAt: null }, { ids: [], text: '', review: '', score: 4, updatedAt: null }, '점수만 매겨도 저장');
+  const scoredAt = r.json.closerFriends.updatedAt;
+  await sleep(5);
+  r = await put({ closerFriends: { ids: [], text: '', review: '', score: 4 } });
+  assert.equal(r.json.closerFriends.updatedAt, scoredAt, '같은 점수면 제출 시각 유지');
+  r = await put({ closerFriends: { score: 2 } });
+  assert.notEqual(r.json.closerFriends.updatedAt, scoredAt, '점수가 바뀌면 갱신');
+  const tv = (await call(`/api/teacher/${t}`)).json;
+  assert.equal(tv.closerFriends[me.id].score, 2);
+  assert.equal(tv.history.trend[0].scoreAvg, 2, '회차 추세에 학급 점수 평균');
+  assert.equal(tv.history.trend[0].scoreCount, 1);
+  const rep = await call(`/api/teacher/${t}/report.json?round=${teacher.round.id}`);
+  assert.ok(rep.json.blocks.some((bl) => bl.type === 'list' && bl.items.includes('🌱 가 · 우리 반 점수 2/5')), '보고서 줄에 점수');
+  assert.ok(rep.json.blocks.some((bl) => bl.type === 'paragraph' && bl.text.includes('평균 2점 (1명)')), '보고서 안내에 평균');
+  r = await put({ closerFriends: { score: null } });
+  assert.equal(r.json.closerFriends, null, '점수를 지우면 비워짐');
 });
 
 test('같은 달에 두 번째 조사: 이름을 안 보내면 "N월 2차"로 열리고, 중복 이름은 2차 이름을 제안한다', async () => {
@@ -527,7 +549,7 @@ test('이번 달 친해진 친구: 관계 지도와 함께 제출·검증하고 
   r = await put({ closerFriends: { ids: [c.id, d.id], text: '같은 모둠이 되어서 친해졌어요.' } });
   assert.equal(r.json.closerFriends.updatedAt, firstAt);
   r = await put({});
-  assert.deepEqual(r.json.closerFriends, { ids: [c.id, d.id], text: '같은 모둠이 되어서 친해졌어요.', review: '', updatedAt: firstAt });
+  assert.deepEqual(r.json.closerFriends, { ids: [c.id, d.id], text: '같은 모둠이 되어서 친해졌어요.', review: '', score: null, updatedAt: firstAt });
   // 교사 화면 · JSON 내보내기 · 보고서, 다른 학생 화면에는 없음
   assert.deepEqual((await call(`/api/teacher/${t}`)).json.closerFriends[me.id].ids, [c.id, d.id]);
   assert.deepEqual((await call(`/api/teacher/${t}/export.json`)).json.rounds[0].closerFriends[me.id].ids, [c.id, d.id]);

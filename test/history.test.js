@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeHistory, historyForAi } from '../server/history.js';
+import { analyzeHistory, historyForAi, classScore } from '../server/history.js';
 
 const students = [
   { id: 'a', name: '가학생' }, { id: 'b', name: '나학생' },
@@ -204,4 +204,17 @@ test('historyForAi: 분석 회차보다 앞선 회차만 오래된 순으로, �
   assert.deepEqual(historyForAi(room, rounds[0]), [], '첫 회차는 지난 회차 없음');
   assert.deepEqual(historyForAi(room, { id: 'ghost' }), [], '모르는 회차는 빈 목록');
   assert.deepEqual(historyForAi(room, rounds[1]).map((r) => r.id), ['r1'], '가운데 회차를 분석하면 그 앞만');
+});
+
+test('classScore·trend: 돌아보기 우리 반 점수의 회차 평균 (지금 명단의 학생만, 없으면 null)', () => {
+  const previous = round('previous', { a: { b: good() } }, ['a']);
+  const current = round('current', { a: { b: good() } }, ['a', 'b']);
+  current.closerFriends = { a: { ids: [], text: '', review: '', score: 4 }, b: { ids: [], text: '', review: '좋았어요', score: 5 }, ghost: { ids: [], text: '', review: '', score: 1 }, c: { ids: [], text: '', review: '글만' } };
+  assert.deepEqual(classScore(current, students), { scoreAvg: 4.5, scoreCount: 2 });
+  assert.deepEqual(classScore(current), { scoreAvg: 3.3, scoreCount: 3 }, '명단을 안 주면 모두');
+  assert.deepEqual(classScore(previous), { scoreAvg: null, scoreCount: 0 });
+  const h = history(previous, current);
+  assert.equal(h.trend[0].scoreAvg, null);
+  assert.equal(h.trend[1].scoreAvg, 4.5);
+  assert.equal(h.trend[1].scoreCount, 2);
 });

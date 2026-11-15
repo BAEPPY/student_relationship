@@ -247,10 +247,11 @@ for (const [label, makeStore] of [
   test('친해진 친구 초안은 왕복 저장되고, 삭제된 학생은 목록에서 빠지며, 관계 지도 제출이 그 초안도 함께 지운다', async () => {
     const room = await classroom();
     const [, b, c] = room.students;
-    const sections = { closerFriends: { ids: [b.id, c.id], text: '  같은 모둠 PRIVATE_CLOSER ', review: ' 한 달 PRIVATE_REVIEW ' } };
+    const sections = { closerFriends: { ids: [b.id, c.id], text: '  같은 모둠 PRIVATE_CLOSER ', review: ' 한 달 PRIVATE_REVIEW ', score: 4 } };
     assert.equal((await save(room, 0, sections, 'relations')).status, 200);
     const mine = (await call(room.student)).json;
     assert.deepEqual(mine.draft.sections, sections, '작성 중인 공백도 보존');
+    assert.equal((await save(room, 1, { closerFriends: { ids: [], score: 7 } }, 'relations')).status, 400, '점수 범위 검사');
     assert.equal(mine.draft.step, 'relations');
     assert.equal(mine.closerFriends, null, '초안은 제출이 아님');
     for (const path of [room.teacher, `${room.teacher}/export.json`]) assert.doesNotMatch(JSON.stringify((await call(path)).json), /PRIVATE_CLOSER|PRIVATE_REVIEW/);

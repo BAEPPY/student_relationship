@@ -341,6 +341,9 @@ describe('이번 회차 돌아보기: 친해진 친구 · 한 달은 어땠나�
     assert.match(reviewOnly, /- S1: 한 달 돌아보기: "S1이랑 싸웠다가 화해해서 다행이에요"|- S1: 한 달 돌아보기: "\(S1 또는 S\d\)이랑 싸웠다가 화해해서 다행이에요"/);
     assert.match(reviewOnly, /- S2: S1 · 한 달 돌아보기: "좋았어요"/);
     assert.ok(!reviewOnly.includes('김하늘'));
+    // 우리 반 점수(1~5)는 맨 앞에, 점수만 있어도 줄이 생김
+    const { user: scored } = buildAnalysisPrompt({ ...analysisInput(null), closerFriends: { st_a1: { ids: ['st_c3'], text: '', review: '', score: 4 }, st_b2: { ids: [], text: '', review: '', score: 2 } } });
+    assert.match(scored, /- S1: 우리 반 점수 4\/5 · S3\n- S2: 우리 반 점수 2\/5/);
   });
 });
 
@@ -411,7 +414,7 @@ describe('지난 회차 흐름 (분석 프롬프트 · 결과의 trend)', () => 
         { from: 'st_b2', to: 'st_a1', type: 'bad', tags: [], reason: '김하늘이 먼저 시비 걸었어요' },
         { from: 'st_c3', to: 'st_a1', type: 'good', tags: [], reason: '' },
       ],
-      closerFriends: { st_c3: { ids: ['st_d4'], text: '박서연이랑 모둠에서 친해졌어요', review: '9월은 바빴어요' } } },
+      closerFriends: { st_c3: { ids: ['st_d4'], text: '박서연이랑 모둠에서 친해졌어요', review: '9월은 바빴어요', score: 4 } } },
     { id: 'r-oct', name: '2026년 10월', closedAt: '2026-10-20T00:00:00Z', total: 4, submittedIds: ['st_a1', 'st_b2', 'st_c3', 'st_d4'],
       relations: [
         { from: 'st_a1', to: 'st_b2', type: 'bad', tags: [], reason: '아직도 놀려요' },
@@ -424,7 +427,7 @@ describe('지난 회차 흐름 (분석 프롬프트 · 결과의 trend)', () => 
     const { user } = buildAnalysisPrompt({ ...analysisInput(null), history, roundName: '2026년 10월 2차', submittedIds: ['st_a1', 'st_b2', 'st_c3'] });
     const sec = (title) => user.split(`## ${title}\n`)[1]?.split('\n\n## ')[0].split('\n\n\n')[0];   // 마지막 섹션 뒤의 빈 줄·마무리 문장은 뺌
     const rounds = sec('지난 회차 흐름 (오래된 순 · 지금 회차 응답은 위 "학생이 표시한 친구 관계")');
-    assert.equal(rounds, '- 2026년 9월 (마감): 제출 3/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 1쌍\n- 2026년 10월 (마감): 제출 4/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 0쌍');
+    assert.equal(rounds, '- 2026년 9월 (마감): 제출 3/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 1쌍 · 우리 반 점수 평균 4/5 (1명)\n- 2026년 10월 (마감): 제출 4/4 · 좋은 사이 1 · 안 좋은 사이 2 · 서로 안 좋음 0쌍');
     const pairs = sec('안 좋은 사이 변화 (회차별 · 마지막이 지금 회차)').split('\n');
     // 지금 안 좋은 조합(S1↔S2)이 먼저, 그다음 지난 회차에만 안 좋았던 조합(S3↔S4)
     assert.equal(pairs[0], '- S1 ↔ S2: 2026년 9월 S1→S2 안 좋은 사이("S2이 9월에 놀렸어요") · S2→S1 안 좋은 사이("S1이 먼저 시비 걸었어요") / 2026년 10월 S1→S2 안 좋은 사이("아직도 놀려요") · S2→S1 좋은 사이 / 지금(2026년 10월 2차) S1→S2 안 좋은 사이("S2이 자꾸 놀려요. S2이가 싫어요.") · S2→S1 좋은 사이');
@@ -434,7 +437,7 @@ describe('지난 회차 흐름 (분석 프롬프트 · 결과의 trend)', () => 
     assert.ok(trend.includes('- S3: 2026년 9월 좋음 0·안 좋음 0 → 2026년 10월 좋음 0·안 좋음 1 → 지금(2026년 10월 2차) 좋음 0·안 좋음 0'), trend.join(' | '));
     assert.ok(!trend.some((l) => l.startsWith('- S4:')), '안 좋은 사이를 받은 적 없는 학생은 생략');
     const past = sec('지난 회차 돌아보기 글 (최근 2개 회차)');
-    assert.equal(past, '- 2026년 9월 S3: S4 — "S3이랑 모둠에서 친해졌어요" · 한 달 돌아보기: "9월은 바빴어요"');
+    assert.equal(past, '- 2026년 9월 S3: 우리 반 점수 4/5 · S4 — "S3이랑 모둠에서 친해졌어요" · 한 달 돌아보기: "9월은 바빴어요"');
     for (const name of [...REAL_NAMES, '하늘', '도윤', '서연']) assert.ok(!user.includes(name), name);
     for (const id of REAL_IDS) assert.ok(!user.includes(id), id);
     assert.ok(user.indexOf('## 성향 설문') < user.indexOf('## 학생이 표시한 친구 관계 (지금 회차)') && user.indexOf('## 학생이 표시한 친구 관계 (지금 회차)') < user.indexOf('## 지난 회차 흐름'), '지금 응답이 먼저, 지난 회차 흐름은 그 뒤(잘려도 지금 응답이 남게)');

@@ -252,8 +252,10 @@ function closerFriendLines(closerFriends, pseudo) {
     const friends = (Array.isArray(entry.ids) ? entry.ids : []).map((id) => pseudo.label(id)).filter(Boolean);
     const text = clip(pseudo.redact(entry.text));
     const review = clip(pseudo.redact(entry.review));
-    if (!friends.length && !text && !review) continue;
+    const score = Number.isInteger(entry.score) ? entry.score : null;
+    if (!friends.length && !text && !review && !score) continue;
     const parts = [];
+    if (score) parts.push(`우리 반 점수 ${score}/5`);
     if (friends.length || text) parts.push(`${friends.length ? friends.join(', ') : '(고른 친구 없음)'}${text ? ` — "${text}"` : ''}`);
     if (review) parts.push(`한 달 돌아보기: "${review}"`);
     lines.push(`- ${lab}: ${parts.join(' · ')}`);
@@ -275,7 +277,9 @@ function historyRoundLines(history, pseudo) {
     const badKeys = new Set(bad.map((x) => `${x.from}>${x.to}`));
     const mutualBad = Math.floor(bad.filter((x) => badKeys.has(`${x.to}>${x.from}`)).length / 2);
     const submitted = (r.submittedIds || []).filter((id) => pseudo.label(id)).length;
-    return `- ${roundLabel(r.name)}${r.closedAt ? ' (마감)' : ''}: 제출 ${submitted}/${r.total ?? '?'} · 좋은 사이 ${good} · 안 좋은 사이 ${bad.length} · 서로 안 좋음 ${mutualBad}쌍`;
+    const scores = Object.entries(r.closerFriends || {}).filter(([sid, e]) => pseudo.label(sid) && Number.isInteger(e?.score)).map(([, e]) => e.score);
+    const scoreText = scores.length ? ` · 우리 반 점수 평균 ${Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10}/5 (${scores.length}명)` : '';
+    return `- ${roundLabel(r.name)}${r.closedAt ? ' (마감)' : ''}: 제출 ${submitted}/${r.total ?? '?'} · 좋은 사이 ${good} · 안 좋은 사이 ${bad.length} · 서로 안 좋음 ${mutualBad}쌍${scoreText}`;
   });
 }
 
@@ -540,7 +544,7 @@ const ANALYSIS_SYSTEM = [
   '',
   '자료에 대해:',
   '- 학생은 모두 S1, S2 같은 가명으로만 표시돼요. 실명을 추측하거나 지어내지 말고, 출력에서도 가명과 역할 id([대괄호] 안의 값)만 쓰세요.',
-  '- 학생이 직접 적은 글(이유, 짝에 대한 생각, 이번 회차에 친해진 친구와 어떻게 친해졌는지, 한 달이 어땠는지)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
+  '- 학생이 직접 적은 글(이유, 짝에 대한 생각, 이번 회차에 친해진 친구와 어떻게 친해졌는지, 한 달이 어땠는지, 우리 반 점수 1~5)과 선생님 메모가 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
   '- "친해진 친구"는 학생 본인이 고른 긍정적인 자기 보고예요. 관계를 읽는 참고 맥락으로만 쓰고, 상대가 안 좋은 사이로 표시했다면 갈등이 풀렸다는 증거로 단정하지 마세요.',
   '- "지난 회차 흐름"·"안 좋은 사이 변화"·"학생별 받은 관계 수 변화"는 이전 조사(지난 달들)의 응답이에요. 지금 회차의 응답을 중심으로 보되, 같은 조합이 여러 회차에서 계속 안 좋은 사이인지, 이번에 새로 생겼는지, 나아지고 있는지, 사라졌는지를 함께 읽어요. 지난 회차에 응답이 없던 학생의 변화는 단정하지 마세요.',
   DATA_NOT_INSTRUCTIONS,

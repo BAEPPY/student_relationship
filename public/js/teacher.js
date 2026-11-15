@@ -681,9 +681,11 @@ function rolesInfoBox(sid) {
   const closer = state.closerFriends?.[sid] || null;
   const closerNames = (closer?.ids || []).filter((id) => state.stats?.[id]).map(nameOf);
   const monthLabel = monthLabelOf(state.round?.name, '한 달');   // "2026년 10월 2차" → "10월"
-  const closerBlock = closer && (closerNames.length || closer.text || closer.review)
+  const SCORE_FACE = ['', '😢', '😕', '😐', '🙂', '😄'];
+  const closerBlock = closer && (closerNames.length || closer.text || closer.review || closer.score)
     ? [
       label(`🌱 ${state.round?.name || '이번 달'} 돌아보기 · ${fmtDate(closer.updatedAt)}`),
+      Number.isInteger(closer.score) ? el('div', { class: 'muted', text: `${SCORE_FACE[closer.score] || ''} 우리 반 점수 ${closer.score}/5` }) : null,
       closer.review ? el('div', { class: 'quote', text: `${monthLabel}은 어땠나요? “${closer.review}”` }) : null,
       closerNames.length || closer.text ? el('div', { class: 'muted', style: { marginTop: '4px' }, text: `친해진 친구 (${closerNames.length})` }) : null,
       closerNames.length ? el('div', { class: 'chips profile-chips' }, closerNames.map((name) => el('span', { class: 'profile-chip closer', text: name }))) : (closer.text ? el('div', { class: 'muted', text: '고른 친구는 없고 글만 적었어요.' }) : null),
@@ -1006,7 +1008,7 @@ function renderHistory() {
   const c = h.changes;
   const arrow = (d) => (d > 0 ? `▲${d}` : d < 0 ? `▼${-d}` : '－');
   const trendTable = el('div', { class: 'table-wrap' }, [el('table', { class: 'table' }, [
-    el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '관심 점수 높음 쌍', '고립 위험'].map((t) => el('th', { text: t })))]),
+    el('thead', {}, [el('tr', {}, ['회차', '제출', '좋은 사이', '안 좋은 사이', '서로 안 좋은 쌍', '관심 점수 높음 쌍', '고립 위험', '우리 반 점수'].map((t) => el('th', { text: t })))]),
     el('tbody', {}, h.trend.map((t, i) => {
       const prev = h.trend[i - 1];
       const cell = (v, key) => el('td', { class: 'num' }, [String(v), prev ? el('span', { class: 'muted delta', text: arrow(v - prev[key]) }) : null]);
@@ -1014,6 +1016,7 @@ function renderHistory() {
         el('td', {}, [el('a', { href: '#', text: t.name, style: { fontWeight: 600 }, onClick: (e) => { e.preventDefault(); ui.roundId = t.id; load(); } }), t.open ? el('span', { class: 'badge green', style: { marginLeft: '6px' }, text: '진행 중' }) : null]),
         el('td', { class: 'num', text: `${t.submitted}/${t.total}` }),
         cell(t.good, 'good'), cell(t.bad, 'bad'), cell(t.mutualBad, 'mutualBad'), cell(t.highRisk, 'highRisk'), cell(t.isolated, 'isolated'),
+        el('td', { class: 'num', title: '돌아보기 "우리 반은 몇 점이야?"(1~5) 평균' }, t.scoreAvg == null ? [el('span', { class: 'muted', text: '–' })] : [`${t.scoreAvg}/5`, el('span', { class: 'muted delta', text: ` (${t.scoreCount}명)` })]),
       ]);
     })),
   ])]);

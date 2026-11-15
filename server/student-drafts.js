@@ -37,7 +37,9 @@ export function validateDraft(input, room, studentId) {
       if (!Array.isArray(rawIds) || rawIds.length > 1000) throw bad('임시 저장할 친해진 친구 목록이 올바르지 않아요.');
       const ids = [...new Set(rawIds)];   // 개수 검사는 중복을 뺀 뒤에
       if (ids.length > classmates.size || ids.some((id) => !classmates.has(id))) throw bad('임시 저장할 친해진 친구 목록에 우리 반 친구가 아닌 학생이 포함되어 있어요.');
-      sections.closerFriends = { ids, text: text(value.text, 300), review: text(value.review, 300) };
+      const score = value.score === undefined || value.score === null ? null : value.score;
+      if (score !== null && !(Number.isInteger(score) && score >= 1 && score <= 5)) throw bad('임시 저장할 우리 반 점수는 1~5 가운데 하나예요.');
+      sections.closerFriends = { ids, text: text(value.text, 300), review: text(value.review, 300), score };
     } else if (key === 'profile') {
       sections.profile = {
         traits: traits(value.traits, TRAITS.length),

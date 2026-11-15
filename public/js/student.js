@@ -8,7 +8,7 @@ let data = null;            // 서버에서 받은 원본
 let draft = {};             // 편집 중인 관계 { toId: { type, tags, reason } }
 let dirty = false;          // 관계 지도에 제출하지 않은 변경이 있는지 (관계 표시 또는 친해진 친구)
 let relationsDirty = false; // 관계 표시 자체를 바꿨는지 (임시 저장에 관계 섹션을 넣을지)
-let closerDraft = { ids: new Set(), text: '', review: '' };   // 🌱 돌아보기: 친해진 친구 · 한 달은 어땠어? (관계 지도와 함께 제출하는 선택 항목)
+let closerDraft = { ids: new Set(), text: '', review: '', score: null };   // 🌱 돌아보기: 우리 반 점수 · 한 달은 어땠어? · 친해진 친구 (관계 지도와 함께 제출하는 선택 항목)
 let closerDirty = false;    // 친해진 친구에 제출하지 않은 변경이 있는지
 
 // ---------- 단계(①성향 → ②1인1역 지원 → ③친구 관계 지도) ----------
@@ -52,7 +52,7 @@ function captureDraft() {
   if (!draftStore || submitting) return;
   const sections = {};
   if (relationsDirty) sections.relations = draft;
-  if (closerDirty) sections.closerFriends = { ids: [...closerDraft.ids], text: closerDraft.text, review: closerDraft.review };
+  if (closerDirty) sections.closerFriends = { ids: [...closerDraft.ids], text: closerDraft.text, review: closerDraft.review, score: closerDraft.score };
   if (profileDirty) sections.profile = { traits: [...profileDraft.traits], partnerTraits: [...profileDraft.partnerTraits], partnerText: profileDraft.partnerText, body: profileDraft.body };
   if (appDirty) sections.application = { choices: appDraft.map(({ roleId, reason, helpClass, helpSelf }) => ({ roleId, reason, helpClass, helpSelf })) };
   draftStore.update({ step, sections });
@@ -118,7 +118,7 @@ function applyDraftSections(saved) {
   relationsDirty = Object.hasOwn(sections, 'relations');
   initDrafts();
   if (sections.closerFriends) {
-    closerDraft = { ids: new Set(sections.closerFriends.ids || []), text: sections.closerFriends.text || '', review: sections.closerFriends.review || '' };
+    closerDraft = { ids: new Set(sections.closerFriends.ids || []), text: sections.closerFriends.text || '', review: sections.closerFriends.review || '', score: Number.isInteger(sections.closerFriends.score) ? sections.closerFriends.score : null };
     closerDirty = !closerUnchanged();   // 제출한 내용과 같은 초안이면 '다시 제출' 안내를 띄우지 않아요
   }
   dirty = relationsDirty || closerDirty;   // 친해진 친구도 관계 지도와 함께 제출하므로 둘 중 하나만 바뀌어도 다시 제출
@@ -312,7 +312,7 @@ function initDrafts(which = 'all') {
   }
   if (which === 'all' || which === 'relations') {
     const cf = data.closerFriends;
-    closerDraft = { ids: new Set(cf?.ids || []), text: cf?.text || '', review: cf?.review || '' };
+    closerDraft = { ids: new Set(cf?.ids || []), text: cf?.text || '', review: cf?.review || '', score: Number.isInteger(cf?.score) ? cf.score : null };
     closerDirty = false;
   }
 }
@@ -964,9 +964,28 @@ function closerCard() {
     reviewCnt.textContent = `${review.value.length} / ${CLOSER_TEXT_MAX}자`;
     markCloserDirty();
   });
+  // 우리 반은 몇 점이야? (1~5, 다시 누르면 취소)
+  const SCORE_FACES = [['😢', '힘들었어'], ['😕', '그저 그래'], ['😐', '보통'], ['🙂', '좋았어'], ['😄', '최고야']];
+  const scoreBtns = SCORE_FACES.map(([face, label], i) => el('button', {
+    type: 'button', class: 'score-btn', 'aria-pressed': 'false', disabled: locked ? true : null, dataset: { score: String(i + 1) },
+    'aria-label': `${i + 1}점 ${label}`,
+    onClick: () => { cd.score = cd.score === i + 1 ? null : i + 1; markCloserDirty(); syncScore(); },
+  }, [el('span', { class: 'face', 'aria-hidden': 'true', text: face }), el('span', { class: 'score-label', text: `${i + 1}점` }), el('span', { class: 'score-sub', text: label })]));
+  const scoreNote = el('div', { class: 'closer-summary hidden', id: 'score-summary', role: 'status' });
+  const syncScore = () => {
+    scoreBtns.forEach((b, i) => { const on = cd.score === i + 1; b.classList.toggle('selected', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+    scoreNote.textContent = cd.score ? `${SCORE_FACES[cd.score - 1][0]} ${cd.score}점 · ${SCORE_FACES[cd.score - 1][1]}` : '';
+    scoreNote.classList.toggle('hidden', !cd.score);
+  };
+  syncScore();
   return el('section', { class: 'card closer-card', id: 'closer-card' }, [
     el('div', { class: 'card-title' }, [el('h2', { text: `🌱 ${month} 돌아보기` }), el('span', { class: 'muted', text: '선택' })]),
-    el('p', { class: 'muted', text: `${month}을 돌아보며 적어 줘. 둘 다 선택이라 비워 둬도 괜찮아. 선생님만 볼 수 있어.` }),
+    el('p', { class: 'muted', text: `${month}을 돌아보며 적어 줘. 모두 선택이라 비워 둬도 괜찮아. 선생님만 볼 수 있어.` }),
+    el('div', { class: 'field' }, [
+      el('div', { class: 'field-label', id: 'score-label' }, [`😊 ${month} 우리 반은 몇 점이야? `, el('span', { class: 'muted', text: '(선택 · 다시 누르면 취소)' })]),
+      el('div', { class: 'score-row', role: 'group', 'aria-labelledby': 'score-label' }, scoreBtns),
+      scoreNote,
+    ]),
     el('div', { class: 'field' }, [
       el('label', { for: 'closer-review' }, [`📝 ${month} 한 달은 어땠어? `, el('span', { class: 'muted', text: '(선택)' })]),
       review,
@@ -1017,10 +1036,11 @@ function showExcludedPopup(role) {
 }
 // 친해진 친구 초안이 서버에 제출된 내용과 같은지 (고른 순서는 무시, 글은 앞뒤 공백 무시)
 function closerUnchanged() {
-  const saved = data.closerFriends || { ids: [], text: '', review: '' };
+  const saved = data.closerFriends || { ids: [], text: '', review: '', score: null };
   const a = [...closerDraft.ids].sort().join('\n');
   const b = [...new Set(saved.ids || [])].sort().join('\n');
-  return a === b && closerDraft.text.trim() === String(saved.text || '').trim() && closerDraft.review.trim() === String(saved.review || '').trim();
+  return a === b && closerDraft.text.trim() === String(saved.text || '').trim() && closerDraft.review.trim() === String(saved.review || '').trim()
+    && (closerDraft.score ?? null) === (Number.isInteger(saved.score) ? saved.score : null);
 }
 // 친해진 친구를 바꾸면 관계 지도와 함께 다시 제출해야 하므로 제출 안내(말풍선·아래 막대)를 제자리에서 갱신합니다
 function markCloserDirty() {
@@ -1408,7 +1428,7 @@ async function submit() {
   if (!canSubmit()) return;
   try {
     // 🌱 이번 달 친해진 친구도 관계 지도와 함께 보냅니다 (고른 친구가 없고 글도 없으면 서버가 비움)
-    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim(), review: closerDraft.review.trim() } });
+    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim(), review: closerDraft.review.trim(), score: closerDraft.score } });
     step = 'relations';
     render();
     toast('제출 완료! 정말 고마워 🎉');

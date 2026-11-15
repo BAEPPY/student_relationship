@@ -436,9 +436,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         // 제출한 학생의 40% 정도는 이번 달 친해진 친구를 1~2명 고르고, 그중 절반은 어떻게 친해졌는지도 적음
         if (rand() < 0.4) {
           const picked = [...new Set([pick(others), ...(rand() < 0.5 ? [pick(others)] : [])])];
-          closerFriends[from] = { ids: picked, text: rand() < 0.5 ? pick(closerTexts) : '', review: rand() < 0.5 ? pick(reviewTexts) : '', updatedAt: at };
+          closerFriends[from] = { ids: picked, text: rand() < 0.5 ? pick(closerTexts) : '', review: rand() < 0.5 ? pick(reviewTexts) : '', score: 3 + Math.floor(rand() * 3), updatedAt: at };
         } else if (rand() < 0.2) {
-          closerFriends[from] = { ids: [], text: '', review: pick(reviewTexts), updatedAt: at };   // 친구는 안 고르고 한 달 돌아보기만 적은 학생
+          closerFriends[from] = { ids: [], text: '', review: pick(reviewTexts), score: 2 + Math.floor(rand() * 4), updatedAt: at };   // 친구는 안 고르고 한 달 돌아보기만 적은 학생
+        } else if (rand() < 0.5) {
+          closerFriends[from] = { ids: [], text: '', review: '', score: 2 + Math.floor(rand() * 4), updatedAt: at };   // 점수만 매긴 학생
         }
       });
       return { relations, submissions, closerFriends };
@@ -849,7 +851,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     if (input.review !== undefined && typeof input.review !== 'string') throw bad('한 달이 어땠는지 글이 올바르지 않아요.');
     const review = input.review === undefined ? '' : input.review.trim();
     if (review.length > LIMITS.reason) throw bad(`한 달이 어땠는지는 ${LIMITS.reason}자 이하로 적어 주세요.`);
-    return ids.length || text || review ? { ids, text, review } : null;
+    // 우리 반은 몇 점이야? (1~5, 선택)
+    const score = input.score === undefined || input.score === null || input.score === '' ? null : Number(input.score);
+    if (score !== null && !(Number.isInteger(score) && score >= 1 && score <= 5)) throw bad('우리 반 점수는 1~5 가운데 하나예요.');
+    return ids.length || text || review || score ? { ids, text, review, score } : null;
   }
 
   // 학생을 삭제하면 그 학생의 '친해진 친구' 응답과, 다른 학생이 고른 목록 속 그 학생도 지웁니다
@@ -859,7 +864,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     for (const [sid, entry] of Object.entries(round.closerFriends)) {
       if (!Array.isArray(entry?.ids) || !entry.ids.includes(studentId)) continue;
       entry.ids = entry.ids.filter((id) => id !== studentId);
-      if (!entry.ids.length && !entry.text && !entry.review) delete round.closerFriends[sid];
+      if (!entry.ids.length && !entry.text && !entry.review && !entry.score) delete round.closerFriends[sid];
     }
   }
 
@@ -912,7 +917,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         const before = round.closerFriends[student.id];
         // 고른 친구가 같으면 순서가 달라도 같은 내용으로 보고 저장본(제출 시각 포함)을 그대로 둡니다
         const sameIds = JSON.stringify([...(before?.ids || [])].sort()) === JSON.stringify([...closer.ids].sort());
-        const same = before && before.text === closer.text && (before.review || '') === closer.review && sameIds;
+        const same = before && before.text === closer.text && (before.review || '') === closer.review && (before.score ?? null) === closer.score && sameIds;
         round.closerFriends[student.id] = same ? before : { ...closer, updatedAt: now };
       }
       clearStudentDraft(round, student.id, ['relations', 'closerFriends']);

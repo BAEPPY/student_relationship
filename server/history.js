@@ -14,10 +14,11 @@ export function analyzeHistory(room) {
     return { round: roundView(r), stats, analysis, relations: r.relations || {} };
   });
 
-  const trend = rounds.map(({ round, analysis }) => ({
+  const trend = rounds.map(({ round, analysis }, i) => ({
     id: round.id,
     name: round.name,
     open: round.open,
+    ...classScore(room.rounds[i], room.students),   // 돌아보기 '우리 반은 몇 점' 평균 (scoreAvg · scoreCount, 지금 명단의 학생만)
     submitted: analysis.submittedCount,
     total: analysis.totalStudents,
     good: analysis.goodCount,
@@ -155,6 +156,14 @@ export function analyzeHistory(room) {
   }
 
   return { trend, students, pairHistory, changes };
+}
+
+/** 돌아보기 '우리 반은 몇 점이야?'(1~5)의 회차 평균 — 지금 명단에 있는 학생의 응답만 */
+export function classScore(round, students = null) {
+  const known = students ? new Set(students.map((s) => s.id)) : null;
+  const scores = Object.entries(round?.closerFriends || {}).filter(([sid, e]) => (!known || known.has(sid)) && Number.isInteger(e?.score)).map(([, e]) => e.score);
+  if (!scores.length) return { scoreAvg: null, scoreCount: 0 };
+  return { scoreAvg: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10, scoreCount: scores.length };
 }
 
 /**

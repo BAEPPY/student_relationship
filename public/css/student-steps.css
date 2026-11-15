@@ -279,6 +279,19 @@ body.kid .closer-card { border-color: #d7eccb; }   /* body.kid .card 의 흰 테
 .closer-card .closer-summary.hidden { display: none; }
 .closer-card .field { margin: 10px 0 0; }
 .closer-card .closer-sub { margin: 16px 0 2px; font-size: 17px; }
+.closer-card .field-label { font-weight: 700; margin-bottom: 6px; }
+/* 😊 우리 반은 몇 점이야? — 다섯 칸 버튼 */
+.closer-card .score-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.closer-card .score-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px 6px; border-radius: 14px; border: 2px solid #e3dbd0; background: #fff; font-family: inherit; cursor: pointer; transition: transform .1s, border-color .15s, background .15s; }
+.closer-card .score-btn .face { font-size: 26px; line-height: 1; }
+.closer-card .score-btn .score-label { font-size: 13px; font-weight: 700; color: #5a4632; }
+.closer-card .score-btn .score-sub { font-size: 11px; color: #8a7a6c; }
+.closer-card .score-btn:hover:not(:disabled) { transform: translateY(-1px); border-color: #c9ddb9; }
+.closer-card .score-btn.selected { background: #e9f6df; border-color: #7cb85a; }
+.closer-card .score-btn.selected .score-label { color: #2f6b1f; }
+.closer-card .score-btn:disabled { opacity: .6; cursor: default; }
+.closer-card .score-btn:focus-visible { outline: 3px solid rgba(124, 184, 90, .5); outline-offset: 2px; }
+@media (max-width: 420px) { .closer-card .score-btn .score-sub { display: none; } .closer-card .score-btn .face { font-size: 22px; } }
 /* 🙅 지난달 역할 팝업: 가운데 뜨는 작은 창 */
 .modal-backdrop.popup-backdrop { align-items: center; justify-content: center; padding: 16px; z-index: 120; }
 body.kid .modal.role-popup { border-radius: 22px; max-width: 420px; text-align: center; padding: 24px 18px 18px; }

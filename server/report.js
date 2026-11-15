@@ -1,7 +1,7 @@
 // 학급 종합 보고서: 관계 관심 점수 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서 모델로 모읍니다.
 // 결과는 웹 보고서 화면(public/js/report.js)과 한글·워드 내보내기(export-docs.js)가 함께 씁니다.
 import { computeStats, analyzeConflicts } from './analysis.js';
-import { analyzeHistory } from './history.js';
+import { analyzeHistory, classScore } from './history.js';
 import { roundRoom } from './rounds.js';
 import { roomRoles, applicantCounts, bodyLabels, BODY_TRAITS } from './roles.js';
 import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
@@ -93,15 +93,18 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     const names = (entry.ids || []).filter((id) => stats[id]).map(nameOf);
     const text = String(entry.text || '').trim();
     const review = String(entry.review || '').trim();
-    if (!names.length && !text && !review) return '';
+    const score = Number.isInteger(entry.score) ? entry.score : null;
+    if (!names.length && !text && !review && !score) return '';
     const parts = [];
+    if (score) parts.push(`우리 반 점수 ${score}/5`);
     if (names.length || text) parts.push(`친해진 친구: ${names.length ? names.join(', ') : '(고른 친구 없음)'}${text ? ` — “${text}”` : ''}`);
     if (review) parts.push(`한 달 돌아보기: “${review}”`);
     return `🌱 ${s.name} · ${parts.join(' · ')}`;
   }).filter(Boolean);
+  const score = classScore(round, students);
   if (closerLines.length) {
     sub(`${round.name} 돌아보기`);
-    para('학생이 이 회차의 관계 지도와 함께 적은 돌아보기예요. "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지, 그리고 한 달이 어땠는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.', 'muted');
+    para(`학생이 이 회차의 관계 지도와 함께 적은 돌아보기예요. "우리 반은 몇 점이야?"(1~5)${score.scoreCount ? ` 평균 ${score.scoreAvg}점 (${score.scoreCount}명)` : ''}, "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지, 한 달이 어땠는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.`, 'muted');
     list(closerLines);
   }
 
