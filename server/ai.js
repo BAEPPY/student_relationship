@@ -563,7 +563,30 @@ const ANALYSIS_SYSTEM = [
 ].join('\n');
 
 /** 분석용 system/user 프롬프트와 스키마. 실명·학생 id 는 포함되지 않습니다. */
-export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, closerFriends, roles, previousRoles, history, roundName, submittedIds } = {}) {
+/** 새 학기 첫 조사: 학생이 표시한 '아는 사이' (예전 사이 · 어떻게 아는 사이 · 한마디) */
+function knownLines(known, pseudo) {
+  const QUALITY = { good: '예전에 좋은 사이', bad: '예전에 안 좋은 사이', know: '그냥 아는 사이' };
+  const lines = [];
+  for (const k of known || []) {
+    const a = pseudo.label(k.from);
+    const b = pseudo.label(k.to);
+    if (!a || !b) continue;
+    let line = `- ${a} → ${b}: ${QUALITY[k.quality] || QUALITY.know}`;
+    if ((k.howLabels || []).length) line += ` (${k.howLabels.map((t) => clip(t, 40)).join(', ')})`;
+    const note = k.quality === 'know' ? clip(pseudo.redact(k.note), 120) : '';
+    if (note) line += ` 한마디: "${note}"`;
+    lines.push(line);
+  }
+  return lines;
+}
+const INTRO_NOTE = [
+  '이 회차는 반이 바뀌고 처음 하는 "새 학기 첫 조사"예요.',
+  '- 아래 "학생이 표시한 친구 관계"의 좋은 사이 · 안 좋은 사이는 지금이 아니라 작년이나 그 전의 사이를 뜻해요.',
+  '- 표시가 없는 두 학생은 사이가 나쁜 것이 아니라 서로 모르는 사이일 수 있어요. 표시가 적다는 이유만으로 고립이라고 단정하지 마세요.',
+  '- 아는 친구가 없다고 한 학생, 아무도 안다고 하지 않은 학생(새로 온 학생일 수 있음)이 새 반에 잘 적응하도록 도울 점과, 예전에 안 좋았던 사이가 새 반에서 이어지지 않게 살필 점을 중심으로 써 주세요.',
+];
+
+export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, profiles, applications, closerFriends, roles, previousRoles, history, roundName, submittedIds, intro = false, known = [] } = {}) {
   const pseudo = pseudonymize(students);
   const roleList = roles || [];
 
@@ -572,6 +595,7 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
   const { text: user, truncated } = capPrompt([
     '# 학급 자료 (가명 처리됨)',
     section('학생 명단', [rosterLine(pseudo)]),
+    ...(intro ? [section('이 회차의 성격 (새 학기 첫 조사)', INTRO_NOTE)] : []),
     section('역할 목록 (id · 이름 · 인원 · 설명)', roleLines(roleList, pseudo)),
     section(`지난달 역할${prevMonth} — 같은 역할 연속 금지`, previousRoleLines(previousRoles, roleList, pseudo)),
     section('선생님 규칙 (자리·모둠)', teacherRuleLines(teacherNotes, pseudo)),
@@ -580,7 +604,8 @@ export function buildAnalysisPrompt({ students, relations, pairs, teacherNotes, 
     section('성향 설문', profileLines(profiles, pseudo)),
     section('1인 1역 지원서', applicationLines(applications, roleList, pseudo)),
     section('이번 회차 돌아보기 (학생이 직접 적음: 친해진 친구 · 한 달은 어땠나요)', closerFriendLines(closerFriends, pseudo)),
-    section('학생이 표시한 친구 관계 (지금 회차)', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
+    section(intro ? '학생이 표시한 친구 관계 (지금 회차 · 작년이나 그 전의 사이)' : '학생이 표시한 친구 관계 (지금 회차)', relationLines(relations, pseudo), '(아직 응답이 없어요)'),
+    ...(intro ? [section('아는 사이 (학생이 직접 표시 · 그냥 아는 사이 포함)', knownLines(known, pseudo), '(아는 친구를 표시한 학생이 아직 없어요)')] : []),
     // 지난 회차(지난 달들)의 흐름은 지금 회차 응답 뒤에 두어, 자료가 길어 잘리더라도 지금 응답이 먼저 남게 합니다.
     // 첫 조사면 자료가 없다고 알려 trend 를 unclear 로 두게 합니다
     section('지난 회차 흐름 (오래된 순 · 지금 회차 응답은 위 "학생이 표시한 친구 관계")', historyRoundLines(history, pseudo), '(지난 회차 자료가 없어요. 첫 조사라 흐름은 판단할 수 없어요.)'),
@@ -747,6 +772,13 @@ export function buildStudentReportPrompt({ students, studentId, timeline, memo, 
       lines.push(`- 보낸 좋은 사이 ${t.outGood.length}명: ${people(t.outGood)}`);
       lines.push(`- 보낸 안 좋은 사이 ${t.outBad.length}명: ${people(t.outBad)}`);
     } else lines.push('- 보낸 관계: (이 회차에는 제출하지 않아 자료 없음)');
+    if (t.intro) {
+      // 새 학기 첫 조사: 위의 좋은 · 안 좋은 사이는 '예전 사이'이고, 아는 친구 수를 함께 봅니다
+      const names = (ids) => { const out = (ids || []).map((id) => pseudo.label(id)).filter(Boolean); return out.length ? out.join(', ') : '없음'; };
+      lines.push('- 이 회차는 새 학기 첫 조사: 위의 좋은 · 안 좋은 사이는 작년이나 그 전의 사이를 뜻함 (표시가 없으면 모르는 사이일 수 있음)');
+      lines.push(`- 내가 안다고 한 친구 ${t.intro.knows.length}명: ${t.submitted ? names(t.intro.knows) : '(미제출)'}`);
+      lines.push(`- 나를 안다고 한 친구 ${t.intro.knownBy.length}명: ${names(t.intro.knownBy)}`);
+    }
     if ((t.flags || []).length) lines.push(`- 규칙 기반 표시: ${t.flags.map((f) => FLAG_KO[f] || f).join(', ')}`);
     const pairs = (t.pairs || []).map((p) => (pseudo.label(p.other) ? `${pseudo.label(p.other)} ${p.probability}/100점` : null)).filter(Boolean);
     if (pairs.length) lines.push(`- 관심 점수(100점 척도): ${pairs.join(', ')}`);

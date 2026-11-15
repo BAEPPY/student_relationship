@@ -7,6 +7,7 @@ import { TRAITS, roomRoles } from './roles.js';
 import { tagLabel } from './reasons.js';
 import { classScore } from './history.js';
 import { detectGroups } from './cliques.js';
+import { isIntro, listKnown, QUALITY_KO } from './intro.js';
 
 const MAX_ROUNDS = 8;                 // 보고서·AI 에 넣는 최근 회차 수
 const MAX_FOLLOWUPS = 20;
@@ -45,7 +46,16 @@ export function studentTimeline(room, studentId, { maxRounds = MAX_ROUNDS } = {}
       for (const [roleId, sids] of Object.entries(r.roleAssignment.assignments || {})) if ((sids || []).includes(studentId)) assigned.push(roleId);
     }
     const ai = r.aiAnalysis || null;
+    // 새 학기 첫 조사: 이 학생이 안다고 한 친구 · 이 학생을 안다고 한 친구 (평소 회차에는 이 칸을 만들지 않아요 → 저장된 AI 도움말의 '자료 바뀜' 판단이 그대로)
+    const known = isIntro(r) ? listKnown(room, r) : null;
+    const intro = known ? {
+      knows: known.filter((k) => k.from === studentId).map((k) => k.to),
+      knownBy: known.filter((k) => k.to === studentId).map((k) => k.from),
+      detail: known.filter((k) => k.from === studentId).map((k) => ({ id: k.to, quality: k.quality, howLabels: k.howLabels, note: k.note })),
+      detailBy: known.filter((k) => k.to === studentId).map((k) => ({ id: k.from, quality: k.quality, howLabels: k.howLabels, note: k.note })),
+    } : null;
     return {
+      ...(intro ? { intro } : {}),
       id: r.id, name: r.name, open: !r.closedAt, startedAt: r.startedAt || null, closedAt: r.closedAt || null,
       submitted: Boolean(st?.submitted), submittedAt: st?.submittedAt || null,
       submittedIds: room.students.filter((s) => stats[s.id]?.submitted).map((s) => s.id),
@@ -145,6 +155,7 @@ export function studentReportDocument({ room, studentId, now = new Date(), follo
       { label: '보낸 안 좋은 사이', value: `${last.outBad.length}명`, sub: last.submitted ? '본인 응답' : '아직 제출 전' },
       { label: '우리 반 점수', value: Number.isInteger(score) ? `${SCORE_FACE[score]} ${score}/5` : '–', sub: last.classScore.scoreCount ? `학급 평균 ${last.classScore.scoreAvg} (${last.classScore.scoreCount}명)` : '학급 응답 없음' },
     ] });
+    if (last.intro) para(`🌱 ${last.name} 회차는 반이 바뀌고 처음 하는 "새 학기 첫 조사"예요. 좋은 사이 · 안 좋은 사이는 작년이나 그 전의 사이를 뜻하고, 표시가 없으면 서로 모르는 사이일 수 있어요. 이 학생이 안다고 한 친구 ${last.intro.knows.length}명 · 이 학생을 안다고 한 친구 ${last.intro.knownBy.length}명.`);
     para(`${last.name} 회차 기준이에요. 학급 제출 ${last.classSubmitted}/${last.total}명${last.submitted ? '' : ` · ${student.name} 학생은 이 회차에 아직 제출하지 않았어요`}. 받은 관계는 응답한 친구의 표시만 셉니다.`, 'muted');
   } else {
     para('아직 조사 회차가 없어요.', 'muted');
@@ -178,6 +189,14 @@ export function studentReportDocument({ room, studentId, now = new Date(), follo
   // 3. 관계 상세 (최근 회차)
   if (last) {
     heading(`관계 상세 (${last.name})`);
+    if (last.intro) {
+      const knownLine = (x) => `${nameOf(x.id)} — ${QUALITY_KO[x.quality] || QUALITY_KO.know}${x.howLabels.length ? ` (${x.howLabels.join(', ')})` : ''}${x.quality === 'know' && x.note ? ` “${x.note}”` : ''}`;
+      sub(`내가 안다고 한 친구 (${last.intro.detail.length})`);
+      if (last.intro.detail.length) list(last.intro.detail.map(knownLine)); else para(last.submitted ? '아는 친구가 없다고 답했어요. 새 반에 잘 적응하는지 살펴봐 주세요.' : '아직 제출하지 않았어요.', 'muted');
+      sub(`나를 안다고 한 친구 (${last.intro.detailBy.length})`);
+      if (last.intro.detailBy.length) list(last.intro.detailBy.map(knownLine)); else para('아직 없어요.', 'muted');
+      para('아래 좋은 사이 · 안 좋은 사이는 이 가운데 "예전에" 그랬다고 표시한 친구예요.', 'muted');
+    }
     sub(`나를 좋은 사이로 표시한 친구 (${last.inGood.length})`);
     if (last.inGood.length) list(last.inGood.map(withReason)); else para('없어요.', 'muted');
     sub(`나를 안 좋은 사이로 표시한 친구 (${last.inBad.length})`);

@@ -39,6 +39,16 @@ const BAD_REASON_MIN = () => data.room.badReasonMin ?? 20;   // 안 좋은 사�
 const badReasonLength = (s) => [...String(s ?? '').trim()].length;   // 서버(textLength)와 같은 방식: 앞뒤 공백을 뺀 코드 포인트 수
 
 const STEP_LABEL = { profile: '나는 이런 편이에요', application: '1인 1역 지원', relations: '친구 관계 지도' };
+// 🌱 새 학기 첫 조사(반이 바뀌고 처음): 아는 친구를 고르고, 예전에 어떤 사이였는지 · 어떻게 아는 사이인지 표시해요.
+// 꼭 골라야 하는 수가 없고(아는 친구가 없을 수도 있어요), 돌아보기 카드는 나오지 않아요.
+const isIntro = () => data?.round?.kind === 'intro';
+const stepLabel = (id) => (id === 'relations' && isIntro() ? '아는 친구 표시' : STEP_LABEL[id]);
+const INTRO_LABEL = { good: '예전에 좋은 사이', know: '그냥 아는 사이', bad: '예전에 안 좋은 사이' };
+const INTRO_ICON = { good: '❤️', know: '🙂', bad: '⚡' };
+const TYPE_COLOR = { good: '#ff6b6b', bad: '#4a5568', know: '#f0a020' };
+const typeLabel = (type) => (isIntro() ? INTRO_LABEL[type] : TYPE_LABEL[type]) || '';
+const typeIcon = (type) => (isIntro() ? INTRO_ICON[type] : TYPE_ICON[type]) || '';
+const howLabel = (id) => (data.knowCatalog || []).find((h) => h.id === id)?.label || id;
 // 선생님의 선정 기준(data.selectionCriteria)을 어린이 말로 바꾼 것. 순서가 같을 때만 쓰고, 아니면 원문을 보여 줍니다.
 const KID_CRITERIA = [
   '그 역할이 어떤 일을 하는지 잘 알고 있는지 봐. (역할과 상관없는 이유를 쓰면 안 돼!)',
@@ -233,9 +243,9 @@ function josa(word, [a, b]) {
 function relationValid(r) {
   if (!r) return true;
   if (r.type === 'bad') return badReasonLength(r.reason) >= BAD_REASON_MIN(); // 안 좋은 사이는 무슨 일이 있었는지 직접 쓴 이유(20자 이상)가 꼭 필요
-  return r.type === 'good';
+  return r.type === 'good' || (r.type === 'know' && isIntro());   // '그냥 아는 사이'는 새 학기 첫 조사에서만
 }
-function selectedCount() { return Object.values(draft).filter((r) => r?.type === 'good' || r?.type === 'bad').length; }
+function selectedCount() { return Object.values(draft).filter((r) => r?.type === 'good' || r?.type === 'bad' || (r?.type === 'know' && isIntro())).length; }
 function countOf(type) { return Object.values(draft).filter((r) => r.type === type).length; }
 function mins() { return { good: data.room.minGood ?? 0, bad: data.room.minBad ?? 0 }; }
 function minsMet() { const m = mins(); return countOf('good') >= m.good && countOf('bad') >= m.bad; }
@@ -388,7 +398,7 @@ function stepper() {
       onClick: () => { if (!active) goTo(id); },
     }, [
       el('span', { class: 'n', text: done ? '✓' : String(i + 1) }),
-      el('span', { class: 'lbl', text: STEP_LABEL[id] }),
+      el('span', { class: 'lbl', text: stepLabel(id) }),
     ]);
   }));
 }
@@ -832,6 +842,7 @@ function renderApplication() {
 
 // ---------- ③ 친구 관계 지도 ----------
 function renderRelations() {
+  if (isIntro()) return renderIntroRelations();
   const { me, room, classmates } = data;
 
   const m0 = mins();
@@ -900,8 +911,70 @@ function renderRelations() {
   app.append(stepNav(null));
 }
 
+// 🌱 새 학기 첫 조사: 아는 친구를 고르고 예전 사이를 표시하는 화면 (꼭 골라야 하는 수 · 돌아보기 카드 없음)
+function renderIntroRelations() {
+  const { me, room, classmates } = data;
+  const n = selectedCount();
+  const counts = { good: countOf('good'), know: countOf('know'), bad: countOf('bad') };
+  const ring = el('div', { class: 'ring' }, [
+    svgEl('svg', { viewBox: '0 0 112 112' }),
+    el('div', { class: 'ring-text' }, [el('b', { text: `${n}` }), el('span', { text: '명 알아요' })]),
+  ]);
+  const rsvg = ring.querySelector('svg');
+  rsvg.append(svgEl('circle', { cx: 56, cy: 56, r: 48, fill: 'none', stroke: n ? '#8bc34a' : '#f1ebe3', 'stroke-width': 12 }));
+  app.append(el('section', { class: 'card hello-card' }, [
+    ring,
+    el('div', {}, [
+      el('div', { class: 'badge blue', style: { marginBottom: '6px' }, text: `${data.round?.name || ''} · 새 학기 첫 조사` }),
+      el('h1', { text: `${me.name}, 안녕! 👋` }),
+      el('p', { style: { marginBottom: '4px' } }, ['새 반이 됐어! 우리 반에서 ', el('b', { text: '이미 아는 친구' }), '를 골라 줘. 예전에 어떤 사이였는지, 어떻게 아는 사이인지도 알려 줘. ', el('b', { text: '아는 친구가 없으면 그대로 제출해도 괜찮아.' })]),
+      el('div', { class: `speech ${data.submittedAt && !dirty && !invalidNames().length ? 'done' : ''}`, id: 'relations-bubble', text: relationsBubble() }),
+    ]),
+  ]));
+  app.append(el('section', { class: 'card', style: { padding: '14px 18px' } }, [
+    el('div', { class: 'alert info', style: { margin: 0 } }, ['🔒 이 페이지는 나만 볼 수 있어. 친구들은 내가 표시한 걸 볼 수 없고, 선생님만 확인해. 솔직하게 표시해 줘!']),
+    room.locked ? el('div', { class: 'alert warn', style: { margin: '10px 0 0' }, text: lockedText() }) : null,
+    data.submittedAt && !room.locked ? el('div', { class: 'alert success', style: { margin: '10px 0 0' }, text: '제출 완료! 끝나기 전까지는 언제든 바꾸고 다시 제출할 수 있어.' }) : null,
+  ]));
+
+  const progress = el('section', { class: 'card' }, [
+    el('div', { class: 'card-title' }, [
+      el('h2', { text: '🗺️ 내가 아는 친구 지도' }),
+      el('div', { class: 'btn-row', style: { gap: '6px' } }, [
+        el('span', { class: 'badge good', text: `❤️ ${counts.good}명` }),
+        el('span', { class: 'badge know', text: `🙂 ${counts.know}명` }),
+        el('span', { class: 'badge bad', text: `⚡ ${counts.bad}명` }),
+      ]),
+    ]),
+    el('div', { class: 'student-map', id: 'map', style: { marginTop: '10px' } }),
+    el('div', { class: 'legend', style: { marginTop: '6px' } }, [
+      el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--kid-coral)', borderRadius: '50%', width: '16px', height: '16px', border: '2px solid #fff' } }), '나']),
+      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--kid-coral)' } }), '❤️ 예전에 좋은 사이']),
+      el('span', {}, [el('span', { class: 'line dotted', style: { color: TYPE_COLOR.know } }), '🙂 그냥 아는 사이']),
+      el('span', {}, [el('span', { class: 'line', style: { background: 'var(--kid-slate)' } }), '⚡ 예전에 안 좋은 사이']),
+    ]),
+    el('p', { class: 'muted', style: { marginTop: '8px' }, text: '아는 친구의 이름을 지도나 아래 목록에서 눌러 줘. 모르는 친구는 그대로 두면 돼.' }),
+  ]);
+  app.append(progress);
+  drawMap(progress.querySelector('#map'));
+
+  app.append(el('section', { class: 'card' }, [
+    el('div', { class: 'card-title' }, [el('h2', { text: '🧒 우리 반 친구들' }), el('span', { class: 'muted', text: `${classmates.length}명 가운데 ${n}명을 알아요` })]),
+    el('div', { class: 'mate-list' }, classmates.map((c, i) => mateButton(c, i))),
+    !room.locked ? stickyBar() : null,
+  ]));
+  app.append(stepNav(null));
+}
+
 // 관계 지도 말풍선: 마감 · 아직 안 고름 · 더 골라야 함 · 제출 완료 · 제출할 차례
 function relationsBubble() {
+  if (isIntro()) {
+    if (data.room.locked) return '조사가 끝났어요!';
+    const invalid = invalidNames();
+    if (invalid.length) return `⚠️ ${invalid.join(', ')} 표시를 다시 확인해 줘!`;
+    if (data.submittedAt && !dirty) return '제출 완료! 멋져요';
+    return selectedCount() ? '다 골랐으면 제출해요!' : '아는 친구를 골라 볼까요?';
+  }
   const m = mins();
   const leftGood = Math.max(0, m.good - countOf('good'));
   const leftBad = Math.max(0, m.bad - countOf('bad'));
@@ -1056,20 +1129,24 @@ function mateButton(c, i = 0) {
   const r = draft[c.id];
   const type = r?.type;
   const invalid = r && !relationValid(r);
+  const intro = isIntro();
   const sub = r
     ? invalid
-      ? (!type ? '⚠️ 어떤 관계인지 골라 줘' : `⚠️ 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 적어 줘`)
-      : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
-    : '눌러서 표시하기';
+      ? (type !== 'bad' ? '⚠️ 어떤 관계인지 골라 줘' : `⚠️ 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 적어 줘`)
+      : intro
+        ? [...(r.how || []).map(howLabel), r.reason].filter(Boolean).join(', ') || '아는 친구'
+        : [...(r.tags || []).map((t) => tagLabel(type, t)), r.reason].filter(Boolean).join(', ') || '이유 없음'
+    : intro ? '아는 친구면 눌러 줘' : '눌러서 표시하기';
+  const shown = type && typeLabel(type) ? type : null;   // 이 조사에서 쓰는 종류일 때만 색과 배지를 붙여요
   return el('button', {
     type: 'button',
-    class: `mate ${type || ''}`,
+    class: `mate ${shown || ''}`,
     onClick: () => openEditor(c.id),
     disabled: data.room.locked ? true : null,
   }, [
     el('span', { class: 'avatar', style: { background: avatarColor(i) }, text: (c.name.length === 3 ? c.name.slice(1, 2) : c.name.slice(0, 1)) }),
     el('span', { class: 'name' }, [c.name, el('span', { class: 'sub', text: sub })]),
-    type ? el('span', { class: `badge ${type}`, text: `${TYPE_ICON[type]} ${TYPE_LABEL[type]}` }) : el('span', { class: 'badge gray', text: '선택 안 함' }),
+    shown ? el('span', { class: `badge ${shown}`, text: `${typeIcon(shown)} ${typeLabel(shown)}` }) : el('span', { class: 'badge gray', text: intro ? '모르는 친구' : '선택 안 함' }),
   ]);
 }
 
@@ -1078,6 +1155,13 @@ function tagLabel(type, id) {
 }
 
 function stickyStatus() {
+  if (isIntro()) {
+    const invalid = invalidNames();
+    if (invalid.length) return `⚠️ ${invalid.join(', ')}${josa(invalid[invalid.length - 1], ['와', '과'])} 예전에 어떤 사이였는지, 이유를 ${BAD_REASON_MIN()}자 이상 적었는지 확인해 줘.`;
+    const n = selectedCount();
+    if (data.submittedAt && !dirty) return '제출 완료! 바꾼 게 있으면 다시 제출해 줘.';
+    return n ? `🙂 아는 친구 ${n}명을 골랐어. 다 골랐으면 제출 버튼을 눌러 줘.` : '아는 친구가 없으면 이대로 제출해도 괜찮아.';
+  }
   const m = mins();
   const leftGood = Math.max(0, m.good - countOf('good'));
   const leftBad = Math.max(0, m.bad - countOf('bad'));
@@ -1092,7 +1176,7 @@ function stickyStatus() {
 function stickyBar() {
   return el('div', { class: 'sticky-bar' }, [
     el('div', { class: 'status', id: 'sticky-status', text: stickyStatus() }),
-    el('button', { type: 'button', class: 'btn primary', text: data.submittedAt ? '다시 제출하기 ▶' : '제출하기 ▶', disabled: canSubmit() ? null : true, onClick: submit }),
+    el('button', { type: 'button', class: 'btn primary', id: 'submit-relations', text: data.submittedAt ? '다시 제출하기 ▶' : isIntro() && !selectedCount() ? '아는 친구 없이 제출하기 ▶' : '제출하기 ▶', disabled: canSubmit() ? null : true, onClick: submit }),
   ]);
 }
 
@@ -1133,7 +1217,7 @@ function drawMap(container) {
   const sunGrad = svgEl('radialGradient', { id: 'sun-grad', cx: '50%', cy: '50%', r: '50%' });
   sunGrad.append(svgEl('stop', { offset: '0', 'stop-color': '#ffe08a' }), svgEl('stop', { offset: '0.55', 'stop-color': '#ffd454', 'stop-opacity': '.9' }), svgEl('stop', { offset: '1', 'stop-color': '#ffd454', 'stop-opacity': '0' }));
   defs.append(sunGrad);
-  for (const [id, color] of [['arrow-good', '#ff6b6b'], ['arrow-bad', '#4a5568']]) {
+  for (const [id, color] of [['arrow-good', TYPE_COLOR.good], ['arrow-bad', TYPE_COLOR.bad], ['arrow-know', TYPE_COLOR.know]]) {
     const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
     m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
     defs.append(m);
@@ -1159,14 +1243,16 @@ function drawMap(container) {
   const edges = svgEl('g');
   for (const c of mates) {
     const r = draft[c.id];
-    if (!r?.type) continue;
+    if (!r?.type || !typeLabel(r.type)) continue;
     const p = pos[c.id];
     const start = circleEdge(me, ME_R + 4, p);
     const end = rectEdge(p, NODE_W, NODE_H, me);
     edges.append(svgEl('path', {
       d: `M${start.x},${start.y} L${end.x},${end.y}`,
-      stroke: r.type === 'good' ? '#ff6b6b' : '#4a5568', 'stroke-width': 3.5, fill: 'none', 'stroke-linecap': 'round',
-      'marker-end': `url(#${r.type === 'good' ? 'arrow-good' : 'arrow-bad'})`,
+      stroke: TYPE_COLOR[r.type], 'stroke-width': 3.5, fill: 'none', 'stroke-linecap': 'round',
+      // 그냥 아는 사이는 점선으로도 구분해요 (색만으로 구분하지 않게)
+      'stroke-dasharray': r.type === 'know' ? '2 9' : null,
+      'marker-end': `url(#arrow-${r.type})`,
     }));
   }
   svg.append(edges);
@@ -1175,13 +1261,14 @@ function drawMap(container) {
   for (const c of mates) {
     const p = pos[c.id];
     const r = draft[c.id];
-    const g = svgEl('g', { class: `node ${r ? r.type : ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': c.name });
+    const shown = r?.type && typeLabel(r.type) ? r.type : null;
+    const g = svgEl('g', { class: `node ${shown || ''}`, transform: `translate(${p.x},${p.y})`, tabindex: 0, role: 'button', 'aria-label': shown ? `${c.name} (${typeLabel(shown)})` : c.name });
     const rect = svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: NODE_H / 2 });
     g.append(rect, svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: shorten(c.name, 6), style: 'font-size:18px' }));
-    if (r?.type) {
+    if (shown) {
       const badge = svgEl('g', { class: 'node-badge', transform: `translate(${NODE_W / 2 - 6},${-NODE_H / 2 + 2})` });
-      badge.append(svgEl('circle', { r: 13, fill: '#fff', stroke: r.type === 'good' ? '#ff6b6b' : '#4a5568', 'stroke-width': 2.5 }));
-      badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: r.type === 'good' ? '❤️' : '⚡', style: 'font-size:14px' }));
+      badge.append(svgEl('circle', { r: 13, fill: '#fff', stroke: TYPE_COLOR[shown], 'stroke-width': 2.5 }));
+      badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: typeIcon(shown), style: 'font-size:14px' }));
       g.append(badge);
     }
     if (!data.room.locked) {
@@ -1237,10 +1324,12 @@ function openEditor(id) {
   if (data.room.locked) return;
   const mate = data.classmates.find((c) => c.id === id);
   const current = draft[id] ? JSON.parse(JSON.stringify(draft[id])) : null;
-  const state = { type: current?.type || null, tags: new Set(current?.tags || []), reason: current?.reason || '' };
+  const intro = isIntro();   // 🌱 새 학기 첫 조사: 예전 사이(좋은 · 그냥 아는 · 안 좋은)와 어떻게 아는 사이인지
+  const state = { type: current?.type || null, tags: new Set(current?.tags || []), reason: current?.reason || '', how: new Set(current?.how || []) };
+  const entry = () => ({ type: state.type, tags: intro ? [] : [...state.tags], reason: state.reason, ...(intro ? { how: [...state.how] } : {}) });
   // The modal is part of the temporary draft, even before '완료'. Closing it keeps what was typed.
   function record() {
-    if (state.type || state.reason) draft[id] = { type: state.type, tags: [...state.tags], reason: state.reason };
+    if (state.type || state.reason || state.how.size) draft[id] = entry();
     else delete draft[id];
     relationsDirty = true;
     dirty = true;
@@ -1263,9 +1352,20 @@ function openEditor(id) {
 
   function draw() {
     modal.replaceChildren();
-    modal.append(el('h2', { text: `${mate.name}${josa(mate.name, ['와', '과'])} 나는…` }));
-    modal.append(el('p', { class: 'muted', text: '쓰는 중에도 임시 저장돼. 닫아도 쓴 내용은 남아 있어. 다 쓴 뒤 관계 지도에서 제출해 줘.' }));
-    const choice = el('div', { class: 'type-choice' }, [
+    modal.append(el('h2', { text: intro ? `${mate.name}${josa(mate.name, ['와', '과'])} 예전에…` : `${mate.name}${josa(mate.name, ['와', '과'])} 나는…` }));
+    modal.append(el('p', { class: 'muted', text: intro ? '작년이나 그 전에 어떤 사이였는지 골라 줘. 쓰는 중에도 임시 저장돼. 다 고른 뒤 지도 아래에서 제출해 줘.' : '쓰는 중에도 임시 저장돼. 닫아도 쓴 내용은 남아 있어. 다 쓴 뒤 관계 지도에서 제출해 줘.' }));
+    const pickType = (type) => () => { state.type = state.type === type ? null : type; record(); draw(); };
+    const choice = intro ? el('div', { class: 'type-choice three' }, [
+      el('button', { type: 'button', class: `type-btn good ${state.type === 'good' ? 'selected' : ''}`, 'aria-pressed': state.type === 'good' ? 'true' : 'false', onClick: pickType('good') }, [
+        el('span', { class: 'big', text: '❤️' }), '좋은 사이였어', el('span', { class: 'desc', text: '친하게 지냈어' }),
+      ]),
+      el('button', { type: 'button', class: `type-btn know ${state.type === 'know' ? 'selected' : ''}`, 'aria-pressed': state.type === 'know' ? 'true' : 'false', onClick: pickType('know') }, [
+        el('span', { class: 'big', text: '🙂' }), '그냥 아는 사이야', el('span', { class: 'desc', text: '얼굴이나 이름을 알아' }),
+      ]),
+      el('button', { type: 'button', class: `type-btn bad ${state.type === 'bad' ? 'selected' : ''}`, 'aria-pressed': state.type === 'bad' ? 'true' : 'false', onClick: pickType('bad') }, [
+        el('span', { class: 'big', text: '⚡' }), '안 좋은 사이였어', el('span', { class: 'desc', text: `무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 적어야 해` }),
+      ]),
+    ]) : el('div', { class: 'type-choice' }, [
       el('button', { type: 'button', class: `type-btn good ${state.type === 'good' ? 'selected' : ''}`, onClick: () => { state.type = state.type === 'good' ? null : 'good'; state.tags.clear(); record(); draw(); } }, [
         el('span', { class: 'big', text: '❤️' }), '좋은 사이', el('span', { class: 'desc', text: '빨간 화살표 · 이유는 골라도 되고 안 골라도 돼' }),
       ]),
@@ -1279,8 +1379,20 @@ function openEditor(id) {
       const isBad = state.type === 'bad';
       const min = BAD_REASON_MIN();
       // 안 좋은 사이는 객관식(선택지) 없이 무슨 일이 있었는지 직접 적어요. 예전에 고른 선택지가 남아 있어도 비웁니다
-      if (isBad) state.tags.clear();
-      else {
+      if (isBad || intro) state.tags.clear();
+      if (intro) {
+        // 어떻게 아는 사이인지 (여러 개 고를 수 있고, 안 골라도 돼요)
+        modal.append(el('div', { class: 'field' }, [
+          el('label', {}, ['어떻게 아는 사이야? ', el('span', { class: 'muted', text: '(여러 개 골라도 되고 안 골라도 돼)' })]),
+          el('div', { class: 'chips', id: 'editor-how' }, (data.knowCatalog || []).map((h) => el('button', {
+            type: 'button',
+            class: `chip ${state.how.has(h.id) ? 'selected know-theme' : ''}`,
+            'aria-pressed': state.how.has(h.id) ? 'true' : 'false',
+            text: `${h.emoji ? `${h.emoji} ` : ''}${h.label}`,
+            onClick: () => { state.how.has(h.id) ? state.how.delete(h.id) : state.how.add(h.id); record(); draw(); },
+          }))),
+        ]));
+      } else if (!isBad) {
         modal.append(el('div', { class: 'field' }, [
           el('label', {}, ['왜 좋은 사이야? ', el('span', { class: 'muted', text: '(골라도 되고 안 골라도 돼)' })]),
           el('div', { class: 'chips' }, data.catalog.good.map((t) => el('button', {
@@ -1291,14 +1403,16 @@ function openEditor(id) {
           }))),
         ]));
       }
-      const ta = el('textarea', { id: 'editor-reason', placeholder: isBad ? '예: 지난주 체육 시간에 내가 공을 놓쳤다고 여러 번 놀려서 속상했어요.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
+      const ta = el('textarea', { id: 'editor-reason', placeholder: intro
+        ? (isBad ? '예: 작년에 같은 모둠이었는데 내 물건을 자꾸 숨겨서 여러 번 다퉜어요.' : state.type === 'know' ? '예: 태권도 학원에서 가끔 봐요.' : '예: 작년에 쉬는 시간마다 같이 놀았어요.')
+        : isBad ? '예: 지난주 체육 시간에 내가 공을 놓쳤다고 여러 번 놀려서 속상했어요.' : '예: 쉬는 시간에 항상 같이 놀아요.', maxlength: 300, style: isBad ? { minHeight: '110px', borderColor: 'var(--kid-coral)' } : { minHeight: '90px' } });
       ta.value = state.reason;
       const counter = isBad ? el('div', { class: 'ta-counter', id: 'editor-counter' }) : null;
       ta.addEventListener('input', () => { state.reason = ta.value; record(); updateHint(); });
       modal.append(el('div', { class: 'field' }, [
         el('label', { for: 'editor-reason' }, isBad
           ? ['✏️ 무슨 일이 있었는지 직접 적어 줘 ', el('span', { class: 'req', text: `(${min}자 이상 꼭!)` })]
-          : ['✏️ 이유 적기 ', el('span', { class: 'muted', text: '(선택)' })]),
+          : [intro ? '✏️ 한마디 적기 ' : '✏️ 이유 적기 ', el('span', { class: 'muted', text: '(선택)' })]),
         ta,
         counter,
       ]));
@@ -1314,21 +1428,21 @@ function openEditor(id) {
       };
       updateHint();
     } else {
-      modal.append(el('p', { class: 'muted', text: '위에서 관계를 골라 줘. 아직 잘 모르겠으면 표시하지 않아도 괜찮아.' }));
+      modal.append(el('p', { class: 'muted', text: intro ? '아는 친구라면 위에서 예전 사이를 골라 줘. 모르는 친구면 표시하지 않고 닫으면 돼.' : '위에서 관계를 골라 줘. 아직 잘 모르겠으면 표시하지 않아도 괜찮아.' }));
     }
 
     modal.append(el('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
       el('button', { type: 'button', class: 'btn primary', text: '완료 ✓', onClick: save }),
       el('button', { type: 'button', class: 'btn', text: '임시 저장', onClick: async () => { captureDraft(); await draftStore.flush(); toast(draftMessage(), 4500); } }),
-      current || state.type || state.reason ? el('button', { type: 'button', class: 'btn', text: '표시 지우기', onClick: () => { delete draft[id]; relationsDirty = true; dirty = true; captureDraft(); close(); } }) : null,
+      current || state.type || state.reason || state.how.size ? el('button', { type: 'button', class: 'btn', text: intro ? '모르는 친구예요 (표시 지우기)' : '표시 지우기', onClick: () => { delete draft[id]; relationsDirty = true; dirty = true; captureDraft(); close(); } }) : null,
       el('button', { type: 'button', class: 'btn', text: '닫기', onClick: close }),
     ]));
   }
 
   function save() {
-    if (!state.type && state.reason) { toast('어떤 관계인지 먼저 골라 줘. 쓴 이유는 임시 저장돼 있어.'); return; }
+    if (!state.type && (state.reason || state.how.size)) { toast(intro ? '예전에 어떤 사이였는지 먼저 골라 줘. 쓴 내용은 임시 저장돼 있어.' : '어떤 관계인지 먼저 골라 줘. 쓴 이유는 임시 저장돼 있어.'); return; }
     if (!state.type) { delete draft[id]; relationsDirty = true; dirty = true; captureDraft(); close(); return; }
-    const r = { type: state.type, tags: [...state.tags], reason: state.reason };
+    const r = entry();
     if (!relationValid(r)) { toast(`안 좋은 사이일 때는 무슨 일이 있었는지 ${BAD_REASON_MIN()}자 이상 직접 적어 줘! (지금 ${badReasonLength(state.reason)}자)`); return; }
     draft[id] = r;
     relationsDirty = true;
@@ -1428,7 +1542,10 @@ async function submit() {
   if (!canSubmit()) return;
   try {
     // 🌱 이번 달 친해진 친구도 관계 지도와 함께 보냅니다 (고른 친구가 없고 글도 없으면 서버가 비움)
-    await submitSection('relations', { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim(), review: closerDraft.review.trim(), score: closerDraft.score } });
+    // 🌱 새 학기 첫 조사에는 돌아보기 카드가 없으니 아는 친구 표시만 보내요
+    await submitSection('relations', isIntro()
+      ? { relations: draft }
+      : { relations: draft, closerFriends: { ids: [...closerDraft.ids], text: closerDraft.text.trim(), review: closerDraft.review.trim(), score: closerDraft.score } });
     step = 'relations';
     render();
     toast('제출 완료! 정말 고마워 🎉');

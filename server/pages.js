@@ -60,6 +60,13 @@ export const index = `<!doctype html>
           </div>
           <div class="help">둘 다 채워야 제출할 수 있어요. 반 인원이 적으면 자동으로 줄어들어요.</div>
         </div>
+        <div class="field">
+          <label class="import-check" for="intro-kind" style="font-weight:600">
+            <input type="checkbox" id="intro-kind">
+            <span>🌱 새 학기 첫 조사로 시작하기 <span class="muted" style="font-weight:400">(반이 바뀌고 처음 하는 조사)</span></span>
+          </label>
+          <div class="help">학생이 <b>아는 친구</b>를 고르고, 예전에 좋은 사이였는지 · 그냥 아는 사이인지 · 안 좋은 사이였는지와 어떻게 아는 사이인지를 표시해요. 아는 친구가 없을 수도 있어서 위의 "꼭 표시해야 하는 친구 수"는 이 첫 조사에는 적용하지 않아요. 다음 달부터는 평소 조사(좋은 사이 · 안 좋은 사이)로 이어 가면 돼요. <span id="intro-kind-hint"></span></div>
+        </div>
         <div id="create-error" class="alert error hidden"></div>
         <div class="btn-row">
           <button type="submit" class="btn primary" id="create-btn">교실 만들기</button>

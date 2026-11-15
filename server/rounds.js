@@ -20,8 +20,9 @@ export function nextRoundName(room, now = new Date()) {
   return uniqueRoundName(room, monthName(now));
 }
 
-export function makeRound(name, now = new Date().toISOString()) {
-  return { id: newId(), name, startedAt: now, closedAt: null, relations: {}, submissions: {} };
+/** kind 'intro' = 새 학기 첫 조사(아는 친구 · 예전 사이 표시). 평소 조사에는 kind 를 따로 적지 않아요. */
+export function makeRound(name, now = new Date().toISOString(), kind = 'regular') {
+  return { id: newId(), name, startedAt: now, closedAt: null, relations: {}, submissions: {}, ...(kind === 'intro' ? { kind: 'intro', known: {} } : {}) };
 }
 
 /**
@@ -73,5 +74,5 @@ export function roundRoom(room, round) {
 }
 
 export function roundView(round) {
-  return { id: round.id, name: round.name, startedAt: round.startedAt, closedAt: round.closedAt, open: !round.closedAt };
+  return { id: round.id, name: round.name, startedAt: round.startedAt, closedAt: round.closedAt, open: !round.closedAt, kind: round.kind === 'intro' ? 'intro' : 'regular' };
 }

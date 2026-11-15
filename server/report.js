@@ -7,6 +7,7 @@ import { roomRoles, applicantCounts, bodyLabels, BODY_TRAITS } from './roles.js'
 import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
 import { seatingView } from './seating-history.js';
 import { detectGroups } from './cliques.js';
+import { isIntro, listKnown, knownSummary } from './intro.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 function dateLabel(d = new Date()) {
@@ -46,7 +47,7 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     if (context.evidence.length) {
       const counts = {};
       for (const evidence of context.evidence) counts[evidence.kind] = (counts[evidence.kind] || 0) + 1;
-      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'closer-friends': '친해진 친구', history: '지난 회차 응답', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
+      const labels = { submission: '관계 설문 제출', relation: '관계 표시', profile: '성향 설문', application: '역할 지원서', 'closer-friends': '친해진 친구', known: '아는 사이 표시', history: '지난 회차 응답', 'teacher-note': '교사 메모', 'teacher-rule': '교사 규칙' };
       para(`분석 근거: ${Object.entries(counts).map(([key, count]) => `${labels[key] || key} ${count}건`).join(' · ')}${context.sourceUpdatedAt ? ` · 최근 응답·메모 기록 ${context.sourceUpdatedAt.replace('T', ' ').slice(0, 16)} (UTC)` : ''}.`, 'muted');
     }
   };
@@ -63,6 +64,8 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     { label: '주의가 필요한 관계', value: `${high + medium}쌍`, sub: `높음 ${high} · 주의 ${medium}` },
     { label: '고립 위험', value: `${analysis.isolated.length}명`, sub: analysis.isolated.length ? analysis.isolated.join(', ') : '좋은 사이로 지목받지 못한 학생이 없어요' },
   ] });
+  const intro = isIntro(round);
+  if (intro) para(`🌱 이 회차는 반이 바뀌고 처음 하는 "새 학기 첫 조사"예요. 학생들은 아는 친구를 고르고, 예전에 좋은 사이였는지 · 그냥 아는 사이인지 · 안 좋은 사이였는지를 표시했어요. 이 보고서의 좋은 사이 · 안 좋은 사이는 작년이나 그 전의 사이를 뜻하고, 표시가 없는 학생끼리는 서로 모르는 사이일 수 있어요.`);
   if (analysis.submittedCount < analysis.totalStudents) {
     const pending = students.filter((s) => !stats[s.id].submitted).map((s) => s.name);
     para(`아직 제출하지 않은 학생 ${pending.length}명: ${pending.join(', ')}`, 'muted');
@@ -107,6 +110,29 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     sub(`${round.name} 돌아보기`);
     para(`학생이 이 회차의 관계 지도와 함께 적은 돌아보기예요. "우리 반은 몇 점이야?"(1~5)${score.scoreCount ? ` 평균 ${score.scoreAvg}점 (${score.scoreCount}명)` : ''}, "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지, 한 달이 어땠는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.`, 'muted');
     list(closerLines);
+  }
+
+  // 새 학기 첫 조사: 아는 사이 (누가 누구를 아는지 · 아는 친구가 없는 학생)
+  if (intro) {
+    const ks = knownSummary(room, round);
+    const known = listKnown(room, round);
+    sub('아는 사이 (새 학기 첫 조사)');
+    para(`학생이 "아는 친구"로 고른 표시는 모두 ${ks.total}개, 서로 안다고 한 사이는 ${ks.mutualPairs}쌍이에요.${ks.how.length ? ` 어떻게 아는 사이인지: ${ks.how.map((h) => `${h.label} ${h.count}`).join(' · ')}.` : ''}`, 'muted');
+    blocks.push({
+      type: 'table',
+      columns: [{ label: '번호', width: 0.08 }, { label: '이름', width: 0.16 }, { label: '내가 아는 친구', width: 0.14 }, { label: '나를 아는 친구', width: 0.14 }, { label: '아는 친구 (내가 표시)', width: 0.48 }],
+      rows: students.map((s) => {
+        const mine = known.filter((k) => k.from === s.id);
+        const text = !stats[s.id].submitted ? '(미제출)' : mine.length ? mine.map((k) => `${nameOf(k.to)}${k.quality === 'good' ? '❤️' : k.quality === 'bad' ? '⚡' : ''}`).join(', ') : '아는 친구 없음';
+        return [center(index.get(s.id)), bold(s.name), center(stats[s.id].submitted ? `${ks.students[s.id].knows}명` : '-'), center(`${ks.students[s.id].knownBy}명`), text];
+      }),
+      header: true,
+    });
+    list([
+      ks.knowsNobody.length ? `아는 친구가 없다고 답한 학생 ${ks.knowsNobody.length}명: ${ks.knowsNobody.map(nameOf).join(', ')}` : (ks.submittedCount ? '제출한 학생은 모두 아는 친구가 한 명 이상 있어요.' : ''),
+      ks.knownByNobody.length ? `아무도 안다고 표시하지 않은 학생 ${ks.knownByNobody.length}명: ${ks.knownByNobody.map(nameOf).join(', ')} (새로 온 학생일 수 있어요. 미제출 학생이 있으면 달라질 수 있어요)` : '',
+    ].filter(Boolean));
+    para('이름 옆 ❤️는 예전에 좋은 사이, ⚡는 예전에 안 좋은 사이로 표시한 친구예요. 표시가 없으면 그냥 아는 사이예요.', 'muted');
   }
 
   // 친한 무리: 좋은 사이로 뭉친 학생들과 무리 사이의 안 좋은 사이 (규칙 기반 추정)

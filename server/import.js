@@ -5,6 +5,7 @@
 import { newId, newToken } from './tokens.js';
 import { isValidTag } from './reasons.js';
 import { normalizeRoles } from './roles.js';
+import { isValidHow } from './intro.js';
 
 export const BACKUP_VERSION = 1;
 export const IMPORT_LIMITS = { students: 80, rounds: 36, roomName: 60, roundName: 40, studentName: 30, reason: 300, nodes: 400000, depth: 24, text: 20000, list: 5000 };
@@ -124,6 +125,21 @@ function restoreRound(input, roster, usedIds) {
       return first ? { submittedAt, firstSubmittedAt: first } : { submittedAt };
     }),
   };
+  // 새 학기 첫 조사: 조사 종류와 '아는 사이' 표시
+  if (input.kind === 'intro') {
+    round.kind = 'intro';
+    round.known = byStudent(input.known, roster, (targets, from) => {
+      if (!isObject(targets)) return null;
+      const out = {};
+      for (const [to, entry] of Object.entries(targets)) {
+        if (!roster.has(to) || to === from || !isObject(entry)) continue;
+        const how = Array.isArray(entry.how) ? [...new Set(entry.how.map(String))].filter(isValidHow) : [];
+        const note = String(entry.note ?? '').trim().slice(0, IMPORT_LIMITS.reason);
+        out[to] = { how, ...(note ? { note } : {}), updatedAt: isoOrNull(entry.updatedAt) };
+      }
+      return out;
+    });
+  }
   const closer = restoreCloserFriends(input.closerFriends, roster);
   if (Object.keys(closer).length) round.closerFriends = closer;
   // 성향 설문 · 역할 지원서: 학생별 객체만 (속 내용은 화면을 그려 보며 한 번 더 확인해요)

@@ -38,6 +38,11 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
   for (const [id, profile] of Object.entries(profiles)) evidence.push({ id: `profile:${id}`, kind: 'profile', studentIds: [id], updatedAt: at(profile.updatedAt) });
   if (kind !== 'seating') for (const [id, application] of Object.entries(applications)) evidence.push({ id: `application:${id}`, kind: 'application', studentIds: [id], updatedAt: at(application.updatedAt) });
   if (kind !== 'seating') for (const [id, entry] of Object.entries(closerFriends)) evidence.push({ id: `closer-friends:${id}`, kind: 'closer-friends', studentIds: [id, ...(entry.ids || []).filter((other) => known.has(other))], updatedAt: at(entry.updatedAt) });
+  if (kind !== 'seating' && round.kind === 'intro') {
+    for (const [from, targets] of Object.entries(sortedRecord(round.known, known))) {
+      for (const [to, entry] of Object.entries(sortedRecord(targets, known))) evidence.push({ id: `known:${from}:${to}`, kind: 'known', studentIds: [from, to], from, to, updatedAt: at(entry?.updatedAt) });
+    }
+  }
   for (const id of Object.keys(teacherNotes.students)) evidence.push({ id: `teacher-note:${id}`, kind: 'teacher-note', studentIds: [id], updatedAt: at(room.teacherNotes?.updatedAt) });
   for (const rule of teacherNotes.rules) evidence.push({ id: `teacher-rule:${rule.a}:${rule.b}`, kind: 'teacher-rule', studentIds: [rule.a, rule.b], updatedAt: at(room.teacherNotes?.updatedAt) });
   const missingStudentIds = students.filter((student) => !submissions[student.id]).map((student) => student.id);
@@ -58,6 +63,11 @@ export function captureAnalysisContext(room, round, { kind = 'relationships', ex
   } else {
     snapshot.applications = applications;
     if (Object.keys(closerFriends).length) snapshot.closerFriends = closerFriends;
+    // 새 학기 첫 조사: 조사 종류와 '아는 사이' 표시도 분석 입력이에요 (평소 조사의 지문은 그대로)
+    if (round.kind === 'intro') {
+      snapshot.intro = true;
+      snapshot.known = Object.fromEntries(Object.entries(sortedRecord(round.known, known)).map(([from, targets]) => [from, sortedRecord(targets, known)]));
+    }
     // 지난 회차를 함께 읽은 분석은 그 회차들의 응답·돌아보기를 회차별 지문으로 따로 기록합니다 (아래 historyRounds).
     // 보관 기간이 지나 자동 삭제된 회차는 '바뀐 입력'이 아니라 비교에서 빠지고, 남아 있는 회차의 응답이 바뀌면 재분석 필요로 표시합니다.
     // historyInFingerprint 는 이 방식 전에 저장한(지난 회차를 전체 지문에 넣던) 분석과 비교할 때만 씁니다.

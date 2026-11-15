@@ -10,6 +10,7 @@ import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound,
 import { analyzeHistory, historyForAi } from './history.js';
 import { detectGroups } from './cliques.js';
 import { backupOf, restoreRoom, carriedRoles } from './import.js';
+import { KNOW_HOW, isIntro, parseKind, cleanHow, listKnown, knownSummary, removeStudentFromKnown, roundHasResponses } from './intro.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
@@ -91,9 +92,9 @@ function minimums(room) {
   return { minGood, minBad };
 }
 
-function newRoom(name, names, minGood, minBad) {
+function newRoom(name, names, minGood, minBad, kind = 'regular') {
   const now = new Date().toISOString();
-  const round = makeRound(monthName(now), now);
+  const round = makeRound(monthName(now), now, kind);
   return {
     id: newId(6),
     name,
@@ -235,6 +236,10 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       stats,
       analysis,
       cliques: detectGroups(rr),                  // 친한 무리(좋은 사이로 뭉친 학생들) · 무리 사이의 안 좋은 사이
+      // 새 학기 첫 조사(round.kind === 'intro')일 때만: 아는 사이 표시와 요약
+      known: isIntro(round) ? listKnown(room, round) : [],
+      knownSummary: isIntro(round) ? knownSummary(room, round) : null,
+      knowCatalog: KNOW_HOW,
       history: analyzeHistory(room),
       closerFriends: round.closerFriends || {},   // { sid: { ids, text, review, updatedAt } } 돌아보기: 친해진 친구 · 한 달은 어땠나요
       catalog: REASON_CATALOG,
@@ -306,9 +311,23 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const round = currentRound(room);
     const classmates = room.students.filter((s) => s.id !== student.id).map((s) => ({ id: s.id, name: s.name }));
     const mine = round.relations?.[student.id] || {};
+    const intro = isIntro(round);
     const relations = {};
     for (const c of classmates) if (mine[c.id]) relations[c.id] = mine[c.id];
-    const mins = effectiveMins(room, classmates.length);
+    if (intro) {
+      // 새 학기 첫 조사: 아는 친구마다 { type: good · bad · know, how: 어떻게 아는 사이, reason } 한 줄로 합쳐 보여 줘요
+      const known = round.known?.[student.id] || {};
+      for (const c of classmates) {
+        const k = known[c.id];
+        if (!k && !relations[c.id]) continue;
+        const how = Array.isArray(k?.how) ? k.how : [];
+        relations[c.id] = relations[c.id]
+          ? { ...relations[c.id], how }
+          : { type: 'know', tags: [], how, reason: String(k.note || ''), updatedAt: k.updatedAt || null };
+      }
+    }
+    // 새 학기 첫 조사는 아는 친구가 없을 수도 있으니 꼭 표시해야 하는 수가 없어요
+    const mins = intro ? { minGood: 0, minBad: 0 } : effectiveMins(room, classmates.length);
     const roles = roomRoles(room);
     const prev = previousRoleIds(room, round);
     const excludedRoleIds = prev.byStudent[student.id] || [];
@@ -329,6 +348,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       submittedAt: round.submissions?.[student.id]?.submittedAt || null,
       draft: studentDraftView(round, student.id),
       catalog: REASON_CATALOG,
+      knowCatalog: KNOW_HOW,                     // 새 학기 첫 조사: '어떻게 아는 사이야?' 선택지
       // 1인 1역 · 성향
       roles,
       excludedRoleIds,
@@ -393,7 +413,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const minGood = parseMin(req.body?.minGood, 3);
     const minBad = parseMin(req.body?.minBad, 1);
 
-    const room = newRoom(name, names, minGood, minBad);
+    // 반이 바뀌고 처음 하는 조사면 '새 학기 첫 조사'(아는 친구 · 예전 사이 표시)로 시작할 수 있어요
+    const room = newRoom(name, names, minGood, minBad, parseKind(req.body?.kind));
     // 새 학년 교실로 시작할 때: 지난 교실의 1인 1역 역할 목록을 함께 가져올 수 있어요 (선택)
     const roles = carriedRoles(req.body?.roles);
     if (roles.length) room.roles = roles;
@@ -554,7 +575,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const now = new Date().toISOString();
       const cur = currentRound(room);
       if (!cur.closedAt) cur.closedAt = now;
-      created = makeRound(name, now);
+      created = makeRound(name, now, parseKind(req.body?.kind));
       room.rounds.push(created);
       room.currentRoundId = created.id;
     });
@@ -581,6 +602,15 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
           mine.roundId = round.id;
           mine.month = name;
           room.roleHistory = history.filter((h) => h === mine || h.month !== name);
+        }
+      }
+      if (body.kind !== undefined) {
+        // 조사 종류(평소 조사 ↔ 새 학기 첫 조사)는 응답이 하나도 없을 때만 바꿀 수 있어요
+        const kind = parseKind(body.kind);
+        if (kind !== (isIntro(round) ? 'intro' : 'regular')) {
+          if (roundHasResponses(round)) throw bad('이미 응답이 있는 회차는 조사 종류를 바꿀 수 없어요. 새 회차를 시작해 주세요.');
+          if (kind === 'intro') { round.kind = 'intro'; round.known ||= {}; } else { delete round.kind; delete round.known; }
+          for (const sid of Object.keys(round.studentDrafts || {})) clearStudentDraft(round, sid, 'relations');   // 다른 종류로 쓰던 임시 저장은 비워요
         }
       }
       if (typeof body.closed === 'boolean') {
@@ -668,6 +698,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         delete round.profiles?.[student.id];
         delete round.applications?.[student.id];
         removeStudentFromCloserFriends(round, student.id);
+        removeStudentFromKnown(round, student.id);
         if (round.roleAssignment) {
           const ra = round.roleAssignment;
           for (const [rid, list] of Object.entries(ra.assignments || {})) ra.assignments[rid] = (list || []).filter((x) => x !== student.id);
@@ -737,6 +768,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       delete round.relations[student.id];
       delete round.submissions[student.id];
       delete round.closerFriends?.[student.id];   // 관계 지도와 함께 낸 '친해진 친구'도 그 학생 것만 지움
+      delete round.known?.[student.id];           // 새 학기 첫 조사의 '아는 친구' 표시도 그 학생 것만 지움
       clearStudentDraft(round, student.id);
     });
     res.json(teacherView(req, room, roundId));
@@ -838,7 +870,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const rounds = room.rounds.map((r) => {
       const rr = roundRoom(room, r);
       const stats = computeStats(rr);
-      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r, historyCache), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
+      return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, ...(isIntro(r) ? { known: listKnown(room, r) } : {}), roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r, historyCache), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
     const { adminUrl: _adminUrl, ...roomInfo } = view.room;   // 파일을 다른 사람에게 건네도 교실 열쇠가 따라가지 않게 선생님 링크는 빼요
@@ -854,8 +886,17 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [['회차', '보낸 학생', '받은 학생', '관계', '선택한 이유', '직접 쓴 이유', '수정 시각'].map(esc).join(',')];
     for (const round of room.rounds) {
+      // 새 학기 첫 조사: 좋은 · 안 좋은 사이는 '예전' 사이이고, 어떻게 아는 사이인지를 선택한 이유 칸에 적어요. 그냥 아는 사이도 한 줄씩 넣어요
+      const intro = isIntro(round);
+      const known = intro ? listKnown(room, round) : [];
+      const howOf = new Map(known.map((k) => [`${k.from}>${k.to}`, k.howLabels]));
       for (const r of listRelations(roundRoom(room, round))) {
-        rows.push([round.name, nameOf[r.from], nameOf[r.to], r.type === 'good' ? '좋은 사이' : '안 좋은 사이', r.tagLabels.join('; '), r.reason, r.updatedAt].map(esc).join(','));
+        const label = `${intro ? '예전에 ' : ''}${r.type === 'good' ? '좋은 사이' : '안 좋은 사이'}`;
+        const tags = intro ? (howOf.get(`${r.from}>${r.to}`) || []) : r.tagLabels;
+        rows.push([round.name, nameOf[r.from], nameOf[r.to], label, tags.join('; '), r.reason, r.updatedAt].map(esc).join(','));
+      }
+      for (const k of known.filter((x) => x.quality === 'know')) {
+        rows.push([round.name, nameOf[k.from], nameOf[k.to], '그냥 아는 사이', k.howLabels.join('; '), k.note, k.updatedAt].map(esc).join(','));
       }
     }
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.csv`);
@@ -934,6 +975,37 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       const now = new Date().toISOString();
       const prev = round.relations[student.id] || {};
       const next = {};
+      if (isIntro(round)) {
+        // 새 학기 첫 조사: 아는 친구마다 예전 사이(좋은 · 그냥 아는 · 안 좋은)와 어떻게 아는 사이인지. 꼭 표시해야 하는 수는 없어요
+        const prevKnown = round.known?.[student.id] || {};
+        const nextKnown = {};
+        for (const [toId, r] of Object.entries(input)) {
+          if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
+          if (!r || !['good', 'bad', 'know'].includes(r.type)) throw bad('예전 사이는 좋은 사이 · 그냥 아는 사이 · 안 좋은 사이 가운데 하나여야 해요.');
+          const how = cleanHow(r.how);
+          if (!how) throw bad('어떻게 아는 사이인지 고른 내용이 올바르지 않아요.');
+          const reason = String(r.reason ?? '').trim();
+          if (reason.length > LIMITS.reason) throw bad(`이유는 ${LIMITS.reason}자 이하로 적어 주세요.`);
+          if (r.type === 'bad' && textLength(reason) < BAD_REASON_MIN) {
+            const name = room.students.find((s) => s.id === toId)?.name || '';
+            throw bad(`${name}와(과) 예전에 안 좋은 사이였던 이유를 ${BAD_REASON_MIN}자 이상 직접 적어 주세요. (지금 ${textLength(reason)}자)`);
+          }
+          if (r.type !== 'know') {
+            const same = prev[toId] && prev[toId].type === r.type && prev[toId].reason === reason && !(prev[toId].tags || []).length;
+            next[toId] = { type: r.type, tags: [], reason, updatedAt: same ? prev[toId].updatedAt : now };
+          }
+          const note = r.type === 'know' ? reason : '';
+          const before = prevKnown[toId];
+          const sameKnown = before && JSON.stringify(before.how || []) === JSON.stringify(how) && String(before.note || '') === note;
+          nextKnown[toId] = { how, ...(note ? { note } : {}), updatedAt: sameKnown ? before.updatedAt : now };
+        }
+        round.relations[student.id] = next;
+        round.known ||= {};
+        round.known[student.id] = nextKnown;
+        round.submissions[student.id] = { submittedAt: now, firstSubmittedAt: round.submissions[student.id]?.firstSubmittedAt || now };
+        clearStudentDraft(round, student.id, ['relations', 'closerFriends']);
+        return;
+      }
       for (const [toId, r] of Object.entries(input)) {
         if (!classmates.has(toId)) throw bad('우리 반 친구가 아닌 학생이 포함되어 있어요.');
         if (!r || (r.type !== 'good' && r.type !== 'bad')) throw bad('관계 종류는 좋은 사이 또는 안 좋은 사이여야 해요.');
@@ -1340,6 +1412,8 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       profiles: round.profiles || {},
       applications: round.applications || {},
       closerFriends: round.closerFriends || {},
+      intro: isIntro(round),                       // 새 학기 첫 조사: 좋은 · 안 좋은 사이는 '예전 사이', 아는 사이 표시를 함께 읽음
+      known: isIntro(round) ? listKnown(found, round) : [],
       roles: roomRoles(found),
       previousRoles: previousRoleIds(found, round),
     });

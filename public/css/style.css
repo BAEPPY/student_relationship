@@ -232,6 +232,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .edge path.line { fill: none; stroke-width: 2.25; stroke-linecap: round; }
 .edge.good path.line { stroke: var(--red); }
 .edge.bad path.line { stroke: var(--black); }
+/* 새 학기 첫 조사의 '그냥 아는 사이': 좋은 · 안 좋은 사이보다 눈에 덜 띄게 회색 점선 */
+.edge.know path.line { stroke: #8a94a6; stroke-width: 1.5; stroke-dasharray: 4 5; }
+.edge.know.mutual path.line { stroke-width: 2; }
+.legend .line.know { background: none; height: 0; border-top: 2px dashed #8a94a6; }
 .edge.mutual path.line { stroke-width: 3; } /* 서로 표시한 사이(양쪽 화살촉 한 선)는 조금 두껍게 */
 .edge path.hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; }
 .edge.dim { opacity: .08; }
@@ -281,6 +285,15 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .type-btn.bad { color: var(--black); }
 .type-btn.bad.selected { background: #e6e7ee; border-color: var(--black); }
 .type-btn .desc { display: block; font-size: 12.5px; font-weight: 400; color: var(--gray-500); margin-top: 2px; }
+/* 🌱 새 학기 첫 조사: 예전 사이 세 가지(좋은 · 그냥 아는 · 안 좋은) */
+.type-choice.three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 460px) { .type-choice.three { grid-template-columns: 1fr; } }
+.type-btn.know { color: #8a5a00; }
+.type-btn.know.selected { background: #fff4dc; border-color: #f0a020; }
+.badge.know { background: #fff1d6; color: #8a5a00; }
+.mate.know { border-color: #f0a020; background: #fffaf0; }
+.chip.selected.know-theme { border-color: #f0a020; background: #fff4dc; color: #8a5a00; }
+.legend .line.dotted { background: none; height: 0; border-top: 3px dotted currentColor; }
 .req { color: var(--red); font-weight: 700; }
 
 /* ---------- print page ---------- */
@@ -547,6 +560,12 @@ body.kid .type-btn .big { display: block; font-size: 34px; line-height: 1.1; mar
 body.kid .type-btn .desc { font-family: var(--font); font-size: 12.5px; }
 body.kid .type-btn.good.selected { background: #fff1f1; border-color: var(--kid-coral); color: #c0394a; box-shadow: 0 0 0 4px rgba(255,107,107,.2); }
 body.kid .type-btn.bad.selected { background: #eef1f6; border-color: var(--kid-slate); color: var(--kid-slate); box-shadow: 0 0 0 4px rgba(74,85,104,.2); }
+body.kid .type-btn.know.selected { background: #fff4dc; border-color: #f0a020; color: #8a5a00; box-shadow: 0 0 0 4px rgba(240,160,32,.2); }
+body.kid .type-choice.three .type-btn { font-size: 17px; padding: 14px 8px; }
+body.kid .node.know rect { stroke: #f0a020; }
+body.kid .mate.know { border-color: #f0a020; background: #fff8e8; }
+body.kid .mate .badge.know { background: #ffcf5c; color: #4a3200; }
+body.kid .chip.selected.know-theme { background: #ffd66e; border-color: #f0a020; color: #4a3200; }
 body.kid .chip { border-radius: 999px; border: 2px solid #f0e6da; padding: 9px 14px; font-size: 15px; background: #fff; }
 body.kid .chip.selected.good-theme { background: var(--kid-coral); border-color: var(--kid-coral); color: #fff; }
 body.kid .chip.selected.bad-theme { background: var(--kid-slate); border-color: var(--kid-slate); color: #fff; }
@@ -753,6 +772,11 @@ body.teacher .clique { min-width: 0; border: 1px solid var(--gray-200); border-r
 body.teacher .clique-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 body.teacher .clique-head .clique-show { margin-left: auto; }
 body.teacher #cliques-card .section-label { margin: 14px 0 8px; }
+body.teacher #known-card .section-label { margin: 14px 0 8px; }
+body.teacher #known-card[hidden] { display: none; }
+body.teacher .section-nav .nav-link[hidden] { display: none; }
+body.teacher .known-table td.num, body.teacher .known-table th.num { text-align: center; white-space: nowrap; }
+body.teacher .known-table .known-list { color: var(--gray-700); overflow-wrap: anywhere; }
 body.teacher .clique-member { cursor: pointer; }
 body.teacher .clique-member:hover { border-color: var(--node-border); background: var(--gray-100); }
 body.teacher .clique-between-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
@@ -760,7 +784,7 @@ body.teacher .clique-between { display: flex; flex-wrap: wrap; align-items: cent
 body.teacher .clique-between .between-groups { display: inline-flex; align-items: center; gap: 6px; }
 body.teacher .clique-between .between-pairs { flex: 1 1 240px; min-width: 0; color: var(--gray-700); overflow-wrap: anywhere; }
 body.teacher .graph-toolbar { gap: 8px; padding: 8px 10px; border-radius: 18px; margin-bottom: 12px; }
-body.teacher .graph-toolbar .seg { display: inline-flex; gap: 4px; background: var(--gray-100); border-radius: 999px; padding: 3px; }
+body.teacher .graph-toolbar .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; gap: 4px; background: var(--gray-100); border-radius: 18px; padding: 3px; }   /* 새 학기 첫 조사에는 버튼이 4개라 좁은 화면에서 줄바꿈 */
 body.teacher .graph-toolbar .btn.small { padding: 7px 14px; }
 body.teacher .graph-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 @media (max-width: 900px) { body.teacher .graph-grid { grid-template-columns: minmax(0, 1fr); } }

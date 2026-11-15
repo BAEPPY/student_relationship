@@ -1,5 +1,6 @@
 import { TRAITS, validateBody } from './roles.js';
 import { isValidTag } from './reasons.js';
+import { cleanHow } from './intro.js';
 
 const SECTIONS = ['profile', 'application', 'relations'];          // 단계(step) 이름
 const SECTION_KEYS = [...SECTIONS, 'closerFriends'];                // 초안으로 보관하는 내용 (친해진 친구는 관계 지도 단계의 일부)
@@ -63,10 +64,13 @@ export function validateDraft(input, room, studentId) {
       for (const [target, relation] of Object.entries(value)) {
         if (!classmates.has(target) || !object(relation)) throw bad('임시 관계에 우리 반 친구가 아닌 학생이 포함되어 있어요.');
         const type = relation.type ?? null;
-        if (type !== null && type !== 'good' && type !== 'bad') throw bad('임시 관계 종류가 올바르지 않아요.');
+        // 'know'(그냥 아는 사이)와 how(어떻게 아는 사이)는 새 학기 첫 조사에서만 써요. 종류에 맞는지는 최종 제출에서 확인합니다
+        if (type !== null && type !== 'good' && type !== 'bad' && type !== 'know') throw bad('임시 관계 종류가 올바르지 않아요.');
         const tags = relation.tags ?? [];
         if (!Array.isArray(tags) || tags.length > 30 || tags.some((tag) => !isValidTag(type, tag))) throw bad('임시 관계의 이유 항목이 올바르지 않아요.');
-        relations[target] = { type, tags: [...new Set(tags)], reason: text(relation.reason, 300) };
+        const how = cleanHow(relation.how);
+        if (!how) throw bad('임시 관계의 아는 사이 항목이 올바르지 않아요.');
+        relations[target] = { type, tags: [...new Set(tags)], reason: text(relation.reason, 300), ...(relation.how !== undefined ? { how } : {}) };
       }
       sections.relations = relations;
     }

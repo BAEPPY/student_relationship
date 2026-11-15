@@ -31,10 +31,32 @@ const TREND_LABEL = { new: '🆕 이번에 새로', continuing: '🔁 계속됨'
 const RISK_ORDER = { high: 0, medium: 1, low: 2 };
 // 구역 이동 줄(sticky nav)에 나오는 카드 순서
 const SECTIONS = [
-  ['summary-card', '요약'], ['followups-card', '후속 확인'], ['graph-card', '관계도'], ['cliques-card', '친한 무리'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
+  ['summary-card', '요약'], ['followups-card', '후속 확인'], ['graph-card', '관계도'], ['known-card', '아는 사이'], ['cliques-card', '친한 무리'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
   ['history-card', '회차별 변화'], ['students-card', '학생 목록'], ['memo-card', '메모·규칙'],
 ];
 const nameOf = (id) => state?.stats[id]?.name || '?';
+// 🌱 새 학기 첫 조사(반이 바뀌고 처음 하는 조사): 좋은 · 안 좋은 사이는 '예전' 사이이고, '그냥 아는 사이'가 따로 있어요
+const isIntroRound = () => state?.round?.kind === 'intro';
+const relLabel = (type) => (isIntroRound() && type !== 'know' ? `예전에 ${TYPE_LABEL[type]}` : TYPE_LABEL[type] || type);
+const knownOf = (from, to) => (state?.known || []).find((k) => k.from === from && k.to === to) || null;
+/** 관계도에 그릴 화살표: 좋은 · 안 좋은 사이 + (새 학기 첫 조사) 그냥 아는 사이 */
+function graphRelations() {
+  if (!isIntroRound()) return state.relations;
+  const know = (state.known || []).filter((k) => k.quality === 'know')
+    .map((k) => ({ from: k.from, to: k.to, type: 'know', tags: [], tagLabels: k.howLabels, reason: k.note, updatedAt: k.updatedAt }));
+  return [...state.relations, ...know];
+}
+/** 관계도 상자의 연결 수: 새 학기 첫 조사에서는 '그냥 아는 사이' 화살표도 함께 세요 (그래야 아는 친구가 많은 학생이 가운데로 와요) */
+function graphStats() {
+  if (!isIntroRound()) return state.stats;
+  const extra = {};
+  for (const k of state.known || []) {
+    if (k.quality !== 'know') continue;
+    extra[k.from] = (extra[k.from] || 0) + 1;
+    extra[k.to] = (extra[k.to] || 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(state.stats).map(([id, st]) => [id, extra[id] ? { ...st, degree: st.degree + extra[id] } : st]));
+}
 const rolesPageUrl = () => `/t/${encodeURIComponent(adminToken)}/roles?round=${encodeURIComponent(state.round.id)}`;
 const seatsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/seats?round=${encodeURIComponent(state.round.id)}`;
 const printPageUrl = () => `/t/${encodeURIComponent(adminToken)}/print`;
@@ -49,6 +71,7 @@ const HELP = {
   minCount: '학생이 제출하려면 꼭 표시해야 하는 수예요. 반 인원이 적으면 자동으로 줄어들어요.',
   analysis: '응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 더한 관심 점수예요(100점 척도, 현재 계산 범위 2~97점). 실제 갈등 발생 확률이나 진단이 아니에요. 먼저 살펴볼 관계를 정할 때 원래 응답과 함께 확인해요.',
   ai: '학생 이름을 S1, S2 같은 가명으로 바꿔 보내고 결과만 저장해요. 한 번에 30초~1분, 사용량(비용)이 들어요.',
+  known: '반이 바뀌고 처음 하는 조사에서 학생은 아는 친구를 고르고, 예전에 좋은 사이였는지 · 그냥 아는 사이인지 · 안 좋은 사이였는지와 어떻게 아는 사이인지를 표시해요. 예전에 좋은 · 안 좋은 사이는 관계도와 관심 점수에 그대로 쓰이고, 그냥 아는 사이는 회색 점선으로 보여요. 표시가 없는 두 학생은 서로 모르는 사이일 수 있어요.',
   cliques: '서로 좋은 사이는 2, 한쪽만 좋은 사이는 1로 치고(둘 중 한 명이라도 안 좋은 사이로 표시하면 연결 없음), 연결이 촘촘한 학생끼리 차례로 묶는 규칙이에요. 실제 무리와 다를 수 있으니 참고용으로 보세요. 같은 응답이면 항상 같은 결과가 나와요.',
   report: '관계도 분석 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서로 모아요. 화면에서 바로 인쇄하거나 PDF로 저장하고, 한글(.hwpx)·워드(.docx) 파일로도 내려받을 수 있어요.',
 };
@@ -168,12 +191,16 @@ function renderAll() {
   renderSummary();
   renderFollowups();
   graph.setGroups(ui.groupColors ? state.cliques?.groupOf : null);
-  graph.setData({ students: state.students, relations: state.relations, stats: state.stats });
+  if (ui.filter === 'know' && !isIntroRound()) ui.filter = 'all';   // '아는 사이만'은 새 학기 첫 조사에서만
+  renderLegend();
+  renderToolbar();
+  graph.setData({ students: state.students, relations: graphRelations(), stats: graphStats() });
   graph.setFilter(ui.filter);
   graph.setHighlight(ui.highlight);
   graph.setSelectedEdge(ui.selectedEdge);
   renderSidePanel();
   renderGroupLegend();
+  renderKnown();
   renderCliques();
   renderAnalysis();
   renderAiPanel();
@@ -213,13 +240,7 @@ function buildSkeleton() {
     el('section', { class: 'card', id: 'followups-card' }),
     el('section', { class: 'card', id: 'graph-card' }, [
       cardTitle('전체 관계도', '학생들이 표시한 좋은 사이(빨강)와 안 좋은 사이(검정)를 한 장에 모았어요. 상자끼리는 밀어내고 화살표는 당겨서, 연결이 많은 학생일수록 가운데에 모여요.'),
-      el('div', { class: 'legend' }, [
-        el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), '좋은 사이']),
-        el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), '안 좋은 사이']),
-        el('span', {}, [el('span', { class: 'line both' }), '서로 표시한 사이']),
-        el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
-        el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
-      ]),
+      el('div', { class: 'legend', id: 'graph-legend' }),
       el('div', { class: 'graph-toolbar', id: 'graph-toolbar' }),
       el('div', { class: 'legend group-legend', id: 'group-legend', hidden: true }),
       el('div', { class: 'grid-2 graph-grid' }, [
@@ -228,6 +249,7 @@ function buildSkeleton() {
       ]),
       el('p', { class: 'muted graph-help', text: '학생 상자에 마우스를 올리면 연결된 친구만 밝게 보여요. 누르면 그 학생이 가운데로 모이고, 끌어서 놓으면 출렁이며 자리를 잡아요. 화살표를 누르면 이유를 볼 수 있어요. 서로 표시한 사이는 양쪽 화살표 하나로 보여요. 빈 곳을 끌면 이동, 휠로 확대·축소. 상자 오른쪽 위 숫자는 받은·준 관계 수예요(서로 표시한 사이는 2로 세요). 움직임이 없으면 툴바의 🫧 움직임 버튼을 켜 보세요(윈도우 애니메이션 효과를 끈 컴퓨터는 처음에 꺼져 있어요).' }),
     ]),
+    el('section', { class: 'card', id: 'known-card', hidden: true }),
     el('section', { class: 'card', id: 'cliques-card' }),
     el('section', { class: 'card', id: 'analysis-card' }),
     el('section', { class: 'card ai-panel', id: 'ai-card' }),
@@ -288,6 +310,9 @@ function renderNav() {
   set('nav-groups', groupsPageUrl());
   set('nav-print', printPageUrl());
   set('nav-report', reportPageUrl());
+  // '아는 사이'는 새 학기 첫 조사 회차를 볼 때만 나와요
+  const knownLink = document.querySelector('#section-nav .nav-link[data-target="known-card"]');
+  if (knownLink) knownLink.hidden = !isIntroRound();
 }
 
 /** 붙어 다니는 줄의 높이를 CSS 변수로 알려 줘요 (카드 scroll-margin, 학생 표 머리글 위치에 사용). */
@@ -324,7 +349,7 @@ function updateActiveNav() {
   let active = SECTIONS[0][0];
   for (const [id] of SECTIONS) {
     const card = document.getElementById(id);
-    if (card && card.getBoundingClientRect().top <= line) active = id;
+    if (card && !card.hidden && card.getBoundingClientRect().top <= line) active = id;
   }
   if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) active = SECTIONS[SECTIONS.length - 1][0];
   if (active !== ui.activeSection || !nav.querySelector('.nav-link.active')) setActiveNav(active);
@@ -349,7 +374,7 @@ function markSelectedRow() {
 function renderToolbar() {
   const bar = document.getElementById('graph-toolbar');
   setChildren(bar,
-    el('div', { class: 'seg', role: 'group', 'aria-label': '보여 줄 화살표' }, [['all', '전체'], ['good', '좋은 사이만'], ['bad', '안 좋은 사이만']].map(([f, label]) => el('button', {
+    el('div', { class: 'seg', role: 'group', 'aria-label': '보여 줄 화살표' }, [['all', '전체'], ['good', '좋은 사이만'], ['bad', '안 좋은 사이만'], ...(isIntroRound() ? [['know', '그냥 아는 사이만']] : [])].map(([f, label]) => el('button', {
       type: 'button', class: `btn small ${ui.filter === f ? 'primary' : ''}`, text: label, 'aria-pressed': ui.filter === f ? 'true' : 'false',
       onClick: () => { ui.filter = f; renderToolbar(); graph.setFilter(f); },
     }))),
@@ -376,6 +401,68 @@ function renderToolbar() {
 /** 움직임 켬/끔 선택을 이 브라우저에 남겨요. 저장이 막혀 있어도(시크릿 창 등) 토글 자체는 동작해요. */
 function saveGraphMotion(on) {
   try { localStorage.setItem(GRAPH_MOTION_KEY, on ? 'on' : 'off'); } catch { /* 저장 못 해도 보는 데는 지장 없음 */ }
+}
+
+// ---------- 관계도 범례 (새 학기 첫 조사면 '예전' 사이와 그냥 아는 사이를 함께 안내) ----------
+function renderLegend() {
+  const box = document.getElementById('graph-legend');
+  if (!box) return;
+  const intro = isIntroRound();
+  setChildren(box,
+    el('span', {}, [el('span', { class: 'line', style: { background: 'var(--red)' } }), relLabel('good')]),
+    el('span', {}, [el('span', { class: 'line', style: { background: 'var(--black)' } }), relLabel('bad')]),
+    intro ? el('span', { id: 'legend-know' }, [el('span', { class: 'line know' }), '그냥 아는 사이']) : null,
+    el('span', {}, [el('span', { class: 'line both' }), '서로 표시한 사이']),
+    el('span', {}, [el('span', { class: 'sw', style: { background: 'var(--node-fill)', border: '2px solid var(--orange)' } }), '연결이 가장 많은 학생']),
+    el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
+  );
+}
+
+// ---------- 아는 사이 (새 학기 첫 조사) ----------
+function renderKnown() {
+  const card = document.getElementById('known-card');
+  if (!card) return;
+  const ks = state.knownSummary;
+  card.hidden = !isIntroRound() || !ks;
+  if (card.hidden) return setChildren(card);
+  const known = state.known || [];
+  const chip = (id) => el('button', {
+    type: 'button', class: 'chip clique-member', text: nameOf(id), title: '관계도에서 이 학생 보기',
+    onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight([id], id); scrollToGraph(); },
+  });
+  const pending = state.students.length - ks.submittedCount;
+  const QUALITY_ICON = { good: '❤️', bad: '⚡', know: '' };
+  const row = (s) => {
+    const mine = known.filter((k) => k.from === s.id);
+    const per = ks.students[s.id] || { knows: 0, knownBy: 0, mutual: 0 };
+    return el('tr', { dataset: { student: s.id } }, [
+      el('td', {}, [el('a', { href: '#', text: s.name, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); scrollToGraph(); } })]),
+      el('td', { class: 'num', text: s.submitted ? `${per.knows}명` : '–' }),
+      el('td', { class: 'num', text: `${per.knownBy}명` }),
+      el('td', { class: 'known-list', text: !s.submitted ? '(미제출)' : mine.length ? mine.map((k) => `${nameOf(k.to)}${QUALITY_ICON[k.quality] || ''}`).join(', ') : '아는 친구 없음' }),
+    ]);
+  };
+  setChildren(card,
+    cardTitle('아는 사이', '새 학기 첫 조사에서 학생이 "아는 친구"로 고른 표시예요. 새 반에 아는 친구가 없는 학생을 먼저 살펴볼 수 있어요.', el('span', { class: 'badge blue', text: '🌱 새 학기 첫 조사' }), HELP.known),
+    el('div', { class: 'stat-row', style: { marginBottom: '12px' } }, [
+      stat('아는 사이 표시', `${ks.total}개`, `서로 아는 사이 ${ks.mutualPairs}쌍`),
+      stat('아는 친구가 없는 학생', `${ks.knowsNobody.length}명`, '제출한 학생 가운데'),
+      stat('아무도 안다고 하지 않은 학생', `${ks.knownByNobody.length}명`, ks.submittedCount >= 2 ? '새로 온 학생일 수 있어요' : '2명 이상 제출하면 계산해요'),
+    ]),
+    pending > 0 ? el('p', { class: 'muted', text: `아직 ${pending}명이 제출하지 않았어요. 모두 제출하면 달라질 수 있어요.` }) : null,
+    ks.knowsNobody.length ? el('div', { class: 'section-label', text: `아는 친구가 없다고 답한 학생 (${ks.knowsNobody.length}명)` }) : null,
+    ks.knowsNobody.length ? el('div', { class: 'chips', id: 'knows-nobody' }, ks.knowsNobody.map(chip)) : null,
+    ks.knownByNobody.length ? el('div', { class: 'section-label', text: `아무도 안다고 표시하지 않은 학생 (${ks.knownByNobody.length}명)` }) : null,
+    ks.knownByNobody.length ? el('div', { class: 'chips', id: 'known-by-nobody' }, ks.knownByNobody.map(chip)) : null,
+    ks.how.length ? el('div', { class: 'section-label', text: '어떻게 아는 사이인지' }) : null,
+    ks.how.length ? el('div', { class: 'chips' }, ks.how.map((h) => el('span', { class: 'chip', text: `${h.label} ${h.count}` }))) : null,
+    el('div', { class: 'section-label', text: '학생별 아는 친구' }),
+    el('div', { class: 'table-wrap' }, [el('table', { class: 'table known-table' }, [
+      el('thead', {}, [el('tr', {}, [el('th', { text: '이름' }), el('th', { class: 'num', text: '내가 아는' }), el('th', { class: 'num', text: '나를 아는' }), el('th', { text: '아는 친구 (내가 표시)' })])]),
+      el('tbody', {}, state.students.map(row)),
+    ])]),
+    el('p', { class: 'muted', text: '이름 옆 ❤️는 예전에 좋은 사이, ⚡는 예전에 안 좋은 사이로 표시한 친구예요. 표시가 없으면 그냥 아는 사이예요.' }),
+  );
 }
 
 // ---------- 친한 무리 (관계도 색 · 카드) ----------
@@ -479,6 +566,21 @@ function suggestRoundName() {
   return base;
 }
 
+/**
+ * 새 회차 시작. kind 를 주지 않으면 3월(한국 시간)에만 "새 학기 첫 조사로 시작할까요?"를 한 번 물어봐요.
+ * 새 학기 첫 조사 = 반이 바뀌고 처음 하는 조사 (아는 친구 · 예전 사이 표시)
+ */
+function startRound(kind = null) {
+  const name = prompt(`${kind === 'intro' ? '🌱 새 학기 첫 조사로 시작해요. ' : ''}새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요. 같은 달에 다시 조사하면 "2026년 10월 2차"처럼 제안돼요.`, suggestRoundName());
+  if (name === null || !name.trim()) return;
+  let chosen = kind;
+  if (!chosen) {
+    const march = new Date(Date.now() + 9 * 3600 * 1000).getUTCMonth() === 2;
+    chosen = march && confirm('3월이에요. 반이 바뀌고 처음 하는 조사라면 "새 학기 첫 조사"로 시작할 수 있어요.\n(학생이 아는 친구를 고르고, 예전에 어떤 사이였는지 표시해요)\n\n[확인] 새 학기 첫 조사로 시작\n[취소] 평소 조사(좋은 사이 · 안 좋은 사이)로 시작') ? 'intro' : 'regular';
+  }
+  action(api(`${base}/rounds`, { method: 'POST', body: { name: name.trim(), kind: chosen } }), `${name.trim()} ${chosen === 'intro' ? '새 학기 첫 조사' : '조사'}를 시작했어요.`);
+}
+
 function closeRoundMenu() {
   ui.roundMenu = false;
   const menu = document.getElementById('round-menu');
@@ -495,7 +597,7 @@ function renderHeader() {
   const assignment = state.roleAssignment;
   const roundSelect = el('select', { class: 'select', 'aria-label': '보고 있는 회차' }, rounds.map((r) => el('option', {
     value: r.id, selected: r.id === round.id ? true : null,
-    text: `${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}${soon.has(r.id) ? ` · ⚠️ ${fmtDay(r.expiresAt)} 삭제 예정` : ''}`,
+    text: `${r.kind === 'intro' ? '🌱 ' : ''}${r.name} · ${r.open ? '진행 중' : '마감'} · 제출 ${r.submitted}/${r.total}${soon.has(r.id) ? ` · ⚠️ ${fmtDay(r.expiresAt)} 삭제 예정` : ''}`,
   })));
   roundSelect.addEventListener('change', () => { ui.roundId = roundSelect.value; closePopover(); ui.selectedEdge = null; ui.highlight = null; ui.panelStudent = null; load(); });
 
@@ -516,6 +618,14 @@ function renderHeader() {
         if (name === null || !name.trim() || name.trim() === round.name) return;
         action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { name: name.trim() } }), '이름을 바꿨어요.');
       }),
+      isCurrent && round.open ? menuItem(isIntroRound() ? '평소 조사로 바꾸기' : '🌱 새 학기 첫 조사로 바꾸기', () => {
+        const toIntro = !isIntroRound();
+        if (!confirm(toIntro
+          ? `${round.name} 회차를 "새 학기 첫 조사"로 바꿀까요?\n\n학생들은 아는 친구를 고르고, 예전에 좋은 사이였는지 · 그냥 아는 사이인지 · 안 좋은 사이였는지를 표시해요. 꼭 표시해야 하는 수는 없어요.\n(응답이 하나도 없을 때만 바꿀 수 있어요.)`
+          : `${round.name} 회차를 평소 조사(좋은 사이 · 안 좋은 사이)로 바꿀까요?\n(응답이 하나도 없을 때만 바꿀 수 있어요.)`)) return;
+        action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'PATCH', body: { kind: toIntro ? 'intro' : 'regular' } }), toIntro ? '새 학기 첫 조사로 바꿨어요.' : '평소 조사로 바꿨어요.');
+      }) : null,
+      menuItem('🌱 새 학기 첫 조사로 새 회차 시작', () => startRound('intro')),
       rounds.length > 1 ? menuItem('회차 삭제', () => {
         if (!confirm(`${round.name} 회차와 그 응답을 모두 지울까요? 되돌릴 수 없어요.`)) return;
         action(api(`${base}/rounds/${encodeURIComponent(round.id)}`, { method: 'DELETE' }), '회차를 지웠어요.');
@@ -527,7 +637,7 @@ function renderHeader() {
     el('div', { class: 'header-top' }, [
       el('div', { class: 'header-title' }, [
         el('h1', { text: room.name }),
-        el('p', { class: 'muted header-meta', text: `만든 날짜 ${fmtDate(room.createdAt)} · 꼭 표시: 좋은 사이 ${room.minGood}명, 안 좋은 사이 ${room.minBad}명 · 회차 ${rounds.length}개` }),
+        el('p', { class: 'muted header-meta', text: `만든 날짜 ${fmtDate(room.createdAt)} · 꼭 표시: 좋은 사이 ${room.minGood}명, 안 좋은 사이 ${room.minBad}명${isIntroRound() ? ' (새 학기 첫 조사에는 적용하지 않아요)' : ''} · 회차 ${rounds.length}개` }),
       ]),
       el('div', { class: 'btn-row header-actions' }, [
         el('a', { class: 'btn primary', href: printPageUrl(), target: '_blank', text: '학생 QR 카드 인쇄' }),
@@ -553,17 +663,15 @@ function renderHeader() {
       isCurrent
         ? el('span', { class: `badge ${round.open ? 'green' : 'gray'}`, text: round.open ? '학생이 지금 답하는 회차' : '마감됨' })
         : el('span', { class: 'badge warn', text: '지난 회차 (읽기 전용)' }),
+      isIntroRound() ? el('span', { class: 'badge blue', id: 'intro-badge', title: '반이 바뀌고 처음 하는 조사: 아는 친구와 예전 사이를 표시해요', text: '🌱 새 학기 첫 조사' }) : null,
       assignment?.published
         ? el('span', { class: 'badge green', id: 'roles-published-badge', title: `${fmtDate(assignment.publishedAt)} 공개 · 학생 페이지에 자기 역할이 보여요`, text: '1인 1역 공개됨' })
         : (assignment ? el('span', { class: 'badge gray', id: 'roles-draft-badge', title: '배정 초안이 있지만 아직 학생에게 공개하지 않았어요', text: '1인 1역 초안' }) : null),
       el('span', { class: 'spacer' }),
-      el('button', { type: 'button', class: 'btn small primary', text: '새 회차 시작', onClick: () => {
-        const name = prompt('새 회차 이름을 입력하세요. 지금 회차는 자동으로 마감되고, 학생들은 빈 화면에서 새로 표시해요. 학생 QR은 그대로 쓸 수 있어요. 같은 달에 다시 조사하면 "2026년 10월 2차"처럼 제안돼요.', suggestRoundName());
-        if (name === null || !name.trim()) return;
-        action(api(`${base}/rounds`, { method: 'POST', body: { name: name.trim() } }), `${name.trim()} 조사를 시작했어요.`);
-      } }),
+      el('button', { type: 'button', class: 'btn small primary', id: 'new-round-btn', text: '새 회차 시작', onClick: () => startRound() }),
       roundMenu,
     ]),
+    isIntroRound() ? el('div', { class: 'alert info', id: 'intro-banner', text: '🌱 이 회차는 반이 바뀌고 처음 하는 "새 학기 첫 조사"예요. 학생은 아는 친구를 고르고 예전에 어떤 사이였는지 표시해요. 이 화면의 좋은 사이 · 안 좋은 사이는 작년이나 그 전의 사이를 뜻하고, 표시가 없는 학생끼리는 서로 모르는 사이일 수 있어요. 다음 달부터는 "새 회차 시작"으로 평소 조사를 열면 돼요.' }) : null,
     isCurrent && !round.open ? el('div', { class: 'alert warn', text: `${round.name} 조사가 마감된 상태예요. 학생 페이지는 읽기 전용이에요. 다음 조사를 하려면 "새 회차 시작"을 누르세요.` }) : null,
     retentionAlert(),
     state.notice ? el('div', { class: 'alert error', text: `⚠️ ${state.notice}` }) : null,
@@ -660,18 +768,22 @@ function renderFollowups() {
 function showEdgePopover(edge, pt) {
   closePopover();
   const container = document.getElementById('graph-container');
-  const reverse = state.relations.find((r) => r.from === edge.to && r.to === edge.from);
+  const reverse = graphRelations().find((r) => r.from === edge.to && r.to === edge.from);
+  // 새 학기 첫 조사: 좋은 · 안 좋은 사이에도 '어떻게 아는 사이'를 함께 보여 줘요
+  const how = edge.type === 'know' ? edge.tagLabels : (isIntroRound() ? knownOf(edge.from, edge.to)?.howLabels || [] : []);
+  const chipLabels = edge.type === 'know' ? [] : edge.tagLabels;
   const box = el('div', { class: 'popover' }, [
     el('button', { type: 'button', class: 'close', text: '×', 'aria-label': '닫기', onClick: () => { closePopover(); ui.selectedEdge = null; graph.setSelectedEdge(null); } }),
-    el('div', { class: 'row' }, [el('b', { text: `${nameOf(edge.from)} → ${nameOf(edge.to)}` }), ' ', el('span', { class: `badge ${edge.type}`, text: `${TYPE_ICON[edge.type]} ${TYPE_LABEL[edge.type]}` })]),
-    edge.tagLabels.length ? el('div', { class: 'chips row' }, edge.tagLabels.map((t) => el('span', { class: `chip selected ${edge.type === 'bad' ? 'bad-theme' : 'good-theme'}`, text: t, style: { padding: '4px 10px', fontSize: '13px' } }))) : null,
-    edge.reason ? el('div', { class: 'reason-text', text: edge.reason }) : (!edge.tagLabels.length ? el('div', { class: 'muted', text: '적은 이유가 없어요.' }) : null),
+    el('div', { class: 'row' }, [el('b', { text: `${nameOf(edge.from)} → ${nameOf(edge.to)}` }), ' ', el('span', { class: `badge ${edge.type}`, text: `${TYPE_ICON[edge.type]} ${relLabel(edge.type)}` })]),
+    chipLabels.length ? el('div', { class: 'chips row' }, chipLabels.map((t) => el('span', { class: `chip selected ${edge.type === 'bad' ? 'bad-theme' : 'good-theme'}`, text: t, style: { padding: '4px 10px', fontSize: '13px' } }))) : null,
+    how.length ? el('div', { class: 'chips row popover-how' }, how.map((t) => el('span', { class: 'chip selected know-theme', text: t, style: { padding: '4px 10px', fontSize: '13px' } }))) : null,
+    edge.reason ? el('div', { class: 'reason-text', text: edge.reason }) : (!chipLabels.length && !how.length ? el('div', { class: 'muted', text: '적은 이유가 없어요.' }) : null),
     el('div', { class: 'muted', style: { marginTop: '6px', fontSize: '13px' }, text: `수정 ${fmtDate(edge.updatedAt)}` }),
     reverse
       ? el('div', { class: 'row', style: { marginTop: '8px', borderTop: '1px solid var(--gray-200)', paddingTop: '8px' } }, [
         el('span', { class: 'muted', text: '반대 방향: ' }),
         el('b', { text: `${nameOf(reverse.from)} → ${nameOf(reverse.to)}` }), ' ',
-        el('span', { class: `badge ${reverse.type}`, text: `${TYPE_ICON[reverse.type]} ${TYPE_LABEL[reverse.type]}` }),
+        el('span', { class: `badge ${reverse.type}`, text: `${TYPE_ICON[reverse.type]} ${relLabel(reverse.type)}` }),
         el('button', { type: 'button', class: 'btn small', style: { marginLeft: '6px' }, text: '보기', onClick: () => { ui.selectedEdge = `${reverse.from}>${reverse.to}`; graph.setSelectedEdge(ui.selectedEdge); showEdgePopover(reverse, pt); } }),
       ])
       : el('div', { class: 'muted', style: { marginTop: '8px', fontSize: '13px' }, text: `${nameOf(edge.to)}은(는) ${nameOf(edge.from)}을(를) 표시하지 않았어요.` }),
@@ -696,12 +808,13 @@ function renderSidePanel() {
   const panel = document.getElementById('side-panel');
   const id = ui.panelStudent;
   if (!id || !state.stats[id]) {
-    const top = [...state.students].sort((a, b) => state.stats[b.id].degree - state.stats[a.id].degree).slice(0, 5);
+    const degrees = graphStats();
+    const top = [...state.students].sort((a, b) => degrees[b.id].degree - degrees[a.id].degree).slice(0, 5);
     setChildren(panel,
       el('h3', { text: '학생을 선택하세요' }),
       el('p', { class: 'muted', text: '관계도에서 학생 상자를 누르거나 아래 이름을 누르면 그 학생의 관계와 이유를 자세히 볼 수 있어요.' }),
       el('div', { class: 'section-label', text: '연결이 많은 학생' }),
-      el('ul', {}, top.map((s) => el('li', {}, [el('a', { href: '#', text: `${s.name} (${state.stats[s.id].degree})`, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } })]))),
+      el('ul', {}, top.map((s) => el('li', {}, [el('a', { href: '#', text: `${s.name} (${degrees[s.id].degree})`, onClick: (e) => { e.preventDefault(); setHighlight([s.id], s.id); } })]))),
     );
     return;
   }
@@ -709,9 +822,15 @@ function renderSidePanel() {
   const risk = state.analysis.studentRisk[id];
   const myPairs = state.analysis.pairs.filter((p) => (p.a === id || p.b === id) && (p.ab === 'bad' || p.ba === 'bad'));
   const relOf = (from, to) => state.relations.find((r) => r.from === from && r.to === to);
+  const myKnown = (state.known || []).filter((k) => k.from === id);
+  const knownMe = (state.known || []).filter((k) => k.to === id);
+  const knownLine = (k, other) => {
+    const detail = [...k.howLabels, k.note].filter(Boolean).join(', ');
+    return el('li', {}, [el('a', { href: '#', text: nameOf(other), onClick: (e) => { e.preventDefault(); setHighlight([other]); } }), detail ? el('span', { class: 'muted', text: ` · ${detail}` }) : null]);
+  };
   const line = (from, to) => {
     const r = relOf(from, to);
-    const detail = [...r.tagLabels, r.reason].filter(Boolean).join(', ');
+    const detail = [...r.tagLabels, ...(knownOf(from, to)?.howLabels || []), r.reason].filter(Boolean).join(', ');
     return el('li', {}, [el('a', { href: '#', text: nameOf(from === id ? to : from), onClick: (e) => { e.preventDefault(); setHighlight([from === id ? to : from]); } }), detail ? el('span', { class: 'muted', text: ` · ${detail}` }) : null]);
   };
   setChildren(panel,
@@ -732,10 +851,15 @@ function renderSidePanel() {
     ]),
     rolesInfoBox(id),
     state.history.trend.length > 1 ? el('div', { class: 'muted trend-line', text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
-    section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),
-    section('나를 안 좋은 사이로 표시한 친구', st.inBad.map((f) => line(f, id))),
-    section('내가 좋은 사이로 표시한 친구', st.outGood.map((t) => line(id, t))),
-    section('내가 안 좋은 사이로 표시한 친구', st.outBad.map((t) => line(id, t))),
+    ...(isIntroRound() ? [
+      el('div', { class: 'alert info', id: 'panel-intro', text: `🌱 새 학기 첫 조사예요. 내가 안다고 한 친구 ${myKnown.length}명 · 나를 안다고 한 친구 ${knownMe.length}명. 아래 좋은 · 안 좋은 사이는 '예전' 사이예요.` }),
+      section('내가 그냥 아는 사이로 표시한 친구', myKnown.filter((k) => k.quality === 'know').map((k) => knownLine(k, k.to))),
+      section('나를 그냥 아는 사이로 표시한 친구', knownMe.filter((k) => k.quality === 'know').map((k) => knownLine(k, k.from))),
+    ] : []),
+    section(`나를 ${relLabel('good')}로 표시한 친구`, st.inGood.map((f) => line(f, id))),
+    section(`나를 ${relLabel('bad')}로 표시한 친구`, st.inBad.map((f) => line(f, id))),
+    section(`내가 ${relLabel('good')}로 표시한 친구`, st.outGood.map((t) => line(id, t))),
+    section(`내가 ${relLabel('bad')}로 표시한 친구`, st.outBad.map((t) => line(id, t))),
     myPairs.length ? el('div', {}, [
       el('div', { class: 'section-label', text: '관계 관심 점수' }),
       el('ul', {}, myPairs.map((p) => el('li', {}, [

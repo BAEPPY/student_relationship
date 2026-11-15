@@ -418,7 +418,7 @@ export class RelationGraph {
     this.nodeEls = new Map();
     this.edgeEls = new Map();
     const defs = svgEl('defs');
-    for (const [id, color] of [['g-arrow-good', '#ef5b6b'], ['g-arrow-bad', '#2d2f3a']]) {
+    for (const [id, color] of [['g-arrow-good', '#ef5b6b'], ['g-arrow-bad', '#2d2f3a'], ['g-arrow-know', '#8a94a6']]) {
       const m = svgEl('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse', markerUnits: 'strokeWidth' });
       m.append(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
       defs.append(m);
@@ -441,7 +441,7 @@ export class RelationGraph {
       const mutual = !!r2 && r2.type === r.type && r.from !== r.to;
       const g = svgEl('g', { class: `edge ${r.type}${mutual ? ' mutual' : ''}` });
       g.dataset.key = key;
-      const marker = `url(#${r.type === 'good' ? 'g-arrow-good' : 'g-arrow-bad'})`;
+      const marker = `url(#g-arrow-${r.type === 'good' || r.type === 'know' ? r.type : 'bad'})`;   // know = 새 학기 첫 조사의 '그냥 아는 사이'
       // marker 가 orient="auto-start-reverse" 라 시작 쪽 화살촉은 자동으로 뒤집혀 양쪽 다 바깥을 가리켜요
       const line = svgEl('path', { class: 'line', 'marker-end': marker, 'marker-start': mutual ? marker : null });
       const hit = svgEl('path', { class: 'hit' });

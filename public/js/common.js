@@ -185,13 +185,13 @@ export function helpTip(text, { title } = {}) {
   return btn;
 }
 
-export const TYPE_LABEL = { good: '좋은 사이', bad: '안 좋은 사이' };
+export const TYPE_LABEL = { good: '좋은 사이', bad: '안 좋은 사이', know: '그냥 아는 사이' };
 // 회차 이름("2026년 10월 2차")에서 달 이름("10월")만 뽑아요. 못 읽으면 대신 쓸 말을 돌려줘요 (학생·선생님 화면 공용)
 export function monthLabelOf(name, fallback = '이번 달') {
   const m = /(\d{1,2})\s*월/.exec(name || '');
   return m ? `${m[1]}월` : fallback;
 }
-export const TYPE_ICON = { good: '❤️', bad: '⚡' };
+export const TYPE_ICON = { good: '❤️', bad: '⚡', know: '🙂' };
 
 // 간단한 로컬 저장소 (교사가 만든 교실 링크 기억용)
 export const savedRooms = {

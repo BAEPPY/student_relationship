@@ -5,6 +5,7 @@ const nameInput = document.getElementById('room-name');
 const studentsInput = document.getElementById('students');
 const minGoodInput = document.getElementById('min-good');
 const minBadInput = document.getElementById('min-bad');
+const introInput = document.getElementById('intro-kind');   // 🌱 새 학기 첫 조사로 시작하기
 const errorBox = document.getElementById('create-error');
 const createBtn = document.getElementById('create-btn');
 const demoBtn = document.getElementById('demo-btn');
@@ -24,6 +25,12 @@ function updateCount() {
   countLabel.textContent = n ? `현재 ${n}명` : '';
 }
 studentsInput.addEventListener('input', updateCount);
+
+// 3월(한국 시간)에는 '새 학기 첫 조사로 시작하기'를 미리 켜 둬요. 선생님이 끌 수 있어요
+if (new Date(Date.now() + 9 * 3600 * 1000).getUTCMonth() === 2) {
+  introInput.checked = true;
+  document.getElementById('intro-kind-hint').textContent = '3월이라 미리 켜 두었어요.';
+}
 
 function showError(msg) {
   errorBox.textContent = msg;
@@ -162,12 +169,14 @@ function carryOver(info, withRoster) {
   minGoodInput.value = info.minGood;
   minBadInput.value = info.minBad;
   if (withRoster) { studentsInput.value = info.students.join('\n'); updateCount(); }
+  // 새 학생들과 시작하는 새 학년 교실이면 첫 조사는 '새 학기 첫 조사'가 어울리고, 같은 학생들로 다시 시작하면 평소 조사예요 (선생님이 바꿀 수 있어요)
+  introInput.checked = !withRoster;
   carriedRoles = info.roles.length ? info.roles : null;
   renderCarried();
   showError('');
   document.getElementById('create-card').scrollIntoView({ behavior: 'smooth' });
   (withRoster ? nameInput : studentsInput).focus({ preventScroll: true });
-  toast(withRoster ? '지난 교실의 이름 · 명단 · 설정을 채웠어요. 확인하고 "교실 만들기"를 눌러 주세요.' : '교실 이름과 설정을 채웠어요. 새 학생 명단을 적고 "교실 만들기"를 눌러 주세요.', 5000);
+  toast(withRoster ? '지난 교실의 이름 · 명단 · 설정을 채웠어요. 확인하고 "교실 만들기"를 눌러 주세요.' : '교실 이름과 설정을 채우고 "새 학기 첫 조사로 시작하기"를 켰어요. 새 학생 명단을 적고 "교실 만들기"를 눌러 주세요.', 5000);
 }
 
 async function restoreFromFile(info, btn) {
@@ -254,9 +263,9 @@ form.addEventListener('submit', async (e) => {
   try {
     const room = await api('/api/rooms', {
       method: 'POST',
-      body: { name: nameInput.value, students: names, minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value), ...(carriedRoles?.length ? { roles: carriedRoles } : {}) },
+      body: { name: nameInput.value, students: names, minGood: Number(minGoodInput.value), minBad: Number(minBadInput.value), ...(introInput.checked ? { kind: 'intro' } : {}), ...(carriedRoles?.length ? { roles: carriedRoles } : {}) },
     });
-    showResult(room, { notes: [room.roleCount ? `1인 1역 역할 ${room.roleCount}개를 함께 가져왔어요. 선생님 페이지의 "1인 1역"에서 확인할 수 있어요.` : ''] });
+    showResult(room, { notes: [introInput.checked ? '🌱 첫 회차를 "새 학기 첫 조사"로 열었어요. 학생은 아는 친구와 예전 사이를 표시해요.' : '', room.roleCount ? `1인 1역 역할 ${room.roleCount}개를 함께 가져왔어요. 선생님 페이지의 "1인 1역"에서 확인할 수 있어요.` : ''] });
     carriedRoles = null;
     renderCarried();
     toast('교실을 만들었어요.');
