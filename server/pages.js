@@ -303,6 +303,7 @@ export const report = `<!doctype html>
         <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
         <a class="btn small" data-nav="print" target="_blank" href="#">🖨️ QR 인쇄</a>
         <a class="btn small active" data-nav="report" href="#" aria-current="page">📑 보고서</a>
+        <a class="btn small" data-nav="studentReport" href="#">👤 학생 보고서</a>
         <a class="btn small" data-nav="groups" href="#">👥 모둠·짝</a>
         <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
       </nav>
@@ -316,6 +317,42 @@ export const report = `<!doctype html>
     <div class="card" id="loading">불러오는 중…</div>
   </main>
   <script type="module" src="/js/report.js"></script>
+</body>
+</html>
+`;
+
+export const studentReport = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학생별 상담 보고서 · 학생 관계 마인드맵</title>
+  <link rel="preload" href="/fonts/GangwonEduAll-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="report student-report">
+  <header class="topbar no-print">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="logo"></span>학생 관계 마인드맵</a>
+      <span class="badge blue">학생별 상담 보고서</span>
+      <nav class="page-nav" aria-label="선생님 페이지 이동">
+        <a class="btn small" data-nav="dashboard" id="back-link" href="#">🗺️ 관계도</a>
+        <a class="btn small active" data-nav="studentReport" href="#" aria-current="page">👤 학생 보고서</a>
+        <a class="btn small" data-nav="followups" href="#">📝 상담·후속 확인</a>
+        <a class="btn small" data-nav="report" href="#">📑 학급 보고서</a>
+        <a class="btn small orange" data-nav="seats" href="#">🪑 자리 배정</a>
+        <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
+      </nav>
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" id="print-btn">🖨️ 인쇄 / PDF</button>
+      <button type="button" class="btn" id="dl-hwpx" title="한글 2014 이상에서 열려요">📄 한글 파일</button>
+      <button type="button" class="btn" id="dl-docx" title="워드·한글 모두 열려요">📄 워드 파일</button>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <div class="card" id="loading">불러오는 중…</div>
+  </main>
+  <script type="module" src="/js/student-report.js"></script>
 </body>
 </html>
 `;
@@ -344,6 +381,7 @@ function teacherToolPage(title, script) {
         <a class="btn small orange" data-nav="seats" href="#">🪑 자리 배정</a>
         <a class="btn small green" data-nav="roles" href="#">🎒 1인 1역</a>
         <a class="btn small" data-nav="report" href="#">📑 보고서</a>
+        <a class="btn small" data-nav="studentReport" href="#">👤 학생 보고서</a>
       </nav>
     </div>
   </header>

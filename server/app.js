@@ -11,13 +11,14 @@ import { analyzeHistory, historyForAi } from './history.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
-import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles, aiAssignSeats } from './ai.js';
+import { DEFAULT_MODEL, aiEnabled, createAiClient, aiAnalyzeRelationships, aiAssignRoles, aiAssignSeats, aiStudentReport } from './ai.js';
 import { repairSeating, deskmatePairs } from './seating.js';
 import * as pages from './pages.js';
 import { findStudents } from '../public/js/notes-parser.js';
 import { extractDocument, documentToText, extractRoles, extractRoster, DOC_LIMITS } from './docfiles.js';
 import { buildRolesHwpx, buildRolesDocx, makeHwpxDocument, makeDocxDocument } from './export-docs.js';
 import { reportDocument } from './report.js';
+import { studentReportDocument, studentTimeline, studentFollowups, studentReportFingerprint } from './student-report.js';
 import { validateDraft, studentDraftView, saveStudentDraft, clearStudentDraft, removeStudentFromDrafts } from './student-drafts.js';
 import { seatingView, saveRoundSeating, removeStudentSeating, walkSeatings } from './seating-history.js';
 import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
@@ -345,6 +346,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   app.get('/t/:adminToken/groups', page(pages.groups));
   app.get('/t/:adminToken/followups', page(pages.followups));
   app.get('/t/:adminToken/report', (req, res) => res.type('html').send(pages.report || pages.notFound));
+  app.get('/t/:adminToken/student-report', page(pages.studentReport));
   app.get('/s/:token', page(pages.student));
   app.use(express.static(PUBLIC_DIR, { index: false }));
 
@@ -650,6 +652,11 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       removeStudentSeating(room, student.id);
       removeStudentGroups(room, student);
       removeStudentFollowups(room, student);
+      if (room.studentReports) {
+        delete room.studentReports[student.id];   // 그 학생의 AI 상담 도움말
+        const name = String(student.name || '').trim();
+        if (name.length >= 2) for (const report of Object.values(room.studentReports)) mapStudentReportTexts(report, (t) => t.split(name).join('(삭제된 학생)'));
+      }
     });
     res.json(teacherView(req, room));
   });
@@ -797,7 +804,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       return { ...roundView(r), relations: listRelations(rr), analysis: { ...analyzeConflicts(rr, stats), context: captureAnalysisContext(room, r) }, profiles: r.profiles || {}, applications: r.applications || {}, closerFriends: r.closerFriends || {}, roleAssignment: r.roleAssignment || null, aiAnalysis: aiAnalysisView(room, r, historyCache), ...seatingView(room, r), aiSeating: aiSeatingView(room, r) };
     });
     res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(room.name)}.json`);
-    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [] });
+    res.json({ exportedAt: new Date().toISOString(), room: view.room, students: view.students.map(({ token, url, ...s }) => s), rounds, history: view.history, teacherNotes: view.teacherNotes, seating: view.seating, roles: view.roles, roleHistory: view.roleHistory, groupActivities: room.groupActivities || [], followups: room.followups || [], studentReports: room.studentReports || {} });
   });
 
   app.get('/api/teacher/:adminToken/export.csv', async (req, res) => {
@@ -1067,6 +1074,65 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
   };
   app.get('/api/teacher/:adminToken/report.hwpx', exportReport('hwpx'));
   app.get('/api/teacher/:adminToken/report.docx', exportReport('docx'));
+
+  // 학생별 상담 보고서: 한 학생의 회차별 변화 · 관계 상세 · 돌아보기 · 성향 · 역할 · AI 학급 분석 발췌 · 상담 기록 · AI 상담 도움말
+  const studentReportFor = (req, room) => {
+    const student = findStudent(room, req.params.studentId);
+    const doc = studentReportDocument({ room, studentId: student.id, followups: req.query.followups !== '0', ai: req.query.ai !== '0' });
+    const saved = room.studentReports?.[student.id] || null;
+    const aiReport = saved ? { createdAt: saved.createdAt || null, model: saved.model || null, truncated: Boolean(saved.truncated), stale: Boolean(saved.fingerprint) && saved.fingerprint !== studentReportFingerprint(room, student.id) } : null;
+    return { student, doc, aiReport };
+  };
+  const studentReportJson = (req, res, room) => {
+    const { student, doc, aiReport } = studentReportFor(req, room);
+    res.set('Cache-Control', 'no-store').json({ ...doc, student: { id: student.id, name: student.name }, aiReport, ai: { enabled: aiOn() } });
+  };
+  app.get('/api/teacher/:adminToken/students/:studentId/report.json', async (req, res) => {
+    studentReportJson(req, res, await requireRoom(req));
+  });
+  const exportStudentReport = (kind) => async (req, res) => {
+    const room = await requireRoom(req);
+    const { student, doc } = studentReportFor(req, room);
+    const file = kind === 'hwpx' ? makeHwpxDocument(doc) : makeDocxDocument(doc);
+    const base = `학생보고서_${student.name}`.replace(/[\\/:*?"<>|]+/g, ' ').trim();
+    res.setHeader('Content-Type', kind === 'hwpx' ? 'application/hwp+zip' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="student-report.${kind}"; filename*=UTF-8''${encodeURIComponent(base)}.${kind}`);
+    res.send(file);
+  };
+  app.get('/api/teacher/:adminToken/students/:studentId/report.hwpx', exportStudentReport('hwpx'));
+  app.get('/api/teacher/:adminToken/students/:studentId/report.docx', exportStudentReport('docx'));
+
+  // AI 상담 도움말: 이 학생의 회차별 자료(가명 처리)를 읽고 관심 둘 점 · 상담 방법 · 학부모 상담 멘트를 만들어 학생별로 보관합니다
+  app.post('/api/teacher/:adminToken/students/:studentId/ai-report', async (req, res) => {
+    const found = await requireRoom(req);
+    if (!aiOn()) throw bad('AI 상담 도움말을 쓰려면 서버에 ANTHROPIC_API_KEY 를 설정해 주세요.');
+    const student = findStudent(found, req.params.studentId);
+    const ai = makeAi();
+    const fingerprint = studentReportFingerprint(found, student.id);
+    const notes = found.teacherNotes || {};
+    const result = await aiStudentReport({
+      ai,
+      students: found.students.map((s) => ({ id: s.id, name: s.name })),
+      studentId: student.id,
+      timeline: studentTimeline(found, student.id),
+      memo: notes.students?.[student.id] || null,
+      rules: (notes.rules || []).filter((r) => r.a === student.id || r.b === student.id),
+      followups: studentFollowups(found, student.id),
+      roles: roomRoles(found),
+    });
+    const room = await mutateRoom(found, (room) => {
+      assertAiRosterUnchanged(found, room);
+      room.studentReports ||= {};
+      room.studentReports[student.id] = { ...result, fingerprint, createdAt: new Date().toISOString(), model: ai?.model || null };
+    });
+    studentReportJson(req, res, room);
+  });
+  app.delete('/api/teacher/:adminToken/students/:studentId/ai-report', async (req, res) => {
+    const found = await requireRoom(req);
+    findStudent(found, req.params.studentId);
+    const room = await mutateRoom(found, (room) => { delete room.studentReports?.[req.params.studentId]; });
+    studentReportJson(req, res, room);
+  });
 
   // 지난달(또는 어떤 달) 배정 기록 저장/수정
   app.put('/api/teacher/:adminToken/roles/history', async (req, res) => {
@@ -1342,6 +1408,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
         for (const f of s.roleFit || []) f.reason = swap(f.reason);
       }
     }
+    for (const report of Object.values(room.studentReports || {})) mapStudentReportTexts(report, swap);   // 학생별 AI 상담 도움말
     for (const round of room.rounds || []) {
       const b = round.aiSeating;
       if (!b) continue;
@@ -1350,6 +1417,16 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       for (const sid of Object.keys(b.explanations || {})) b.explanations[sid] = swap(b.explanations[sid]);
       b.warnings = (b.warnings || []).map(swap);
     }
+  }
+
+  /** 학생별 AI 상담 도움말의 모든 글에 fn 을 적용합니다 (이름 바꾸기·삭제 때 실명 정리용) */
+  function mapStudentReportTexts(report, fn) {
+    if (!report || typeof report !== 'object') return;
+    const f = (t) => (typeof t === 'string' ? fn(t) : t);
+    report.overview = f(report.overview); report.trend = f(report.trend); report.cautions = f(report.cautions);
+    for (const w of report.watchPoints || []) { w.title = f(w.title); w.detail = f(w.detail); }
+    if (report.counseling) { report.counseling.approach = f(report.counseling.approach); report.counseling.questions = (report.counseling.questions || []).map(f); report.counseling.tips = (report.counseling.tips || []).map(f); }
+    if (report.parentTalk) { report.parentTalk.opening = f(report.parentTalk.opening); report.parentTalk.points = (report.parentTalk.points || []).map(f); report.parentTalk.closing = f(report.parentTalk.closing); }
   }
 
   /** 삭제된 학생의 흔적을 AI 분석 결과에서 지웁니다. 자유 서술에 남은 이름은 '(삭제된 학생)'으로 바꿉니다. */

@@ -921,6 +921,17 @@ body.report .seat-box.zone-ac.climate-cool { box-shadow: inset 0 0 0 2px #9fd3f7
 body.report .seat-box.zone-ac.climate-warm { box-shadow: inset 0 0 0 2px #ffc08a; }
 body.report .page-break { height: 0; margin: 0; }
 body.report .report-error { margin-top: 8px; }
+/* 학생별 상담 보고서: 조절 줄(학생 고르기 · 넣을 내용 · AI) 과 회차별 막대 그래프 */
+body.student-report .report-controls { flex-direction: column; align-items: stretch; gap: 10px; }
+body.student-report .control-row { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+body.student-report .ai-row { padding-top: 8px; border-top: 1px dashed var(--gray-300); }
+body.student-report .ai-status.stale { color: #b26a00; font-weight: 600; }
+body.report .report-chart { margin: 0 0 16px; }
+body.report .report-chart figcaption { font-weight: 700; color: var(--gray-700); font-size: 14.5px; margin-bottom: 4px; }
+body.report .report-chart svg { width: 100%; max-width: 640px; height: auto; display: block; }
+body.report .report-chart .chart-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--gray-700); }
+body.report .report-chart .chart-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@media print { body.report .report-chart { break-inside: avoid; } body.report .report-chart svg rect { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 @media (max-width: 600px) {
   body.report .report-doc { padding: 24px 16px 28px; }
   body.report .report-doc h1 { font-size: 24px; }

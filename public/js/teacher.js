@@ -38,6 +38,7 @@ const printPageUrl = () => `/t/${encodeURIComponent(adminToken)}/print`;
 const reportPageUrl = () => `/t/${encodeURIComponent(adminToken)}/report?round=${encodeURIComponent(state.round.id)}`;
 const groupsPageUrl = () => `/t/${encodeURIComponent(adminToken)}/groups?round=${encodeURIComponent(state.round.id)}`;
 const followupsPageUrl = (query = '') => `/t/${encodeURIComponent(adminToken)}/followups${query ? `?${query}` : ''}`;
+const studentReportUrl = (sid = '') => `/t/${encodeURIComponent(adminToken)}/student-report${sid ? `?sid=${encodeURIComponent(sid)}` : ''}`;
 // "?" 버튼을 누르면 뜨는 짧은 설명 (common.js helpTip)
 const HELP = {
   csv: '엑셀·구글 시트로 바로 열리는 표예요. 학생이 표시한 관계만 들어가요: 회차 · 보낸 학생 · 받은 학생 · 관계 · 선택한 이유 · 직접 쓴 이유 · 수정 시각. 관계를 정렬하거나 필터로 볼 때 좋아요.',
@@ -265,6 +266,7 @@ function buildNav() {
     el('a', { class: 'btn small green', id: 'nav-roles', href: '#', text: '1인 1역' }),
     el('a', { class: 'btn small', id: 'nav-groups', href: '#', text: '모둠 편성' }),
     el('a', { class: 'btn small', href: followupsPageUrl(), text: '상담·관찰' }),
+    el('a', { class: 'btn small', href: studentReportUrl(), text: '학생 보고서' }),
     el('a', { class: 'btn small', id: 'nav-print', href: '#', target: '_blank', text: 'QR 인쇄' }),
     el('a', { class: 'btn small', id: 'nav-report', href: '#', text: '📑 보고서' }),
   ]);
@@ -435,6 +437,7 @@ function renderHeader() {
         ]),
         el('a', { class: 'btn', href: groupsPageUrl(), text: '모둠 편성' }),
         el('a', { class: 'btn', href: followupsPageUrl(), text: '상담·관찰 기록' }),
+        el('a', { class: 'btn', id: 'student-report-link', href: studentReportUrl(), title: '학생 한 명씩 관계 변화와 상담 도움말을 한 장으로 봐요', text: '👤 학생 보고서' }),
         withHelp(el('a', { class: 'btn', href: `${base}/export.csv`, text: 'CSV 내보내기' }), HELP.csv),
         withHelp(el('a', { class: 'btn', href: `${base}/export.json`, text: 'JSON 내보내기' }), HELP.json),
         el('button', { type: 'button', class: 'btn', text: '새로고침', onClick: () => load() }),
@@ -619,7 +622,10 @@ function renderSidePanel() {
       stat('받은 ❤️', st.inGood.length), stat('받은 ⚡', st.inBad.length), stat('보낸 ❤️', st.outGood.length), stat('보낸 ⚡', st.outBad.length),
     ]),
     teacherNoteBox(id),
-    el('a', { class: 'btn small', href: followupsPageUrl(`student=${encodeURIComponent(id)}&status=all`), text: '이 학생의 상담·관찰 기록' }),
+    el('div', { class: 'btn-row', style: { gap: '6px', marginBottom: '8px' } }, [
+      el('a', { class: 'btn small primary', id: 'panel-report-link', href: studentReportUrl(id), text: '👤 상담 보고서 보기' }),
+      el('a', { class: 'btn small', href: followupsPageUrl(`student=${encodeURIComponent(id)}&status=all`), text: '이 학생의 상담·관찰 기록' }),
+    ]),
     rolesInfoBox(id),
     state.history.trend.length > 1 ? el('div', { class: 'muted trend-line', text: `회차별 받은 ❤️/⚡: ${state.history.students.find((s) => s.id === id).rounds.map((r, i) => `${state.history.trend[i].name.replace(/^\d{4}년 /, '')} ${r.inGood}/${r.inBad}`).join(' · ')}` }) : null,
     section('나를 좋은 사이로 표시한 친구', st.inGood.map((f) => line(f, id))),

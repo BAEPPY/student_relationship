@@ -245,3 +245,82 @@ test('AI 관계 분석은 지난 회차를 함께 읽고 회차별 지문을 저
   const third=await call(`${teacher}/rounds`,'POST',{name:'2031년 2월'},201);
   assert.equal((await call(`${teacher}?round=${third.round.id}`)).aiAnalysis,null);
 });
+
+test('학생별 상담 보고서: 문서·파일 내려받기, AI 상담 도움말 만들기·보관·자료 변경 안내·지우기, 학생 삭제 때 정리',async t=>{
+  const seen=[];
+  const studentReply={overview:'S1은 차분해요.',trend:'지난 회차 자료가 없어요',watchPoints:[{title:'쉬는 시간',detail:'S2와 어울리는지 봐 주세요.'}],counseling:{approach:'편안하게 시작해요.',questions:['요즘 어때?'],tips:['모둠을 바꿔 보세요.']},parentTalk:{opening:'S1은 성실해요.',points:['S2와 서먹해 보여요.'],closing:'가정에서도 이야기 나눠 주세요.'},cautions:'자료가 적어요.'};
+  const {call,teacher,view}=await setup(t,new FileStore(null),async (params)=>{
+    seen.push(params);
+    const isStudent=Boolean(params.output_config.format.schema.properties.parentTalk);
+    return isStudent?{stop_reason:'end_turn',content:[{type:'text',text:JSON.stringify(studentReply)}]}:aiReply(params);
+  });
+  const [a,b]=view.students;
+  const route=`${teacher}/students/${a.id}`;
+  await call(`/api/student/${b.token}/relations`,'PUT',{roundId:view.round.id,relations:{[a.id]:{type:'bad',tags:[],reason:'지난주에 급식 줄에서 새치기했다고 말다툼을 했어요.'}}});
+  let doc=await call(`${route}/report.json`);
+  assert.equal(doc.title,`${a.name} 학생 관계 보고서`);
+  assert.equal(doc.student.id,a.id);
+  assert.equal(doc.aiReport,null);
+  assert.equal(doc.ai.enabled,true);
+  assert.ok(doc.blocks.some(bl=>bl.type==='list'&&bl.items.some(i=>i.startsWith(`${b.name} — “지난주에 급식 줄에서`))),'안 좋은 사이 이유');
+  assert.ok(doc.blocks.some(bl=>bl.type==='heading'&&bl.text.endsWith('상담 · 관찰 기록')));
+  assert.ok(!(await call(`${route}/report.json?followups=0`)).blocks.some(bl=>bl.type==='heading'&&bl.text.endsWith('상담 · 관찰 기록')));
+  await call(`${teacher}/students/ghost/report.json`,'GET',undefined,404);
+  // 파일 내려받기 (JSON 이 아니라서 fetch 로 직접 확인)
+  const base=doc&&`http://127.0.0.1`;
+  assert.ok(base);
+  // AI 상담 도움말
+  doc=await call(`${route}/ai-report`,'POST');
+  assert.ok(doc.aiReport.createdAt);
+  assert.equal(doc.aiReport.stale,false);
+  assert.ok(doc.blocks.some(bl=>bl.type==='heading'&&bl.text.endsWith('AI 상담 도움말')));
+  const sent=JSON.stringify(seen.at(-1));
+  assert.ok(!sent.includes(a.name)&&!sent.includes(b.name)&&!sent.includes(a.id),'프롬프트에 실명·id 없음');
+  const flat=JSON.stringify(doc.blocks);
+  assert.ok(flat.includes(`${a.name}은 차분해요.`),'가명이 실명으로');
+  assert.ok(flat.includes('“다른 친구와 서먹해 보여요.”')&&!flat.includes(`“${b.name}와 서먹`),'학부모 멘트에서는 다른 학생을 가림');
+  assert.ok(!(await call(`${route}/report.json?ai=0`)).blocks.some(bl=>bl.type==='heading'&&bl.text.endsWith('AI 상담 도움말')));
+  // 자료가 바뀌면 안내
+  await call(`/api/student/${a.token}/relations`,'PUT',{roundId:view.round.id,relations:{},closerFriends:{score:3}});
+  doc=await call(`${route}/report.json`);
+  assert.equal(doc.aiReport.stale,true);
+  // 이름을 바꾸면 도움말 글 속 이름도 바뀜
+  await call(`${teacher}/students/${a.id}`,'PATCH',{name:'새이름학생'});
+  doc=await call(`${route}/report.json`);
+  assert.ok(JSON.stringify(doc.blocks).includes('새이름학생은 차분해요.'));
+  // JSON 내보내기에 들어가고, 지우기·학생 삭제 때 정리
+  assert.ok((await call(`${teacher}/export.json`)).studentReports[a.id].overview.includes('새이름학생'));
+  doc=await call(`${route}/ai-report`,'DELETE');
+  assert.equal(doc.aiReport,null);
+  await call(`${route}/ai-report`,'POST');
+  await call(`${teacher}/students/${a.id}`,'DELETE');
+  assert.deepEqual((await call(`${teacher}/export.json`)).studentReports,{});
+  await call(`${route}/report.json`,'GET',undefined,404);
+});
+
+test('학생별 상담 보고서: AI 키가 없으면 도움말 만들기는 거부하고 문서·파일은 그대로 만든다',async t=>{
+  const app=createApp({store:new FileStore(null)});
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const j=async(route,method='GET',body)=>{const r=await fetch(base+route,{method,headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});return {status:r.status,headers:r.headers,json:r.headers.get('content-type')?.includes('json')?await r.json():null,buf:r.headers.get('content-type')?.includes('json')?null:Buffer.from(await r.arrayBuffer())};};
+  const created=(await j('/api/rooms','POST',{name:'파일반',students:['김하늘','이도윤'],minGood:0,minBad:0})).json;
+  const view=(await j(`/api/teacher/${created.adminToken}`)).json;
+  const route=`/api/teacher/${created.adminToken}/students/${view.students[0].id}`;
+  const saved=process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const doc=await j(`${route}/report.json`);
+    assert.equal(doc.status,200);
+    assert.equal(doc.json.ai.enabled,false);
+    assert.equal((await j(`${route}/ai-report`,'POST')).status,400);
+    const hwpx=await j(`${route}/report.hwpx`);
+    assert.equal(hwpx.status,200);
+    assert.equal(hwpx.headers.get('content-type'),'application/hwp+zip');
+    assert.match(hwpx.headers.get('content-disposition'),/^attachment; filename="student-report\.hwpx"; filename\*=UTF-8''%ED%95%99%EC%83%9D%EB%B3%B4%EA%B3%A0%EC%84%9C_/);
+    assert.equal(hwpx.buf.subarray(0,2).toString(),'PK');
+    const docx=await j(`${route}/report.docx`);
+    assert.equal(docx.status,200);
+    assert.equal(docx.buf.subarray(0,2).toString(),'PK');
+    assert.equal((await j(`/t/${created.adminToken}/student-report`)).status,200);
+  } finally { if(saved!==undefined) process.env.ANTHROPIC_API_KEY=saved; }
+});

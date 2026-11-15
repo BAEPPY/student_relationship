@@ -657,6 +657,187 @@ export async function aiAnalyzeRelationships(input = {}) {
   return { summary: pseudo.restore(String(raw.summary ?? '').trim()), pairs, students, truncated, historyRounds };
 }
 
+// ---------- 학생별 상담 도움말 (학생 한 명의 회차별 자료 → 관심 둘 점 · 상담 방법 · 학부모 상담 멘트) ----------
+
+const STUDENT_REPORT_SCHEMA = {
+  type: 'object',
+  properties: {
+    overview: { type: 'string', description: '이 학생의 친구 관계 전체 흐름 2~3문장 (선생님께, 해요체)' },
+    trend: { type: 'string', description: '지난 회차들과 견줘 달라진 점 1~2문장. 회차가 하나뿐이면 "지난 회차 자료가 없어요"' },
+    watchPoints: {
+      type: 'array',
+      description: '선생님이 더 관심 둘 점 1~4개 (중요한 순서)',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '짧은 제목' },
+          detail: { type: 'string', description: '왜 그런지와 자료의 근거 1~2문장' },
+        },
+        required: ['title', 'detail'],
+        additionalProperties: false,
+      },
+    },
+    counseling: {
+      type: 'object',
+      properties: {
+        approach: { type: 'string', description: '학생과 상담을 어떻게 시작하고 이끌지 2~3문장' },
+        questions: { type: 'array', description: '학생에게 물어볼 열린 질문 3~5개 (아이에게 말하듯 부드럽게)', items: { type: 'string' } },
+        tips: { type: 'array', description: '상담 뒤 교실에서 해 볼 일 2~4개 (자리·짝·모둠·역할 등)', items: { type: 'string' } },
+      },
+      required: ['approach', 'questions', 'tips'],
+      additionalProperties: false,
+    },
+    parentTalk: {
+      type: 'object',
+      properties: {
+        opening: { type: 'string', description: '학부모 상담을 여는 말 1~2문장 (존댓말, 학생의 강점부터)' },
+        points: { type: 'array', description: '학부모께 전할 내용 2~4개 (존댓말 문장. 다른 학생의 이름·가명이나 누가 어떻게 표시했는지는 넣지 않음)', items: { type: 'string' } },
+        closing: { type: 'string', description: '가정에서 함께해 주시면 좋을 점과 맺는 말 1~2문장 (존댓말)' },
+      },
+      required: ['opening', 'points', 'closing'],
+      additionalProperties: false,
+    },
+    cautions: { type: 'string', description: '자료의 한계와 유의할 점 1~2문장 (미제출·응답 부족, 단정 금지, 필요하면 학교 절차 안내)' },
+  },
+  required: ['overview', 'trend', 'watchPoints', 'counseling', 'parentTalk', 'cautions'],
+  additionalProperties: false,
+};
+
+const STUDENT_REPORT_SYSTEM = [
+  '당신은 한국 초등학교 담임 선생님의 학생 상담 준비를 돕는 도우미예요. 학생 한 명의 친구 관계 자료를 읽고, 선생님이 무엇에 더 관심을 두면 좋을지, 학생과 어떻게 상담하면 좋을지, 학부모께 어떻게 말씀드리면 좋을지 써 주세요.',
+  '',
+  '자료에 대해:',
+  '- 학생은 모두 S1, S2 같은 가명으로만 표시돼요. "대상 학생"이 이 보고서의 주인공이에요. 실명을 추측하거나 지어내지 말고 가명만 쓰세요.',
+  '- 회차는 달마다 한 조사예요(오래된 순). "받은" 관계는 다른 친구가 대상 학생을 표시한 것이고, "보낸" 관계는 대상 학생이 표시한 것이에요. 미제출 회차의 "보낸" 관계는 자료가 없는 것이지 관계가 없다는 뜻이 아니에요.',
+  '- 학생이 직접 적은 글(이유, 돌아보기, 성향·지원서)과 선생님 메모·상담 기록, 학급 AI 분석 요약이 섞여 있어요. 자료에 없는 사실은 단정하지 말고 "~로 보여요"처럼 조심스럽게 표현해요.',
+  DATA_NOT_INSTRUCTIONS,
+  '- "관심 점수"는 먼저 살펴볼 순서를 정하는 참고값이에요. 발생 확률이나 진단이 아니니 %·확률로 말하지 마세요.',
+  '',
+  '글쓰기 원칙:',
+  '- 구체적이고 따뜻하게, 판단하지 않는 말투로 써요. 아이에게 꼬리표를 붙이는 표현(문제아, 왕따, 가해자, 피해자 등)과 의학적·심리 진단은 쓰지 않아요.',
+  '- overview · trend · watchPoints · counseling · cautions 는 선생님께 말하는 친근한 해요체로 써요.',
+  '- counseling.questions 는 선생님이 학생에게 실제로 건넬 수 있는 열린 질문으로, 친구를 탓하거나 누가 무엇을 썼는지 드러내지 않게 써요.',
+  '- parentTalk 는 선생님이 학부모께 직접 말씀드리는 문장(존댓말)이에요. 강점과 좋아진 점부터 말하고, 걱정되는 점은 구체적 행동과 함께, 가정에서 도울 수 있는 일로 이어 주세요.',
+  '- parentTalk 에는 다른 학생의 가명·이름, 누가 대상 학생을 어떻게 표시했는지, 다른 학생이 쓴 글의 내용을 절대 넣지 마세요. "몇몇 친구와 사이가 서먹해 보여요"처럼 일반적으로만 말해요.',
+  '- 폭력·따돌림·자해처럼 심각한 신호가 자료에 보이면 cautions 에 학교의 정해진 절차(상담 교사, 생활 지도 담당과 상의)를 따르도록 안내해요. 자료가 부족하면(미제출, 회차 1개 등) 그 한계를 cautions 에 적어요.',
+  '- 응답은 주어진 JSON 스키마에 맞는 JSON 하나만 출력하고, 그 밖의 글은 쓰지 않아요.',
+].join('\n');
+
+const FLAG_KO = { isolated: '고립 위험', targeted: '여러 명이 안 좋게 지목', 'many-conflicts': '안 좋은 사이 다수 표시' };
+
+/** 학생별 상담 도움말용 system/user 프롬프트. 실명·학생 id 는 포함되지 않습니다. */
+export function buildStudentReportPrompt({ students, studentId, timeline, memo, rules, followups, roles } = {}) {
+  const pseudo = pseudonymize(students);
+  const me = pseudo.label(studentId);
+  const roleName = (id) => clip((roles || []).find((r) => r.id === id)?.name || '(지워진 역할)', 40);
+  const withReason = (x) => {
+    const lab = pseudo.label(x.id);
+    if (!lab) return null;
+    const tags = (x.tags || []).map((t) => clip(tagLabel(x.type, t), 40));
+    const reason = clip(pseudo.redact(x.reason), 120);
+    const extra = [...tags, reason ? `"${reason}"` : ''].filter(Boolean).join(', ');
+    return extra ? `${lab}(${extra})` : lab;
+  };
+  const people = (list) => { const out = (list || []).map(withReason).filter(Boolean); return out.length ? out.join(', ') : '없음'; };
+  const roundSection = (t) => {
+    const lines = [`- 대상 학생 ${t.submitted ? '제출함' : '미제출'} · 학급 제출 ${t.classSubmitted}/${t.total} · ${t.open ? '진행 중' : '마감'}`];
+    lines.push(`- 받은 좋은 사이 ${t.inGood.length}명: ${people(t.inGood)}`);
+    lines.push(`- 받은 안 좋은 사이 ${t.inBad.length}명: ${people(t.inBad)}`);
+    if (t.submitted) {
+      lines.push(`- 보낸 좋은 사이 ${t.outGood.length}명: ${people(t.outGood)}`);
+      lines.push(`- 보낸 안 좋은 사이 ${t.outBad.length}명: ${people(t.outBad)}`);
+    } else lines.push('- 보낸 관계: (이 회차에는 제출하지 않아 자료 없음)');
+    if ((t.flags || []).length) lines.push(`- 규칙 기반 표시: ${t.flags.map((f) => FLAG_KO[f] || f).join(', ')}`);
+    const pairs = (t.pairs || []).map((p) => (pseudo.label(p.other) ? `${pseudo.label(p.other)} ${p.probability}/100점` : null)).filter(Boolean);
+    if (pairs.length) lines.push(`- 관심 점수(100점 척도): ${pairs.join(', ')}`);
+    const c = t.closer;
+    if (c) {
+      const parts = [];
+      if (Number.isInteger(c.score)) parts.push(`우리 반 점수 ${c.score}/5${t.classScore?.scoreCount ? ` (학급 평균 ${t.classScore.scoreAvg})` : ''}`);
+      const review = clip(pseudo.redact(c.review));
+      if (review) parts.push(`한 달은: "${review}"`);
+      const friends = (c.ids || []).map((id) => pseudo.label(id)).filter(Boolean);
+      const text = clip(pseudo.redact(c.text));
+      if (friends.length || text) parts.push(`친해진 친구: ${friends.length ? friends.join(', ') : '(고른 친구 없음)'}${text ? ` — "${text}"` : ''}`);
+      if (parts.length) lines.push(`- 돌아보기: ${parts.join(' · ')}`);
+    }
+    const p = t.profile;
+    if (p) {
+      const traits = (p.traits || []).map((x) => traitLabel.get(x) || x);
+      const partner = (p.partnerTraits || []).map((x) => traitLabel.get(x) || x);
+      const text = clip(pseudo.redact(p.partnerText));
+      const parts = [traits.length ? `나는: ${traits.join(', ')}` : '', partner.length ? `짝에게 바라는 점: ${partner.join(', ')}` : '', text ? `짝에 대한 생각: "${text}"` : ''].filter(Boolean);
+      if (parts.length) lines.push(`- 성향 설문: ${parts.join(' · ')}`);
+    }
+    const choices = t.application?.choices || [];
+    if (choices.length) lines.push(`- 1인 1역 지원: ${choices.map((ch, i) => `${i + 1}지망 ${roleName(ch.roleId)}${ch.reason ? `("${clip(pseudo.redact(ch.reason), 120)}")` : ''}`).join(' / ')}`);
+    if ((t.assignedRoles || []).length) lines.push(`- 맡은 역할: ${t.assignedRoles.map((n) => clip(n, 40)).join(', ')}`);
+    const a = t.ai?.student;
+    if (a && (a.summary || a.watch)) lines.push(`- 학급 AI 분석 요약: ${[a.summary, a.watch].filter(Boolean).map((x) => clip(pseudo.redact(x), 300)).join(' / ')}`);
+    return section(`${roundLabel(t.name)}`, lines);
+  };
+  const memoLines = [
+    memo?.memo ? `- 메모: "${clip(pseudo.redact(memo.memo))}"` : '',
+    memo?.front ? '- 앞자리 필요로 표시함' : '',
+    ...(rules || []).map((r) => {
+      const other = pseudo.label(r.a === studentId ? r.b : r.a);
+      return other ? `- ${r.type === 'apart' ? '떨어뜨리기' : '가까이 앉히기'}: ${other}${r.note ? ` ("${clip(pseudo.redact(r.note), 100)}")` : ''}` : '';
+    }),
+  ].filter(Boolean);
+  const followupLines = (followups || []).slice(0, 10).map((f) => {
+    const obs = clip(pseudo.redact(f.observation), 300);
+    const act = clip(pseudo.redact(f.action), 200);
+    return `- ${f.observedDate} (${f.status === 'completed' ? '확인 완료' : '확인 필요'}): "${obs}"${act ? ` / 한 일: "${act}"` : ''}`;
+  });
+  const { text: user, truncated } = capPrompt([
+    '# 학생 상담 자료 (가명 처리됨)',
+    section('대상 학생', [`${me || '(알 수 없음)'} — 이 학생에 대한 상담 도움말을 써 주세요.`, rosterLine(pseudo)]),
+    section('선생님 메모 · 규칙', memoLines),
+    section('선생님의 상담 · 관찰 기록 (최근 것부터)', followupLines),
+    '# 회차별 자료 (오래된 순)',
+    ...((timeline || []).length ? timeline.map(roundSection) : ['(아직 조사 회차가 없어요)']),
+    '',
+    '위 자료를 바탕으로 JSON 스키마에 맞춰 상담 도움말을 작성해 주세요.',
+  ].join('\n\n'));
+  return { system: STUDENT_REPORT_SYSTEM, user, schema: STUDENT_REPORT_SCHEMA, pseudo, truncated, me };
+}
+
+/** 학생 한 명의 상담 도움말. 결과의 가명은 실명으로 되돌리고, 학부모 멘트에서는 다른 학생이 드러나지 않게 가립니다. */
+export async function aiStudentReport(input = {}) {
+  const { ai } = input;
+  if (!ai?.client) throw fail(503, MSG.disabled);
+  const { system, user, schema, pseudo, truncated, me } = buildStudentReportPrompt(input);
+  if (!me) throw fail(400, '학생을 찾을 수 없어요.');
+  const raw = await callJson({ ai, system, user, schema, maxTokens: 8000 });
+  const str = (t, max = 900) => clip(pseudo.restore(String(t ?? '').trim()), max);
+  // 학부모 멘트: 대상 학생이 아닌 가명·실명은 '다른 친구'로 가립니다 (누가 어떻게 표시했는지 드러나지 않게)
+  const others = pseudo.roster.filter((r) => r.label !== me && r.name.length >= 2).map((r) => r.name).sort((a, b) => b.length - a.length);
+  const parent = (t, max = 600) => {
+    let out = String(t ?? '').replace(/(^|[^A-Za-z0-9])S(\d{1,3})(?![0-9A-Za-z])/g, (m, pre, num) => (`S${Number(num)}` === me ? m : `${pre}다른 친구`));
+    out = pseudo.restore(out.trim());
+    for (const name of others) out = out.split(name).join('다른 친구');
+    return clip(out, max);
+  };
+  const arr = (v, max) => (Array.isArray(v) ? v : []).slice(0, max);
+  return {
+    overview: str(raw.overview),
+    trend: str(raw.trend, 600),
+    watchPoints: arr(raw.watchPoints, 4).map((w) => ({ title: str(w?.title, 80), detail: str(w?.detail, 600) })).filter((w) => w.title || w.detail),
+    counseling: {
+      approach: str(raw.counseling?.approach),
+      questions: arr(raw.counseling?.questions, 5).map((q) => str(q, 300)).filter(Boolean),
+      tips: arr(raw.counseling?.tips, 4).map((q) => str(q, 400)).filter(Boolean),
+    },
+    parentTalk: {
+      opening: parent(raw.parentTalk?.opening),
+      points: arr(raw.parentTalk?.points, 4).map((q) => parent(q)).filter(Boolean),
+      closing: parent(raw.parentTalk?.closing),
+    },
+    cautions: str(raw.cautions, 600),
+    truncated,
+  };
+}
+
 // ---------- 1인 1역 배정 ----------
 
 const ASSIGN_SCHEMA = {
