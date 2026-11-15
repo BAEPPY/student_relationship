@@ -8,6 +8,7 @@ import { REASON_CATALOG, isValidTag, BAD_REASON_MIN, textLength } from './reason
 import { computeStats, listRelations, analyzeConflicts } from './analysis.js';
 import { ensureRounds, currentRound, findRound, roundRoom, roundView, makeRound, monthName, nextRoundName, uniqueRoundName } from './rounds.js';
 import { analyzeHistory, historyForAi } from './history.js';
+import { detectGroups } from './cliques.js';
 import { purgeExpired, purgeAll, retentionView, roundExpiresAt, dropStaleAiSeating, RETENTION_MONTHS } from './retention.js';
 import { DEFAULT_ROLES, TRAITS, BODY_TRAITS, SELECTION_CRITERIA, normalizeRoles, roomRoles, previousRoleIds, parseHistoryText, validateProfile, validateBody, validateApplication, applicantCounts } from './roles.js';
 import { assignRoles, repairAssignment } from './assign.js';
@@ -229,6 +230,7 @@ export function createApp({ store = new FileStore(null), baseUrl = process.env.B
       relations: listRelations(rr),
       stats,
       analysis,
+      cliques: detectGroups(rr),                  // 친한 무리(좋은 사이로 뭉친 학생들) · 무리 사이의 안 좋은 사이
       history: analyzeHistory(room),
       closerFriends: round.closerFriends || {},   // { sid: { ids, text, review, updatedAt } } 돌아보기: 친해진 친구 · 한 달은 어땠나요
       catalog: REASON_CATALOG,

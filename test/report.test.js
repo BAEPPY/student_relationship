@@ -170,8 +170,9 @@ describe('학급 종합 보고서 API', () => {
         assert.ok(text.includes(needle), `${kind} 에 "${needle}" 없음`);
       }
       const tables = doc.blocks.filter((b) => b.type === 'table');
-      // 한눈에 보기(통계) + 학생별 관계 + 갈등 + AI 2개 + 자리 2분단 + 배정표 + 이유 + 추세 = 10
-      assert.equal(tables.length, 10, `${kind} 표 개수`);
+      // 한눈에 보기(통계) + 학생별 관계 + 친한 무리 + 갈등 + AI 2개 + 자리 2분단 + 배정표 + 이유 + 추세 = 11
+      assert.equal(tables.length, 11, `${kind} 표 개수`);
+      assert.ok(text.includes('친한 무리'), `${kind} 에 친한 무리 없음`);
       const flat = (cell) => (Array.isArray(cell) ? cell.join('\n') : String(cell ?? ''));
       const seat = tables.find((tb) => tb.rows.length === 2 && tb.rows[0].length === 2 && flat(tb.rows[0][0]).includes(students[0].name));
       assert.ok(seat, `${kind} 자리표`);

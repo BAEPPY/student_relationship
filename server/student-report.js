@@ -6,6 +6,7 @@ import { roundRoom } from './rounds.js';
 import { TRAITS, roomRoles } from './roles.js';
 import { tagLabel } from './reasons.js';
 import { classScore } from './history.js';
+import { detectGroups } from './cliques.js';
 
 const MAX_ROUNDS = 8;                 // 보고서·AI 에 넣는 최근 회차 수
 const MAX_FOLLOWUPS = 20;
@@ -185,6 +186,22 @@ export function studentReportDocument({ room, studentId, now = new Date(), follo
     if (last.outGood.length) list(last.outGood.map(withReason)); else para(last.submitted ? '없어요.' : '아직 제출하지 않았어요.', 'muted');
     sub(`내가 안 좋은 사이로 표시한 친구 (${last.outBad.length})`);
     if (last.outBad.length) list(last.outBad.map(withReason)); else para(last.submitted ? '없어요.' : '아직 제출하지 않았어요.', 'muted');
+    // 친한 무리: 학급 전체에서 좋은 사이로 뭉친 무리 가운데 이 학생이 든 곳 (보고서에서만 계산 — AI 입력 지문에는 넣지 않아요)
+    const lastRound = (room.rounds || []).find((r) => r.id === last.id);
+    const cliques = lastRound ? detectGroups(roundRoom(room, lastRound)) : null;
+    if (cliques?.groups.length) {
+      sub('친한 무리 (규칙 기반 추정)');
+      const group = cliques.groups.find((g) => g.members.includes(studentId));
+      if (group) {
+        const mates = group.members.filter((id) => id !== studentId).map(nameOf);
+        const clashes = cliques.between.filter((b) => b.a === group.id || b.b === group.id)
+          .map((b) => `무리 ${b.a === group.id ? b.b : b.a}와(과) ${b.bad}건`);
+        para(`좋은 사이 표시를 따라 묶어 보면 ${mates.join(', ')} 학생과 같은 무리예요 (무리 ${group.id} · ${group.members.length}명 · 서로 좋은 사이 ${group.mutual}쌍).${group.internalBad ? ` 이 무리 안에 안 좋은 사이로 표시한 쌍이 ${group.internalBad}쌍 있어요.` : ''}${clashes.length ? ` 이 무리와 다른 무리 사이의 안 좋은 사이: ${clashes.join(', ')}.` : ''}`);
+      } else {
+        para(`좋은 사이로 이어진 친구가 없어 어느 무리에도 들지 않았어요.${last.submitted ? '' : ' 아직 제출하지 않아서일 수 있어요.'}`);
+      }
+      para('무리는 학급 전체 응답을 규칙으로 묶은 참고용 추정이에요. 실제 어울리는 모습과 다를 수 있어요.', 'muted');
+    }
     if (last.pairs.length) {
       sub('관계 관심 점수 (규칙 기반 · 발생 확률 아님)');
       list(last.pairs.map((p) => `${nameOf(p.other)}: ${p.probability}/100점 (${LEVEL_KO[p.level] || p.level})`));

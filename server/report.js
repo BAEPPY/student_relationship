@@ -6,6 +6,7 @@ import { roundRoom } from './rounds.js';
 import { roomRoles, applicantCounts, bodyLabels, BODY_TRAITS } from './roles.js';
 import { captureAnalysisContext, describeAnalysisContext } from './analysis-context.js';
 import { seatingView } from './seating-history.js';
+import { detectGroups } from './cliques.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 function dateLabel(d = new Date()) {
@@ -106,6 +107,24 @@ export function reportDocument({ room, round, reasons = false, now = new Date() 
     sub(`${round.name} 돌아보기`);
     para(`학생이 이 회차의 관계 지도와 함께 적은 돌아보기예요. "우리 반은 몇 점이야?"(1~5)${score.scoreCount ? ` 평균 ${score.scoreAvg}점 (${score.scoreCount}명)` : ''}, "새로 친해졌거나 더 친해진 친구"로 고른 친구와 어떻게 친해졌는지, 한 달이 어땠는지 적은 글이에요. 선택 사항이라 적은 학생만 나와요.`, 'muted');
     list(closerLines);
+  }
+
+  // 친한 무리: 좋은 사이로 뭉친 학생들과 무리 사이의 안 좋은 사이 (규칙 기반 추정)
+  const cliques = detectGroups(rr);
+  if (cliques.groups.length) {
+    sub('친한 무리');
+    para('좋은 사이 표시를 따라 자연스럽게 뭉친 학생들을 규칙으로 묶어 본 참고용 자료예요(서로 좋은 사이를 더 무겁게 보고, 안 좋은 사이로 표시한 두 학생은 잇지 않아요). 실제 무리와 다를 수 있어요.', 'muted');
+    blocks.push({
+      type: 'table',
+      columns: [{ label: '무리', width: 0.1 }, { label: '인원', width: 0.1 }, { label: '학생', width: 0.5 }, { label: '서로 좋은 사이', width: 0.15 }, { label: '무리 안 ⚡', width: 0.15 }],
+      rows: cliques.groups.map((g) => [center(`무리 ${g.id}`), center(`${g.members.length}명`), g.members.map(nameOf).join(', '), center(`${g.mutual}쌍`), center(g.internalBad ? `${g.internalBad}쌍` : '-')]),
+      header: true,
+    });
+    list([
+      ...cliques.between.map((b) => `무리 ${b.a} ↔ 무리 ${b.b} 사이의 안 좋은 사이 ${b.bad}건: ${b.pairs.map((p) => `${nameOf(p.from)} → ${nameOf(p.to)}`).join(', ')}`),
+      cliques.between.length ? '' : '서로 다른 무리 사이에 안 좋은 사이 표시가 없어요.',
+      cliques.ungrouped.length ? `어느 무리에도 들지 않은 학생 ${cliques.ungrouped.length}명: ${cliques.ungrouped.map(nameOf).join(', ')} (좋은 사이로 이어진 친구가 없거나 아직 제출하지 않았어요)` : '',
+    ].filter(Boolean));
   }
 
   // 3. 관계 관심 점수

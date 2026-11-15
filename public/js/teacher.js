@@ -1,5 +1,7 @@
 import { api, el, toast, copyText, copyRich, fmtDate, savedRooms, setChildren, helpTip, TYPE_LABEL, TYPE_ICON, monthLabelOf } from './common.js';
-import { RelationGraph, GRAPH_MOTION_KEY } from './graph.js';
+import { RelationGraph, GRAPH_MOTION_KEY, GROUP_COLORS } from './graph.js';
+
+const GROUP_COLOR_KEY = 'relmap.groupColors';   // 관계도 무리 색 켬/끔 (이 브라우저에 기억)
 
 const adminToken = decodeURIComponent(location.pathname.split('/')[2] || '');
 const base = `/api/teacher/${encodeURIComponent(adminToken)}`;
@@ -16,6 +18,7 @@ let ui = {
   folds: new Set(),       // 펼쳐 둔 접이식 영역 이름 (history-trend, retention …)
   openRows: new Set(),    // 학생 목록에서 관리 버튼을 펼친 학생
   roundMenu: false,       // 회차 '⋯' 메뉴 열림
+  groupColors: loadGroupColors(),   // 관계도에 친한 무리 색 입히기 (이 브라우저에 기억)
   activeSection: 'summary-card',
 };
 let popoverEl = null;
@@ -28,7 +31,7 @@ const TREND_LABEL = { new: '🆕 이번에 새로', continuing: '🔁 계속됨'
 const RISK_ORDER = { high: 0, medium: 1, low: 2 };
 // 구역 이동 줄(sticky nav)에 나오는 카드 순서
 const SECTIONS = [
-  ['summary-card', '요약'], ['followups-card', '후속 확인'], ['graph-card', '관계도'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
+  ['summary-card', '요약'], ['followups-card', '후속 확인'], ['graph-card', '관계도'], ['cliques-card', '친한 무리'], ['analysis-card', '갈등 분석'], ['ai-card', 'AI 분석'],
   ['history-card', '회차별 변화'], ['students-card', '학생 목록'], ['memo-card', '메모·규칙'],
 ];
 const nameOf = (id) => state?.stats[id]?.name || '?';
@@ -46,6 +49,7 @@ const HELP = {
   minCount: '학생이 제출하려면 꼭 표시해야 하는 수예요. 반 인원이 적으면 자동으로 줄어들어요.',
   analysis: '응답 방향, 이유의 심각도, 공통 친구, 지목 횟수, 고립 여부를 더한 관심 점수예요(100점 척도, 현재 계산 범위 2~97점). 실제 갈등 발생 확률이나 진단이 아니에요. 먼저 살펴볼 관계를 정할 때 원래 응답과 함께 확인해요.',
   ai: '학생 이름을 S1, S2 같은 가명으로 바꿔 보내고 결과만 저장해요. 한 번에 30초~1분, 사용량(비용)이 들어요.',
+  cliques: '서로 좋은 사이는 2, 한쪽만 좋은 사이는 1로 치고(둘 중 한 명이라도 안 좋은 사이로 표시하면 연결 없음), 연결이 촘촘한 학생끼리 차례로 묶는 규칙이에요. 실제 무리와 다를 수 있으니 참고용으로 보세요. 같은 응답이면 항상 같은 결과가 나와요.',
   report: '관계도 분석 · AI 분석 · 자리 배정 · 1인 1역 · 회차별 변화를 한 문서로 모아요. 화면에서 바로 인쇄하거나 PDF로 저장하고, 한글(.hwpx)·워드(.docx) 파일로도 내려받을 수 있어요.',
 };
 /** 내보내기 링크 옆에 "?" 설명 버튼을 붙여요 (줄 바꿈이 생겨도 버튼과 함께 다녀요). */
@@ -163,11 +167,14 @@ function renderAll() {
   renderNav();
   renderSummary();
   renderFollowups();
+  graph.setGroups(ui.groupColors ? state.cliques?.groupOf : null);
   graph.setData({ students: state.students, relations: state.relations, stats: state.stats });
   graph.setFilter(ui.filter);
   graph.setHighlight(ui.highlight);
   graph.setSelectedEdge(ui.selectedEdge);
   renderSidePanel();
+  renderGroupLegend();
+  renderCliques();
   renderAnalysis();
   renderAiPanel();
   renderHistory();
@@ -214,12 +221,14 @@ function buildSkeleton() {
         el('span', {}, [el('span', { class: 'sw', style: { background: '#f3f3f8', border: '1px dashed #c9c9d8' } }), '미제출']),
       ]),
       el('div', { class: 'graph-toolbar', id: 'graph-toolbar' }),
+      el('div', { class: 'legend group-legend', id: 'group-legend', hidden: true }),
       el('div', { class: 'grid-2 graph-grid' }, [
         el('div', { class: 'graph-wrap', id: 'graph-container' }),
         el('div', { class: 'side-panel', id: 'side-panel' }),
       ]),
       el('p', { class: 'muted graph-help', text: '학생 상자에 마우스를 올리면 연결된 친구만 밝게 보여요. 누르면 그 학생이 가운데로 모이고, 끌어서 놓으면 출렁이며 자리를 잡아요. 화살표를 누르면 이유를 볼 수 있어요. 서로 표시한 사이는 양쪽 화살표 하나로 보여요. 빈 곳을 끌면 이동, 휠로 확대·축소. 상자 오른쪽 위 숫자는 받은·준 관계 수예요(서로 표시한 사이는 2로 세요). 움직임이 없으면 툴바의 🫧 움직임 버튼을 켜 보세요(윈도우 애니메이션 효과를 끈 컴퓨터는 처음에 꺼져 있어요).' }),
     ]),
+    el('section', { class: 'card', id: 'cliques-card' }),
     el('section', { class: 'card', id: 'analysis-card' }),
     el('section', { class: 'card ai-panel', id: 'ai-card' }),
     el('section', { class: 'card', id: 'history-card' }),
@@ -354,6 +363,11 @@ function renderToolbar() {
       title: '관계도가 출렁이며 움직이는 효과를 켜거나 꺼요. 브라우저·운영체제의 "애니메이션 줄이기" 설정이 켜져 있으면 처음엔 꺼져 있어요',
       onClick: () => { const on = !graph.isMotion(); graph.setMotion(on); saveGraphMotion(on); renderToolbar(); },
     }),
+    el('button', {
+      type: 'button', class: `btn small ${ui.groupColors ? 'primary' : ''}`, id: 'graph-groups', text: ui.groupColors ? '🎨 무리 색 켬' : '🎨 무리 색 끔', 'aria-pressed': ui.groupColors ? 'true' : 'false',
+      title: '좋은 사이로 뭉친 친한 무리마다 상자에 색과 번호를 입혀요. 무리 구성은 아래 "친한 무리" 카드에서 볼 수 있어요',
+      onClick: () => setGroupColors(!ui.groupColors),
+    }),
     el('button', { type: 'button', class: 'btn small', text: '배치 다시 계산', onClick: () => graph.resetLayout() }),
     el('button', { type: 'button', class: 'btn small', text: '강조 해제', onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight(null); } }),
   );
@@ -362,6 +376,96 @@ function renderToolbar() {
 /** 움직임 켬/끔 선택을 이 브라우저에 남겨요. 저장이 막혀 있어도(시크릿 창 등) 토글 자체는 동작해요. */
 function saveGraphMotion(on) {
   try { localStorage.setItem(GRAPH_MOTION_KEY, on ? 'on' : 'off'); } catch { /* 저장 못 해도 보는 데는 지장 없음 */ }
+}
+
+// ---------- 친한 무리 (관계도 색 · 카드) ----------
+function loadGroupColors() {
+  try { return localStorage.getItem(GROUP_COLOR_KEY) === 'on'; } catch { return false; }
+}
+
+/** 관계도의 무리 색을 켜거나 꺼요. 선택은 이 브라우저에 남겨요(저장이 막혀 있어도 토글은 동작). */
+function setGroupColors(on) {
+  ui.groupColors = Boolean(on);
+  try { localStorage.setItem(GROUP_COLOR_KEY, ui.groupColors ? 'on' : 'off'); } catch { /* 저장 못 해도 보는 데는 지장 없음 */ }
+  graph.setGroups(ui.groupColors ? state.cliques?.groupOf : null);
+  renderToolbar();
+  renderGroupLegend();
+  renderCliques();
+}
+
+/** 무리 번호표: 관계도 상자와 같은 색(8번까지)과 번호. */
+const groupSwatch = (id) => el('span', { class: `grp-swatch ${id <= GROUP_COLORS ? `grp-${id}` : 'grp-more'}`, 'aria-hidden': 'true', text: String(id) });
+const showGroupInGraph = (ids) => { closePopover(); ui.selectedEdge = null; setHighlight(ids); scrollToGraph(); };
+
+/** 관계도 아래 범례: 무리 색을 켰을 때만. 누르면 그 무리만 밝게 보여요. */
+function renderGroupLegend() {
+  const box = document.getElementById('group-legend');
+  if (!box) return;
+  const groups = state.cliques?.groups || [];
+  box.hidden = !ui.groupColors;
+  if (!ui.groupColors) return setChildren(box);
+  setChildren(box,
+    el('b', { text: '친한 무리' }),
+    ...(groups.length
+      ? groups.map((g) => el('button', {
+        type: 'button', class: 'group-key', title: `${g.members.map(nameOf).join(', ')} — 눌러서 이 무리만 보기`,
+        onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight(g.members); },
+      }, [groupSwatch(g.id), `무리 ${g.id} · ${g.members.length}명`]))
+      : [el('span', { class: 'muted', text: '아직 찾은 무리가 없어요.' })]),
+    groups.length > GROUP_COLORS ? el('span', { class: 'muted', text: `무리 ${GROUP_COLORS + 1}부터는 색 없이 번호만 붙어요.` }) : null,
+  );
+}
+
+function renderCliques() {
+  const card = document.getElementById('cliques-card');
+  if (!card) return;
+  const c = state.cliques || { groups: [], ungrouped: [], between: [] };
+  const a = state.analysis;
+  const chip = (id) => el('button', {
+    type: 'button', class: 'chip clique-member', text: nameOf(id), title: '관계도에서 이 학생 보기',
+    onClick: () => { closePopover(); ui.selectedEdge = null; setHighlight([id], id); scrollToGraph(); },
+  });
+  const groupBox = (g) => el('div', { class: 'clique', dataset: { group: String(g.id) } }, [
+    el('div', { class: 'clique-head' }, [
+      groupSwatch(g.id),
+      el('b', { text: `무리 ${g.id}` }),
+      el('span', { class: 'muted', text: `${g.members.length}명 · 서로 좋은 사이 ${g.mutual}쌍` }),
+      g.internalBad ? el('span', { class: 'badge medium', title: '같은 무리 안에서 안 좋은 사이로 표시한 쌍이에요', text: `무리 안 ⚡ ${g.internalBad}쌍` }) : null,
+      el('button', { type: 'button', class: 'btn small clique-show', text: '관계도에서 보기', onClick: () => showGroupInGraph(g.members) }),
+    ]),
+    el('div', { class: 'chips' }, g.members.map(chip)),
+  ]);
+  const betweenRow = (b) => {
+    const involved = [...new Set(b.pairs.flatMap((p) => [p.from, p.to]))];
+    return el('li', { class: 'clique-between' }, [
+      el('span', { class: 'between-groups' }, [groupSwatch(b.a), '↔', groupSwatch(b.b), el('b', { text: `무리 ${b.a} ↔ 무리 ${b.b}` })]),
+      el('span', { class: 'badge high', text: `⚡ ${b.bad}건` }),
+      el('span', { class: 'between-pairs', text: b.pairs.map((p) => `${nameOf(p.from)} → ${nameOf(p.to)}`).join(', ') }),
+      el('button', { type: 'button', class: 'btn small', text: '관계도에서 보기', onClick: () => showGroupInGraph(involved) }),
+    ]);
+  };
+  const pending = a.totalStudents - a.submittedCount;
+  setChildren(card,
+    cardTitle('친한 무리', '좋은 사이 표시를 따라 자연스럽게 뭉친 학생들을 묶어 봤어요. 무리 사이에 안 좋은 사이가 몰려 있는지도 함께 볼 수 있어요.',
+      el('button', {
+        type: 'button', class: `btn small ${ui.groupColors ? 'primary' : ''}`, id: 'cliques-color', 'aria-pressed': ui.groupColors ? 'true' : 'false',
+        text: ui.groupColors ? '🎨 관계도 무리 색 켬' : '🎨 관계도에 무리 색 입히기', onClick: () => setGroupColors(!ui.groupColors),
+      }),
+      HELP.cliques),
+    c.groups.length
+      ? el('div', { class: 'clique-grid' }, c.groups.map(groupBox))
+      : el('p', { class: 'muted', id: 'cliques-empty', text: '아직 좋은 사이 표시가 모이지 않아 무리를 찾지 못했어요. 학생들이 제출하면 여기에 나타나요.' }),
+    c.groups.length && pending > 0 ? el('p', { class: 'muted', text: `아직 ${pending}명이 제출하지 않았어요. 모두 제출하면 무리가 달라질 수 있어요.` }) : null,
+    c.groups.length ? el('div', { class: 'section-label', text: '무리 사이의 안 좋은 사이' }) : null,
+    c.groups.length
+      ? (c.between.length
+        ? el('ul', { class: 'clique-between-list' }, c.between.map(betweenRow))
+        : el('p', { class: 'muted', text: '서로 다른 무리 사이에 안 좋은 사이 표시가 없어요.' }))
+      : null,
+    c.groups.length && c.ungrouped.length ? el('div', { class: 'section-label', text: `어느 무리에도 들지 않은 학생 (${c.ungrouped.length}명)` }) : null,
+    c.groups.length && c.ungrouped.length ? el('div', { class: 'chips' }, c.ungrouped.map(chip)) : null,
+    c.groups.length && c.ungrouped.length ? el('p', { class: 'muted', text: '좋은 사이로 이어진 친구가 없는 학생이에요(준 표시도 받은 표시도 없거나, 안 좋은 사이 표시와 겹쳤어요). 아직 제출하지 않은 학생도 여기에 나올 수 있어요.' }) : null,
+  );
 }
 
 // ---------- 헤더 ----------

@@ -5,7 +5,7 @@
 // - 서로 표시한 사이(둘 다 좋은 사이 또는 둘 다 안 좋은 사이)는 화살표 두 개 대신 양쪽에 화살촉이 있는 곧은 선 하나(.edge.mutual)로 그려요.
 // - 움직임(출렁임)은 setMotion(on/off) 으로 켜고 끌 수 있어요. 기본값은 localStorage 'relmap.graphMotion'('on'|'off'), 없으면
 //   운영체제·브라우저의 "애니메이션 줄이기"(prefers-reduced-motion) 설정을 따라요 — 윈도우 '애니메이션 효과' 를 끈 컴퓨터의 Edge 는 처음에 꺼져 있어요.
-// - 공개 API: setData / setFilter / setHighlight / setSelectedEdge / resetLayout / fit / zoom / focusNode / shake / setMotion / isMotion / destroy
+// - 공개 API: setData / setFilter / setHighlight / setSelectedEdge / setGroups / resetLayout / fit / zoom / focusNode / shake / setMotion / isMotion / destroy
 import { svgEl } from './common.js';
 import { createSimulation } from './force-layout.js';
 
@@ -15,6 +15,7 @@ export const GRAPH_MOTION_KEY = 'relmap.graphMotion';
 const NODE_W = 104;
 const NODE_H = 40;
 const NODE_RX = 20;
+export const GROUP_COLORS = 8;   // 무리 색은 8개까지 (그 뒤 무리는 번호표만 붙어요: 색을 돌려 쓰면 서로 다른 무리가 같은 색이 돼요)
 const RING_STEP = 165;
 const X_STRETCH = 1.3;
 const DRAG_ALPHA_TARGET = 0.3;
@@ -99,6 +100,15 @@ export class RelationGraph {
     this.applyClasses();
   }
   setSelectedEdge(key) { this.selectedEdgeKey = key; this.applyClasses(); }
+  /** 친한 무리 색: { 학생 id: 무리 번호(1부터) } 를 주면 상자에 무리 색과 번호표를 입혀요. null 이면 꺼요. */
+  setGroups(groupOf) {
+    const next = groupOf && Object.keys(groupOf).length ? groupOf : null;
+    const sig = next ? Object.keys(next).sort().map((id) => `${id}:${next[id]}`).join('|') : '';
+    if (sig === this.groupSig) return;
+    this.groupOf = next;
+    this.groupSig = sig;
+    if (this.nodeEls.size) this.render();
+  }
   resetLayout() { this.buildSim(); this.render(); this.fit(); this.animate(); }
 
   /** 누른 학생을 화면 가운데로 모읍니다(null 이면 풀어 줌). 이웃이 함께 따라와요. */
@@ -451,7 +461,8 @@ export class RelationGraph {
     for (const s of this.students) {
       if (!this.pos[s.id]) continue;
       const st = this.stats[s.id] || {};
-      const cls = ['node', st.submitted ? '' : 'pending', s.id === this.centerId ? 'center' : ''].filter(Boolean).join(' ');
+      const grp = this.groupOf?.[s.id] || 0;
+      const cls = ['node', st.submitted ? '' : 'pending', s.id === this.centerId ? 'center' : '', grp ? `grouped ${grp <= GROUP_COLORS ? `grp-${grp}` : 'grp-more'}` : ''].filter(Boolean).join(' ');
       const g = svgEl('g', { class: cls });
       g.dataset.id = s.id;
       g.append(svgEl('rect', { x: -NODE_W / 2, y: -NODE_H / 2, width: NODE_W, height: NODE_H, rx: NODE_RX }));
@@ -461,7 +472,14 @@ export class RelationGraph {
       badge.append(svgEl('circle', { r: 11, fill: '#fff', stroke: '#b9b3ff', 'stroke-width': 1.5 }));
       badge.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: String(deg), style: 'fill:#5145cd;font-size:11px;font-weight:700' }));
       g.append(badge);
-      const title = svgEl('title', { text: `${s.name} · 연결 ${deg}개 · 받은 ❤️ ${st.inGood?.length || 0} · 받은 ⚡ ${st.inBad?.length || 0}${st.submitted ? '' : ' · 미제출'}` });
+      if (grp) {
+        // 무리 번호표(왼쪽 위): 색을 구분하기 어려워도 번호로 무리를 알 수 있어요
+        const tag = svgEl('g', { class: 'grp-tag', transform: `translate(${-NODE_W / 2 + 2},${-NODE_H / 2 + 2})` });
+        tag.append(svgEl('circle', { r: 10 }));
+        tag.append(svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', text: String(grp) }));
+        g.append(tag);
+      }
+      const title = svgEl('title', { text: `${s.name} · 연결 ${deg}개 · 받은 ❤️ ${st.inGood?.length || 0} · 받은 ⚡ ${st.inBad?.length || 0}${grp ? ` · 무리 ${grp}` : ''}${st.submitted ? '' : ' · 미제출'}` });
       g.append(title);
       nodes.append(g);
       this.nodeEls.set(s.id, g);

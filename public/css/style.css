@@ -197,8 +197,25 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .node.me .me-halo { animation: none; } }
 .node.pending rect { fill: #f3f3f8; stroke: #c9c9d8; stroke-dasharray: 5 4; }
 .node.pending text { fill: #8a8ba0; }
+/* 친한 무리 색 (선생님 관계도에서 "🎨 무리 색"을 켰을 때): 테두리 = 무리 색, 바탕 = 같은 색을 옅게.
+   색에만 기대지 않게 왼쪽 위에 무리 번호표도 붙여요. 9번째 무리부터는 색 없이 번호표만 (색을 돌려 쓰지 않아요) */
+.node.grouped { --grp: #8a8ba0; --grp-tint: var(--node-fill); }
+.node.grp-1 { --grp: #2a78d6; --grp-tint: #d9e7f8; }
+.node.grp-2 { --grp: #eb6834; --grp-tint: #fbe4da; }
+.node.grp-3 { --grp: #1baf7a; --grp-tint: #d6f1e7; }
+.node.grp-4 { --grp: #eda100; --grp-tint: #fceed1; }
+.node.grp-5 { --grp: #e87ba4; --grp-tint: #fbe7ef; }
+.node.grp-6 { --grp: #008300; --grp-tint: #d1e9d1; }
+.node.grp-7 { --grp: #6250d6; --grp-tint: #e3e0f8; }
+.node.grp-8 { --grp: #e34948; --grp-tint: #fadede; }
+.node.grouped rect { fill: var(--grp-tint); stroke: var(--grp); stroke-width: 2.5; }
+.node.grouped text { fill: var(--black); }
+.node .grp-tag circle { fill: #fff; stroke: var(--grp); stroke-width: 2; }
+.node .grp-tag text { fill: var(--black); font-size: 11px; font-weight: 800; }
 .node text { fill: var(--node-text); font-weight: 700; font-size: 15px; pointer-events: none; }
 .node.center rect { stroke: var(--orange); stroke-width: 3; }
+/* 무리 색을 켠 동안에는 '연결이 가장 많은 학생'도 주황 대신 자기 무리 색의 굵은 테두리 (주황이 무리 2 색과 헷갈려요) */
+.node.center.grouped:not(.selected) rect { stroke: var(--grp); stroke-width: 4; }
 .node.dim { opacity: .15; }
 .node.selected rect { stroke: var(--blue); stroke-width: 3.5; }
 .node { cursor: pointer; }
@@ -706,6 +723,32 @@ body.teacher .legend { gap: 8px; font-size: 14px; margin-bottom: 12px; }
 body.teacher .legend > span { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--gray-100); border: 1px solid var(--gray-200); color: var(--gray-700); }
 body.teacher .legend .line, body.teacher .legend .sw { margin-right: 0; }
 body.teacher .legend .line.both { margin: 0 6px; } /* 양끝 화살촉이 상자 밖 6px 까지 나가므로 위 규칙에 덮이지 않게 여백 유지 */
+/* ---------- 친한 무리 (관계도 범례 · 카드) ---------- */
+/* 번호표: 관계도 상자와 같은 색. 글자는 색이 아니라 본문 잉크색이라 옅은 바탕에서도 읽혀요 */
+.grp-swatch { --grp: #8a8ba0; --grp-tint: var(--node-fill); display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 999px; background: var(--grp-tint); border: 2.5px solid var(--grp); color: var(--black); font-size: 12.5px; font-weight: 800; line-height: 1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.grp-swatch.grp-1 { --grp: #2a78d6; --grp-tint: #d9e7f8; }
+.grp-swatch.grp-2 { --grp: #eb6834; --grp-tint: #fbe4da; }
+.grp-swatch.grp-3 { --grp: #1baf7a; --grp-tint: #d6f1e7; }
+.grp-swatch.grp-4 { --grp: #eda100; --grp-tint: #fceed1; }
+.grp-swatch.grp-5 { --grp: #e87ba4; --grp-tint: #fbe7ef; }
+.grp-swatch.grp-6 { --grp: #008300; --grp-tint: #d1e9d1; }
+.grp-swatch.grp-7 { --grp: #6250d6; --grp-tint: #e3e0f8; }
+.grp-swatch.grp-8 { --grp: #e34948; --grp-tint: #fadede; }
+body.teacher .group-legend { margin: -2px 0 12px; }
+body.teacher .group-legend[hidden] { display: none; }
+body.teacher .group-legend .group-key { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; border-radius: 999px; background: #fff; border: 1px solid var(--gray-200); color: var(--gray-700); font: inherit; cursor: pointer; }
+body.teacher .group-legend .group-key:hover { border-color: var(--node-border); box-shadow: var(--shadow); }
+body.teacher .clique-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-bottom: 12px; }
+body.teacher .clique { min-width: 0; border: 1px solid var(--gray-200); border-radius: 14px; padding: 14px 16px; background: #fff; }
+body.teacher .clique-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+body.teacher .clique-head .clique-show { margin-left: auto; }
+body.teacher #cliques-card .section-label { margin: 14px 0 8px; }
+body.teacher .clique-member { cursor: pointer; }
+body.teacher .clique-member:hover { border-color: var(--node-border); background: var(--gray-100); }
+body.teacher .clique-between-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
+body.teacher .clique-between { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; border: 1px solid var(--gray-200); border-left: 5px solid #ef5b6b; border-radius: 14px; padding: 10px 14px; background: #fff; }
+body.teacher .clique-between .between-groups { display: inline-flex; align-items: center; gap: 6px; }
+body.teacher .clique-between .between-pairs { flex: 1 1 240px; min-width: 0; color: var(--gray-700); overflow-wrap: anywhere; }
 body.teacher .graph-toolbar { gap: 8px; padding: 8px 10px; border-radius: 18px; margin-bottom: 12px; }
 body.teacher .graph-toolbar .seg { display: inline-flex; gap: 4px; background: var(--gray-100); border-radius: 999px; padding: 3px; }
 body.teacher .graph-toolbar .btn.small { padding: 7px 14px; }
